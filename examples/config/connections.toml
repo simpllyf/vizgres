@@ -1,0 +1,39 @@
+# Example connection profiles for vizgres
+#
+# Copy this file to ~/.vizgres/connections.toml and customize for your databases.
+#
+# SECURITY NOTE: Passwords should NOT be stored in this file in production.
+# Use a keychain/credential manager instead (Phase 8 feature).
+
+[[connections]]
+name = "local"
+host = "localhost"
+port = 5432
+database = "myapp_development"
+username = "developer"
+# password stored in system keychain
+ssl_mode = "disable"
+
+[[connections]]
+name = "staging"
+host = "staging-db.example.com"
+port = 5432
+database = "myapp_staging"
+username = "app_user"
+ssl_mode = "require"
+
+[[connections]]
+name = "production"
+host = "prod-db.example.com"
+port = 5432
+database = "myapp_production"
+username = "readonly_user"
+ssl_mode = "require"
+
+[[connections]]
+name = "analytics"
+host = "analytics.internal"
+port = 5433
+database = "warehouse"
+username = "analyst"
+ssl_mode = "prefer"

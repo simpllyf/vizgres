@@ -1,0 +1,3 @@
+# Clippy configuration
+# Deny clippy warnings in CI
+warn-on-all-wildcard-imports = true
