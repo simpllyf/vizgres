@@ -68,9 +68,7 @@ impl Default for Theme {
                 .fg(Color::Blue)
                 .add_modifier(Modifier::BOLD),
             editor_string: Style::default().fg(Color::Green),
-            editor_cursor: Style::default()
-                .bg(Color::White)
-                .fg(Color::Black),
+            editor_cursor: Style::default().bg(Color::White).fg(Color::Black),
 
             // Results table
             results_header: Style::default()
@@ -78,9 +76,7 @@ impl Default for Theme {
                 .add_modifier(Modifier::BOLD),
             results_row_even: Style::default().fg(Color::White),
             results_row_odd: Style::default().fg(Color::Gray),
-            results_selected: Style::default()
-                .fg(Color::Black)
-                .bg(Color::Yellow),
+            results_selected: Style::default().fg(Color::Black).bg(Color::Yellow),
             results_null: Style::default()
                 .fg(Color::DarkGray)
                 .add_modifier(Modifier::ITALIC),

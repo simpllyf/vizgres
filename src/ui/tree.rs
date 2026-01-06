@@ -5,7 +5,7 @@
 use crate::db::schema::SchemaTree;
 use crate::ui::Component;
 use crossterm::event::KeyEvent;
-use ratatui::{layout::Rect, Frame};
+use ratatui::{Frame, layout::Rect};
 
 /// Tree browser component
 pub struct TreeBrowser {
@@ -19,7 +19,7 @@ pub struct TreeBrowser {
     scroll_offset: usize,
 
     /// Expanded nodes (paths)
-    expanded: Vec<String>,
+    _expanded: Vec<String>,
 }
 
 impl TreeBrowser {
@@ -29,7 +29,7 @@ impl TreeBrowser {
             schema: None,
             selected: 0,
             scroll_offset: 0,
-            expanded: Vec::new(),
+            _expanded: Vec::new(),
         }
     }
 

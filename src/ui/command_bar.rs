@@ -4,7 +4,7 @@
 
 use crate::ui::Component;
 use crossterm::event::KeyEvent;
-use ratatui::{layout::Rect, Frame};
+use ratatui::{Frame, layout::Rect};
 
 /// Command bar component
 pub struct CommandBar {
@@ -18,7 +18,7 @@ pub struct CommandBar {
     active: bool,
 
     /// Autocomplete suggestions
-    suggestions: Vec<String>,
+    _suggestions: Vec<String>,
 }
 
 impl CommandBar {
@@ -28,7 +28,7 @@ impl CommandBar {
             input: String::new(),
             cursor: 0,
             active: false,
-            suggestions: Vec::new(),
+            _suggestions: Vec::new(),
         }
     }
 

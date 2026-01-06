@@ -4,7 +4,7 @@
 
 use crate::ui::Component;
 use crossterm::event::KeyEvent;
-use ratatui::{layout::Rect, Frame};
+use ratatui::{Frame, layout::Rect};
 
 /// Query editor component
 pub struct QueryEditor {
@@ -15,7 +15,7 @@ pub struct QueryEditor {
     cursor: (usize, usize),
 
     /// Scroll offset (first visible line)
-    scroll_offset: usize,
+    _scroll_offset: usize,
 }
 
 impl QueryEditor {
@@ -24,7 +24,7 @@ impl QueryEditor {
         Self {
             content: String::new(),
             cursor: (0, 0),
-            scroll_offset: 0,
+            _scroll_offset: 0,
         }
     }
 

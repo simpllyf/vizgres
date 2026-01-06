@@ -4,7 +4,7 @@
 
 use crate::ui::Component;
 use crossterm::event::KeyEvent;
-use ratatui::{layout::Rect, Frame};
+use ratatui::{Frame, layout::Rect};
 
 /// Cell value popup/inspector
 pub struct CellPopup {

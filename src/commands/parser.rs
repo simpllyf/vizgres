@@ -91,7 +91,7 @@ pub fn parse_command(input: &str) -> CommandResult<Command> {
                     return Err(CommandError::InvalidArgument(format!(
                         "Unknown export format: {}",
                         format_str
-                    )))
+                    )));
                 }
             };
             Ok(Command::Export(format))
@@ -115,13 +115,15 @@ pub fn parse_command(input: &str) -> CommandResult<Command> {
 /// Command autocomplete helper
 pub struct CommandCompleter {
     /// Available connection names
-    connection_names: Vec<String>,
+    _connection_names: Vec<String>,
 }
 
 impl CommandCompleter {
     /// Create a new command completer
     pub fn new(connection_names: Vec<String>) -> Self {
-        Self { connection_names }
+        Self {
+            _connection_names: connection_names,
+        }
     }
 
     /// Get completion suggestions for partial input

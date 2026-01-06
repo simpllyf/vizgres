@@ -3,6 +3,9 @@
 //! This is the main entry point for the vizgres application.
 //! The actual logic is in the library modules for better testability.
 
+// Allow dead code during scaffolding phase - most code is stubs
+#![allow(dead_code)]
+
 use anyhow::Result;
 
 mod app;

@@ -9,7 +9,7 @@
 use crate::config::ConnectionConfig;
 use crate::db::schema::SchemaTree;
 use crate::db::types::{ColumnInfo, QueryResults};
-use crate::error::{DbError, DbResult};
+use crate::error::DbResult;
 use async_trait::async_trait;
 
 /// Main database provider trait

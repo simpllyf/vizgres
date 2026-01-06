@@ -152,7 +152,7 @@ impl App {
     }
 
     /// Handle an application event and return resulting action
-    pub fn handle_event(&mut self, event: AppEvent) -> Result<Action> {
+    pub fn handle_event(&mut self, _event: AppEvent) -> Result<Action> {
         // TODO: Implement event handling based on current focus and event type
         // Phase 1: Basic event routing
         // Phase 2: Full panel navigation
@@ -160,7 +160,8 @@ impl App {
     }
 
     /// Handle keyboard input based on current focus
-    fn handle_key(&mut self, key: KeyEvent) -> Result<Action> {
+    #[allow(dead_code)]
+    fn handle_key(&mut self, _key: KeyEvent) -> Result<Action> {
         // TODO: Route key events to appropriate handlers based on focus
         // Phase 1: Basic quit key
         // Phase 2: Panel navigation with Tab, Ctrl+1/2/3

@@ -9,6 +9,9 @@ pub mod schema;
 pub mod types;
 
 // Re-export main types
+#[allow(unused_imports)]
 pub use provider::DatabaseProvider;
+#[allow(unused_imports)]
 pub use schema::{Column, Schema, SchemaTree, Table};
+#[allow(unused_imports)]
 pub use types::{CellValue, ColumnDef, DataType, QueryResults, Row};

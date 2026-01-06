@@ -35,10 +35,11 @@ pub struct ConnectionConfig {
 }
 
 /// SSL connection mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum SslMode {
     Disable,
+    #[default]
     Prefer,
     Require,
 }
@@ -52,12 +53,6 @@ struct ConnectionsFile {
 
 fn default_port() -> u16 {
     5432
-}
-
-impl Default for SslMode {
-    fn default() -> Self {
-        SslMode::Prefer
-    }
 }
 
 impl ConnectionConfig {
@@ -89,16 +84,15 @@ pub fn load_connections() -> ConfigResult<Vec<ConnectionConfig>> {
         return Ok(Vec::new());
     }
 
-    let content = std::fs::read_to_string(&path).map_err(|e| {
-        ConfigError::NotFound(format!("Failed to read connections file: {}", e))
-    })?;
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| ConfigError::NotFound(format!("Failed to read connections file: {}", e)))?;
 
     let file: ConnectionsFile = toml::from_str(&content)?;
     Ok(file.connections)
 }
 
 /// Save a connection profile to config file
-pub fn save_connection(config: &ConnectionConfig) -> ConfigResult<()> {
+pub fn save_connection(_config: &ConnectionConfig) -> ConfigResult<()> {
     // TODO: Phase 8 - Implement connection saving
     // 1. Load existing connections
     // 2. Update or append new connection
@@ -118,6 +112,7 @@ pub fn find_connection(name: &str) -> ConfigResult<ConnectionConfig> {
 
 #[cfg(test)]
 mod tests {
+    #[allow(unused_imports)]
     use super::*;
 
     #[test]

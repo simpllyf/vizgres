@@ -3,19 +3,17 @@
 //! Implements the DatabaseProvider trait for PostgreSQL using tokio-postgres.
 
 use crate::config::ConnectionConfig;
-use crate::db::provider::{
-    Completion, CompletionContext, DatabaseProvider, ExplainPlan, PlanNode,
-};
+use crate::db::provider::{Completion, CompletionContext, DatabaseProvider, ExplainPlan};
 use crate::db::schema::SchemaTree;
 use crate::db::types::{ColumnInfo, QueryResults};
-use crate::error::{DbError, DbResult};
+use crate::error::DbResult;
 use async_trait::async_trait;
-use tokio_postgres::{Client, NoTls};
+use tokio_postgres::Client;
 
 /// PostgreSQL database provider
 pub struct PostgresProvider {
     /// The tokio-postgres client
-    client: Client,
+    _client: Client,
 
     /// Cached schema tree (invalidated on refresh)
     schema_cache: Option<SchemaTree>,
@@ -23,7 +21,7 @@ pub struct PostgresProvider {
 
 #[async_trait]
 impl DatabaseProvider for PostgresProvider {
-    async fn connect(config: &ConnectionConfig) -> DbResult<Self>
+    async fn connect(_config: &ConnectionConfig) -> DbResult<Self>
     where
         Self: Sized,
     {
@@ -92,6 +90,7 @@ impl PostgresProvider {
     }
 
     /// Fetch schema from database (internal helper)
+    #[allow(dead_code)]
     async fn fetch_schema_from_db(&self) -> DbResult<SchemaTree> {
         // TODO: Phase 3 - Actual schema queries
         // Query: SELECT schema_name FROM information_schema.schemata
@@ -104,6 +103,7 @@ impl PostgresProvider {
 
 #[cfg(test)]
 mod tests {
+    #[allow(unused_imports)]
     use super::*;
 
     // Integration tests will use testcontainers in tests/integration/

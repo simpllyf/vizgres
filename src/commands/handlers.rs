@@ -14,7 +14,7 @@ impl App {
         // TODO: Phase 2 - Implement command execution
         // Each command should update app state and/or return an action
         match command {
-            Command::Connect(name) => {
+            Command::Connect(_name) => {
                 // TODO: Load connection config and return Connect action
                 todo!("Connect command not yet implemented")
             }
@@ -24,7 +24,7 @@ impl App {
                 todo!("Disconnect command not yet implemented")
             }
 
-            Command::SaveConnection(name) => {
+            Command::SaveConnection(_name) => {
                 // TODO: Save current connection to config
                 todo!("Save connection command not yet implemented")
             }
@@ -34,12 +34,12 @@ impl App {
                 todo!("Refresh command not yet implemented")
             }
 
-            Command::Export(format) => {
+            Command::Export(_format) => {
                 // TODO: Return ExportResults action
                 todo!("Export command not yet implemented")
             }
 
-            Command::Set(key, value) => {
+            Command::Set(_key, _value) => {
                 // TODO: Update settings
                 todo!("Set command not yet implemented")
             }

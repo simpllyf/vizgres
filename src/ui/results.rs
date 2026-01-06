@@ -5,7 +5,7 @@
 use crate::db::types::QueryResults;
 use crate::ui::Component;
 use crossterm::event::KeyEvent;
-use ratatui::{layout::Rect, Frame};
+use ratatui::{Frame, layout::Rect};
 
 /// Results table viewer
 pub struct ResultsViewer {

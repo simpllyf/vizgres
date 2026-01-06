@@ -36,18 +36,21 @@ impl SqlCompleter {
     }
 
     /// Get table name suggestions
+    #[allow(dead_code)]
     fn complete_tables(&self) -> Vec<String> {
         // TODO: Phase 7 - Return table names from schema
         Vec::new()
     }
 
     /// Get column name suggestions for a table
+    #[allow(dead_code)]
     fn complete_columns(&self, _table: &str) -> Vec<String> {
         // TODO: Phase 7 - Return column names for a specific table
         Vec::new()
     }
 
     /// Get SQL keyword suggestions
+    #[allow(dead_code)]
     fn complete_keywords(&self, _prefix: &str) -> Vec<String> {
         // TODO: Phase 7 - Return matching SQL keywords
         const KEYWORDS: &[&str] = &[
@@ -67,6 +70,7 @@ impl Default for SqlCompleter {
 
 #[cfg(test)]
 mod tests {
+    #[allow(unused_imports)]
     use super::*;
 
     #[test]

@@ -2,7 +2,7 @@
 //!
 //! Formats SQL queries using the sqlformat crate.
 
-use sqlformat::{format, FormatOptions, Indent, QueryParams};
+use sqlformat::{FormatOptions, Indent, QueryParams, format};
 
 /// Format a SQL query string
 ///

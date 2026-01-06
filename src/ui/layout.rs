@@ -2,7 +2,7 @@
 //!
 //! Handles the arrangement of panels and terminal screen layout.
 
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::Rect;
 
 /// Calculate panel layout for the main screen
 ///
@@ -24,7 +24,7 @@ pub fn calculate_layout(area: Rect) -> (Rect, Rect, Rect, Rect) {
 }
 
 /// Calculate layout with custom tree width
-pub fn calculate_layout_with_tree_width(area: Rect, tree_width: u16) -> (Rect, Rect, Rect, Rect) {
+pub fn calculate_layout_with_tree_width(area: Rect, _tree_width: u16) -> (Rect, Rect, Rect, Rect) {
     // TODO: Phase 2 - Allow resizable tree panel
     calculate_layout(area)
 }

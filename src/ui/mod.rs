@@ -11,7 +11,7 @@ pub mod theme;
 pub mod tree;
 
 use crossterm::event::KeyEvent;
-use ratatui::{layout::Rect, Frame};
+use ratatui::{Frame, layout::Rect};
 
 /// Trait for UI components
 pub trait Component {
