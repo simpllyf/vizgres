@@ -94,8 +94,9 @@ jobs:
       - name: Run unit tests
         run: cargo test --lib
 
-      - name: Run integration tests
-        run: cargo test --test '*'
+      # Integration tests will be added in Phase 1 (require testcontainers)
+      # - name: Run integration tests
+      #   run: cargo test --test '*'
 
       - name: Run doc tests
         run: cargo test --doc
