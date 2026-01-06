@@ -72,6 +72,10 @@ pub enum ConfigError {
     #[error("Failed to parse configuration: {0}")]
     ParseError(#[from] toml::de::Error),
 
+    /// IO error when reading/writing config
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+
     /// Invalid configuration value
     #[error("Invalid configuration: {0}")]
     Invalid(String),
