@@ -64,6 +64,7 @@ Vizgres aims to be a lightweight alternative to GUI database tools like DataGrip
 
 ### Quality of Life
 - **SQL Formatting**: One-keystroke formatting (`Ctrl+Shift+F`)
+- **SQL Fixer**: Auto-correct typos on execute (SELEC → SELECT, usres → users)
 - **JSONB Inspector**: Pretty-printed JSON in popup panel
 - **EXPLAIN Visualizer**: Query plan as navigable tree
 - **Schema Autocomplete**: Context-aware suggestions

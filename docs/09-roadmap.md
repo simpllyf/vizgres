@@ -147,7 +147,7 @@ User can:
 
 ## Phase 4: Query Editor
 
-**Goal**: Full-featured SQL editor.
+**Goal**: Full-featured SQL editor with intelligent error correction.
 
 ### Deliverables
 
@@ -158,16 +158,28 @@ User can:
 - [ ] Query execution (Ctrl+Enter)
 - [ ] Query history (Ctrl+Up/Down)
 - [ ] Basic syntax highlighting
+- [ ] **SQL Fixer**: Auto-fix typos on execute
+  - [ ] Keyword typo detection (SELEC → SELECT)
+  - [ ] Identifier matching against schema (usres → users)
+  - [ ] "Did you mean?" confirmation dialog
+  - [ ] Configurable auto-accept threshold
 
 ### Technical Tasks
 
 ```
 src/
 ├── ui/
-│   └── editor.rs        # Full editor implementation
+│   ├── editor.rs           # Full editor implementation
+│   └── fix_confirmation.rs # Fix preview dialog
 └── sql/
-    ├── formatter.rs     # sqlformat wrapper
-    └── highlighter.rs   # Syntax highlighting
+    ├── formatter.rs        # sqlformat wrapper
+    ├── highlighter.rs      # Syntax highlighting
+    └── fixer/
+        ├── mod.rs          # SqlFixer trait
+        ├── rule_based.rs   # Built-in fixer pipeline
+        ├── keyword.rs      # Keyword typo fixer
+        ├── identifier.rs   # Schema-aware identifier fixer
+        └── llm.rs          # Optional Ollama integration
 ```
 
 ### Tests Required
@@ -177,6 +189,10 @@ src/
 - [ ] Line splitting on Enter
 - [ ] SQL formatting produces expected output
 - [ ] History navigation cycles correctly
+- [ ] SQL fixer corrects common keyword typos
+- [ ] SQL fixer matches identifiers against schema
+- [ ] Confidence levels assigned correctly
+- [ ] Fix confirmation accepts/rejects properly
 
 ### Exit Criteria
 
@@ -186,6 +202,8 @@ User can:
 3. Format SQL with one keystroke
 4. Navigate query history
 5. Execute with Ctrl+Enter
+6. See "Did you mean?" for typos in SQL
+7. Accept or reject suggested fixes
 
 ---
 
