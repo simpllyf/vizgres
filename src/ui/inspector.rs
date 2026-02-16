@@ -1,0 +1,185 @@
+//! Cell value inspector panel
+//!
+//! Displays full cell content as a right-side split panel.
+//! JSON values are pretty-printed. Scrollable for large content.
+
+use crate::ui::Component;
+use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::prelude::*;
+use ratatui::widgets::Paragraph;
+
+/// Cell value inspector (split panel, not overlay)
+pub struct Inspector {
+    /// The content to display (pre-formatted)
+    content: Option<String>,
+    /// Column name
+    column_name: String,
+    /// Data type display string
+    data_type: String,
+    /// Scroll offset for large content
+    scroll_offset: usize,
+    /// Total lines in content
+    total_lines: usize,
+}
+
+impl Inspector {
+    pub fn new() -> Self {
+        Self {
+            content: None,
+            column_name: String::new(),
+            data_type: String::new(),
+            scroll_offset: 0,
+            total_lines: 0,
+        }
+    }
+
+    /// Show cell content in the inspector
+    pub fn show(&mut self, content: String, column_name: String, data_type: String) {
+        self.total_lines = content.lines().count().max(1);
+        self.content = Some(content);
+        self.column_name = column_name;
+        self.data_type = data_type;
+        self.scroll_offset = 0;
+    }
+
+    pub fn hide(&mut self) {
+        self.content = None;
+        self.scroll_offset = 0;
+    }
+
+    pub fn is_visible(&self) -> bool {
+        self.content.is_some()
+    }
+
+    /// Get the raw content text (for clipboard copy)
+    pub fn content_text(&self) -> Option<String> {
+        self.content.clone()
+    }
+}
+
+impl Default for Inspector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Component for Inspector {
+    fn handle_key(&mut self, key: KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.scroll_offset + 1 < self.total_lines {
+                    self.scroll_offset += 1;
+                }
+                true
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.scroll_offset > 0 {
+                    self.scroll_offset -= 1;
+                }
+                true
+            }
+            KeyCode::PageDown => {
+                self.scroll_offset =
+                    (self.scroll_offset + 20).min(self.total_lines.saturating_sub(1));
+                true
+            }
+            KeyCode::PageUp => {
+                self.scroll_offset = self.scroll_offset.saturating_sub(20);
+                true
+            }
+            KeyCode::Home | KeyCode::Char('g') => {
+                self.scroll_offset = 0;
+                true
+            }
+            KeyCode::End | KeyCode::Char('G') => {
+                self.scroll_offset = self.total_lines.saturating_sub(1);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn render(&self, frame: &mut Frame, area: Rect, _focused: bool) {
+        let content = match &self.content {
+            Some(c) => c,
+            None => return,
+        };
+
+        if area.height < 2 {
+            return;
+        }
+
+        // Header: column name and type
+        let header = format!("{} ({})", self.column_name, self.data_type);
+        let header_style = Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD);
+        frame.render_widget(
+            Paragraph::new(header).style(header_style),
+            Rect::new(area.x, area.y, area.width, 1),
+        );
+
+        // Content area
+        let content_area = Rect::new(area.x, area.y + 1, area.width, area.height - 1);
+        let lines: Vec<&str> = content.lines().collect();
+        let visible_height = content_area.height as usize;
+
+        for i in 0..visible_height {
+            let line_idx = self.scroll_offset + i;
+            let y = content_area.y + i as u16;
+
+            if line_idx < lines.len() {
+                let line = lines[line_idx];
+                let display = if line.len() > content_area.width as usize {
+                    &line[..content_area.width as usize]
+                } else {
+                    line
+                };
+                let style = Style::default().fg(Color::White);
+                frame.render_widget(
+                    Paragraph::new(display).style(style),
+                    Rect::new(content_area.x, y, content_area.width, 1),
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_inspector_new() {
+        let inspector = Inspector::new();
+        assert!(!inspector.is_visible());
+    }
+
+    #[test]
+    fn test_show_hide() {
+        let mut inspector = Inspector::new();
+        inspector.show(
+            "test content".to_string(),
+            "col".to_string(),
+            "text".to_string(),
+        );
+        assert!(inspector.is_visible());
+        assert_eq!(inspector.content_text(), Some("test content".to_string()));
+        inspector.hide();
+        assert!(!inspector.is_visible());
+    }
+
+    #[test]
+    fn test_scroll() {
+        let mut inspector = Inspector::new();
+        let content = (0..50)
+            .map(|i| format!("line {}", i))
+            .collect::<Vec<_>>()
+            .join("\n");
+        inspector.show(content, "col".to_string(), "text".to_string());
+        assert_eq!(inspector.scroll_offset, 0);
+
+        inspector.scroll_offset = 10;
+        assert_eq!(inspector.scroll_offset, 10);
+    }
+}

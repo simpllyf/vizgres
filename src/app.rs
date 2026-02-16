@@ -1,19 +1,24 @@
-//! Application state and main event loop
+//! Application state and event handling
 //!
-//! This module implements the core application state machine following an
-//! Elm-like architecture with unidirectional data flow.
+//! Central state machine: events come in, state updates, actions go out.
 
-use crate::commands::Command;
+use crate::commands::{Command, parse_command};
 use crate::config::ConnectionConfig;
-use crate::db::{QueryResults, SchemaTree};
+use crate::db::{PostgresProvider, QueryResults, SchemaTree};
 use crate::error::Result;
-use crossterm::event::KeyEvent;
+use crate::ui::Component;
+use crate::ui::command_bar::CommandBar;
+use crate::ui::editor::QueryEditor;
+use crate::ui::inspector::Inspector;
+use crate::ui::results::ResultsViewer;
+use crate::ui::tree::TreeBrowser;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::time::Duration;
 
 /// Main application state
 pub struct App {
-    /// Current database connection handle (if connected)
-    pub connection: Option<Box<dyn crate::db::DatabaseProvider>>,
+    /// Current database connection
+    pub connection: Option<PostgresProvider>,
 
     /// Name of current connection profile
     pub connection_name: Option<String>,
@@ -21,20 +26,15 @@ pub struct App {
     /// Which panel currently has focus
     pub focus: PanelFocus,
 
-    /// Database schema tree
-    pub schema_tree: Option<SchemaTree>,
+    /// Focus before command bar was opened (to restore on Escape)
+    pub previous_focus: PanelFocus,
 
-    /// Current query being edited
-    pub query_buffer: String,
-
-    /// Most recent query results
-    pub results: Option<QueryResults>,
-
-    /// Command bar input buffer
-    pub command_input: String,
-
-    /// Command history
-    pub command_history: Vec<String>,
+    /// UI Components
+    pub tree_browser: TreeBrowser,
+    pub editor: QueryEditor,
+    pub results_viewer: ResultsViewer,
+    pub command_bar: CommandBar,
+    pub inspector: Inspector,
 
     /// Status message to display
     pub status_message: Option<StatusMessage>,
@@ -46,16 +46,11 @@ pub struct App {
 /// Panel focus state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PanelFocus {
-    /// Database tree browser (left panel)
     TreeBrowser,
-    /// SQL query editor (top-right panel)
     QueryEditor,
-    /// Query results viewer (bottom-right panel)
     ResultsViewer,
-    /// Command bar (bottom)
     CommandBar,
-    /// Cell value popup/inspector
-    CellPopup,
+    Inspector,
 }
 
 /// Status message with severity level
@@ -65,7 +60,6 @@ pub struct StatusMessage {
     pub timestamp: std::time::Instant,
 }
 
-/// Status message severity
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatusLevel {
     Info,
@@ -74,112 +68,324 @@ pub enum StatusLevel {
     Error,
 }
 
-/// Application events
+/// Application events from the event loop
 pub enum AppEvent {
-    /// Keyboard input
     Key(KeyEvent),
-
-    /// Terminal resize
     Resize(u16, u16),
-
-    /// Database connection established
-    ConnectionEstablished,
-
-    /// Database connection failed
-    ConnectionFailed(crate::error::DbError),
-
-    /// Query completed successfully
+    ConnectionEstablished(String),
+    ConnectionFailed(String),
     QueryCompleted(QueryResults),
-
-    /// Query failed
-    QueryFailed(crate::error::DbError),
-
-    /// Schema loaded
+    QueryFailed(String),
     SchemaLoaded(SchemaTree),
-
-    /// Schema load failed
-    SchemaLoadFailed(crate::error::DbError),
-
-    /// Command submitted
-    CommandSubmitted(Command),
-
-    /// Refresh requested
-    RefreshRequested,
+    SchemaLoadFailed(String),
 }
 
-/// Actions resulting from event handling (side effects)
+/// Actions returned by event handlers for the main loop to execute
 pub enum Action {
-    /// Execute a SQL query
     ExecuteQuery(String),
-
-    /// Connect to a database
     Connect(ConnectionConfig),
-
-    /// Disconnect from database
     Disconnect,
-
-    /// Load/refresh schema
     LoadSchema,
-
-    /// Export results to file
-    ExportResults {
-        format: crate::commands::ExportFormat,
-        path: std::path::PathBuf,
-    },
-
-    /// Quit application
     Quit,
-
-    /// No action needed
     None,
 }
 
 impl App {
-    /// Create a new application instance
     pub fn new() -> Self {
         Self {
             connection: None,
             connection_name: None,
             focus: PanelFocus::QueryEditor,
-            schema_tree: None,
-            query_buffer: String::new(),
-            results: None,
-            command_input: String::new(),
-            command_history: Vec::new(),
+            previous_focus: PanelFocus::QueryEditor,
+            tree_browser: TreeBrowser::new(),
+            editor: QueryEditor::new(),
+            results_viewer: ResultsViewer::new(),
+            command_bar: CommandBar::new(),
+            inspector: Inspector::new(),
             status_message: None,
             running: true,
         }
     }
 
     /// Handle an application event and return resulting action
-    pub fn handle_event(&mut self, _event: AppEvent) -> Result<Action> {
-        // TODO: Implement event handling based on current focus and event type
-        // Phase 1: Basic event routing
-        // Phase 2: Full panel navigation
-        todo!("Event handling not yet implemented")
+    pub fn handle_event(&mut self, event: AppEvent) -> Result<Action> {
+        match event {
+            AppEvent::Key(key) => Ok(self.handle_key(key)),
+            AppEvent::Resize(_, _) => Ok(Action::None),
+            AppEvent::ConnectionEstablished(name) => {
+                self.connection_name = Some(name.clone());
+                self.set_status(format!("Connected to {}", name), StatusLevel::Success);
+                Ok(Action::LoadSchema)
+            }
+            AppEvent::ConnectionFailed(err) => {
+                self.set_status(format!("Connection failed: {}", err), StatusLevel::Error);
+                Ok(Action::None)
+            }
+            AppEvent::QueryCompleted(results) => {
+                let count = results.row_count;
+                let time = results.execution_time;
+                self.results_viewer.set_results(results);
+                self.set_status(
+                    format!("{} rows in {:.1}ms", count, time.as_secs_f64() * 1000.0),
+                    StatusLevel::Success,
+                );
+                self.focus = PanelFocus::ResultsViewer;
+                Ok(Action::None)
+            }
+            AppEvent::QueryFailed(err) => {
+                self.set_status(format!("Query failed: {}", err), StatusLevel::Error);
+                Ok(Action::None)
+            }
+            AppEvent::SchemaLoaded(schema) => {
+                self.tree_browser.set_schema(schema);
+                self.set_status("Schema loaded".to_string(), StatusLevel::Info);
+                Ok(Action::None)
+            }
+            AppEvent::SchemaLoadFailed(err) => {
+                self.set_status(format!("Schema load failed: {}", err), StatusLevel::Error);
+                Ok(Action::None)
+            }
+        }
     }
 
-    /// Handle keyboard input based on current focus
-    #[allow(dead_code)]
-    fn handle_key(&mut self, _key: KeyEvent) -> Result<Action> {
-        // TODO: Route key events to appropriate handlers based on focus
-        // Phase 1: Basic quit key
-        // Phase 2: Panel navigation with Tab, Ctrl+1/2/3
-        todo!("Key handling not yet implemented")
+    fn handle_key(&mut self, key: KeyEvent) -> Action {
+        // Global keybindings (always active)
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('q') {
+            return Action::Quit;
+        }
+
+        // Tab cycles focus (except when in command bar or inspector)
+        if key.code == KeyCode::Tab
+            && self.focus != PanelFocus::CommandBar
+            && self.focus != PanelFocus::Inspector
+        {
+            self.cycle_focus();
+            return Action::None;
+        }
+
+        // Backtab (Shift+Tab) cycles focus backwards
+        if key.code == KeyCode::BackTab
+            && self.focus != PanelFocus::CommandBar
+            && self.focus != PanelFocus::Inspector
+        {
+            self.cycle_focus_reverse();
+            return Action::None;
+        }
+
+        match self.focus {
+            PanelFocus::QueryEditor => self.handle_editor_key(key),
+            PanelFocus::ResultsViewer => self.handle_results_key(key),
+            PanelFocus::TreeBrowser => self.handle_tree_key(key),
+            PanelFocus::CommandBar => self.handle_command_bar_key(key),
+            PanelFocus::Inspector => self.handle_inspector_key(key),
+        }
     }
 
-    /// Cycle focus to next panel
+    fn handle_editor_key(&mut self, key: KeyEvent) -> Action {
+        // Ctrl+Enter = execute query
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && (key.code == KeyCode::Enter || key.code == KeyCode::Char('j'))
+        {
+            let sql = self.editor.get_content();
+            if !sql.trim().is_empty() {
+                self.set_status("Executing query...".to_string(), StatusLevel::Info);
+                return Action::ExecuteQuery(sql);
+            }
+            return Action::None;
+        }
+
+        // `:` when at start of empty editor opens command bar
+        // But we don't intercept `:` in the editor - it's a valid SQL character
+        // Instead, only intercept `:` when editor has no content
+        if key.code == KeyCode::Char(':') && self.editor.is_empty() {
+            self.previous_focus = self.focus;
+            self.focus = PanelFocus::CommandBar;
+            self.command_bar.activate();
+            return Action::None;
+        }
+
+        self.editor.handle_key(key);
+        Action::None
+    }
+
+    fn handle_results_key(&mut self, key: KeyEvent) -> Action {
+        // `:` opens command bar
+        if key.code == KeyCode::Char(':') {
+            self.previous_focus = self.focus;
+            self.focus = PanelFocus::CommandBar;
+            self.command_bar.activate();
+            return Action::None;
+        }
+
+        // Enter opens inspector
+        if key.code == KeyCode::Enter {
+            if let Some((value, col_name, data_type)) = self.results_viewer.selected_cell_info() {
+                self.inspector.show(value, col_name, data_type);
+                self.previous_focus = self.focus;
+                self.focus = PanelFocus::Inspector;
+            }
+            return Action::None;
+        }
+
+        // y = copy cell, Y = copy row
+        if key.code == KeyCode::Char('y') && !key.modifiers.contains(KeyModifiers::SHIFT) {
+            if let Some(text) = self.results_viewer.selected_cell_text() {
+                self.copy_to_clipboard(&text);
+            }
+            return Action::None;
+        }
+        if key.code == KeyCode::Char('Y') {
+            if let Some(text) = self.results_viewer.selected_row_text() {
+                self.copy_to_clipboard(&text);
+            }
+            return Action::None;
+        }
+
+        self.results_viewer.handle_key(key);
+        Action::None
+    }
+
+    fn handle_tree_key(&mut self, key: KeyEvent) -> Action {
+        // `:` opens command bar
+        if key.code == KeyCode::Char(':') {
+            self.previous_focus = self.focus;
+            self.focus = PanelFocus::CommandBar;
+            self.command_bar.activate();
+            return Action::None;
+        }
+
+        self.tree_browser.handle_key(key);
+        Action::None
+    }
+
+    fn handle_command_bar_key(&mut self, key: KeyEvent) -> Action {
+        match key.code {
+            KeyCode::Enter => {
+                let input = self.command_bar.input().to_string();
+                self.command_bar.deactivate();
+                self.focus = self.previous_focus;
+
+                if input.is_empty() {
+                    return Action::None;
+                }
+
+                match parse_command(&input) {
+                    Ok(cmd) => self.execute_command(cmd),
+                    Err(e) => {
+                        self.set_status(e.to_string(), StatusLevel::Error);
+                        Action::None
+                    }
+                }
+            }
+            KeyCode::Esc => {
+                self.command_bar.deactivate();
+                self.focus = self.previous_focus;
+                Action::None
+            }
+            _ => {
+                self.command_bar.handle_key(key);
+                Action::None
+            }
+        }
+    }
+
+    fn handle_inspector_key(&mut self, key: KeyEvent) -> Action {
+        match key.code {
+            KeyCode::Esc => {
+                self.inspector.hide();
+                self.focus = self.previous_focus;
+                Action::None
+            }
+            KeyCode::Char('y') => {
+                if let Some(text) = self.inspector.content_text() {
+                    self.copy_to_clipboard(&text);
+                }
+                Action::None
+            }
+            _ => {
+                self.inspector.handle_key(key);
+                Action::None
+            }
+        }
+    }
+
+    fn execute_command(&mut self, command: Command) -> Action {
+        match command {
+            Command::Connect(target) => {
+                // Try as URL first, then as profile name
+                let config =
+                    if target.starts_with("postgres://") || target.starts_with("postgresql://") {
+                        match ConnectionConfig::from_url(&target) {
+                            Ok(c) => c,
+                            Err(e) => {
+                                self.set_status(format!("Invalid URL: {}", e), StatusLevel::Error);
+                                return Action::None;
+                            }
+                        }
+                    } else {
+                        match crate::config::find_connection(&target) {
+                            Ok(c) => c,
+                            Err(e) => {
+                                self.set_status(
+                                    format!("Profile not found: {}", e),
+                                    StatusLevel::Error,
+                                );
+                                return Action::None;
+                            }
+                        }
+                    };
+                self.set_status(
+                    format!("Connecting to {}...", config.name),
+                    StatusLevel::Info,
+                );
+                Action::Connect(config)
+            }
+            Command::Disconnect => {
+                self.connection = None;
+                self.connection_name = None;
+                self.tree_browser.clear();
+                self.set_status("Disconnected".to_string(), StatusLevel::Info);
+                Action::Disconnect
+            }
+            Command::Refresh => {
+                if self.connection.is_some() {
+                    self.set_status("Refreshing schema...".to_string(), StatusLevel::Info);
+                    Action::LoadSchema
+                } else {
+                    self.set_status("Not connected".to_string(), StatusLevel::Warning);
+                    Action::None
+                }
+            }
+            Command::Help => {
+                self.set_status(
+                    "Tab=cycle panels | Ctrl+Q=quit | :connect <url> | :q=quit | Ctrl+Enter=execute"
+                        .to_string(),
+                    StatusLevel::Info,
+                );
+                Action::None
+            }
+            Command::Quit => Action::Quit,
+        }
+    }
+
     pub fn cycle_focus(&mut self) {
-        // TODO: Implement Tab-based focus cycling
-        todo!("Focus cycling not yet implemented")
+        self.focus = match self.focus {
+            PanelFocus::TreeBrowser => PanelFocus::QueryEditor,
+            PanelFocus::QueryEditor => PanelFocus::ResultsViewer,
+            PanelFocus::ResultsViewer => PanelFocus::TreeBrowser,
+            other => other,
+        };
     }
 
-    /// Set focus to specific panel
-    pub fn set_focus(&mut self, focus: PanelFocus) {
-        self.focus = focus;
+    fn cycle_focus_reverse(&mut self) {
+        self.focus = match self.focus {
+            PanelFocus::TreeBrowser => PanelFocus::ResultsViewer,
+            PanelFocus::QueryEditor => PanelFocus::TreeBrowser,
+            PanelFocus::ResultsViewer => PanelFocus::QueryEditor,
+            other => other,
+        };
     }
 
-    /// Set status message
     pub fn set_status(&mut self, message: String, level: StatusLevel) {
         self.status_message = Some(StatusMessage {
             message,
@@ -188,12 +394,23 @@ impl App {
         });
     }
 
-    /// Check if status message should be cleared (after timeout)
     pub fn should_clear_status(&self) -> bool {
         if let Some(msg) = &self.status_message {
-            msg.timestamp.elapsed() > Duration::from_secs(5)
+            msg.timestamp.elapsed() > Duration::from_secs(10)
         } else {
             false
+        }
+    }
+
+    fn copy_to_clipboard(&mut self, text: &str) {
+        match arboard::Clipboard::new() {
+            Ok(mut clipboard) => match clipboard.set_text(text) {
+                Ok(()) => self.set_status("Copied to clipboard".to_string(), StatusLevel::Success),
+                Err(e) => self.set_status(format!("Clipboard error: {}", e), StatusLevel::Warning),
+            },
+            Err(_) => {
+                self.set_status("Clipboard unavailable".to_string(), StatusLevel::Warning);
+            }
         }
     }
 }
@@ -201,35 +418,6 @@ impl App {
 impl Default for App {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl StatusMessage {
-    /// Create a success status message
-    pub fn success(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-            level: StatusLevel::Success,
-            timestamp: std::time::Instant::now(),
-        }
-    }
-
-    /// Create an error status message
-    pub fn error(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-            level: StatusLevel::Error,
-            timestamp: std::time::Instant::now(),
-        }
-    }
-
-    /// Create an info status message
-    pub fn info(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-            level: StatusLevel::Info,
-            timestamp: std::time::Instant::now(),
-        }
     }
 }
 
@@ -246,10 +434,15 @@ mod tests {
     }
 
     #[test]
-    fn test_set_focus_changes_focus() {
+    fn test_cycle_focus() {
         let mut app = App::new();
-        app.set_focus(PanelFocus::TreeBrowser);
+        assert_eq!(app.focus, PanelFocus::QueryEditor);
+        app.cycle_focus();
+        assert_eq!(app.focus, PanelFocus::ResultsViewer);
+        app.cycle_focus();
         assert_eq!(app.focus, PanelFocus::TreeBrowser);
+        app.cycle_focus();
+        assert_eq!(app.focus, PanelFocus::QueryEditor);
     }
 
     #[test]

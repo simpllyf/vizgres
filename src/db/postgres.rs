@@ -1,117 +1,374 @@
-//! PostgreSQL database provider implementation
+//! PostgreSQL database provider
 //!
-//! Implements the DatabaseProvider trait for PostgreSQL using tokio-postgres.
+//! Concrete implementation using tokio-postgres. No trait abstraction needed yet.
 
 use crate::config::ConnectionConfig;
-use crate::db::provider::{Completion, CompletionContext, DatabaseProvider, ExplainPlan};
-use crate::db::schema::SchemaTree;
-use crate::db::types::{ColumnInfo, QueryResults};
+use crate::config::connections::SslMode;
+use crate::db::schema::{Column, Schema, SchemaTree, Table};
+use crate::db::types::{CellValue, ColumnDef, DataType, QueryResults, Row};
 use crate::error::DbResult;
-use async_trait::async_trait;
 use tokio_postgres::Client;
+use tokio_postgres::types::Type;
 
 /// PostgreSQL database provider
 pub struct PostgresProvider {
     /// The tokio-postgres client
-    _client: Client,
+    client: Client,
 
     /// Cached schema tree (invalidated on refresh)
     schema_cache: Option<SchemaTree>,
 }
 
-#[async_trait]
-impl DatabaseProvider for PostgresProvider {
-    async fn connect(_config: &ConnectionConfig) -> DbResult<Self>
-    where
-        Self: Sized,
-    {
-        // TODO: Phase 1 - Implement connection logic
-        // 1. Build connection string from config
-        // 2. Connect using tokio_postgres::connect
-        // 3. Spawn connection task
-        // 4. Return PostgresProvider instance
-        todo!("PostgreSQL connection not yet implemented")
-    }
-
-    async fn disconnect(&mut self) -> DbResult<()> {
-        // TODO: Phase 1 - Graceful disconnect
-        // The connection will be dropped when PostgresProvider is dropped
-        Ok(())
-    }
-
-    async fn is_connected(&self) -> bool {
-        // TODO: Phase 1 - Simple connection check (SELECT 1)
-        todo!("Connection check not yet implemented")
-    }
-
-    async fn execute_query(&self, _sql: &str) -> DbResult<QueryResults> {
-        // TODO: Phase 1 - Execute query and convert results
-        // 1. Execute query using client.query
-        // 2. Convert rows to QueryResults
-        // 3. Map PostgreSQL types to our DataType enum
-        todo!("Query execution not yet implemented")
-    }
-
-    async fn get_schema(&self) -> DbResult<SchemaTree> {
-        // TODO: Phase 3 - Schema introspection
-        // 1. Check cache first
-        // 2. Query information_schema and pg_catalog
-        // 3. Build SchemaTree from results
-        // 4. Cache the result
-        todo!("Schema introspection not yet implemented")
-    }
-
-    async fn get_table_columns(&self, _schema: &str, _table: &str) -> DbResult<Vec<ColumnInfo>> {
-        // TODO: Phase 3 - Get detailed column info for a table
-        todo!("Table column introspection not yet implemented")
-    }
-
-    async fn explain_query(&self, _sql: &str) -> DbResult<ExplainPlan> {
-        // TODO: Phase 6 - EXPLAIN query execution
-        // 1. Execute EXPLAIN (FORMAT JSON) for the query
-        // 2. Parse JSON result
-        // 3. Build ExplainPlan structure
-        todo!("EXPLAIN not yet implemented")
-    }
-
-    async fn get_completions(&self, _context: &CompletionContext) -> DbResult<Vec<Completion>> {
-        // TODO: Phase 7 - Autocomplete suggestions
-        // 1. Parse context to determine what we're completing
-        // 2. Query schema for relevant tables/columns
-        // 3. Return appropriate completions
-        todo!("Autocomplete not yet implemented")
-    }
-}
-
 impl PostgresProvider {
-    /// Invalidate the schema cache (call after DDL operations)
+    /// Connect to a PostgreSQL database
+    pub async fn connect(config: &ConnectionConfig) -> DbResult<Self> {
+        let conn_string = config.connection_string_with_password();
+
+        let client = match config.ssl_mode {
+            SslMode::Disable => {
+                let (client, connection) =
+                    tokio_postgres::connect(&conn_string, tokio_postgres::NoTls)
+                        .await
+                        .map_err(|e| crate::error::DbError::ConnectionFailed(e.to_string()))?;
+                tokio::spawn(async move {
+                    if let Err(e) = connection.await {
+                        eprintln!("Database connection error: {}", e);
+                    }
+                });
+                client
+            }
+            SslMode::Prefer | SslMode::Require => {
+                let tls_config = make_tls_config();
+                let tls = tokio_postgres_rustls::MakeRustlsConnect::new(tls_config);
+                let (client, connection) = tokio_postgres::connect(&conn_string, tls)
+                    .await
+                    .map_err(|e| crate::error::DbError::ConnectionFailed(e.to_string()))?;
+                tokio::spawn(async move {
+                    if let Err(e) = connection.await {
+                        eprintln!("Database connection error: {}", e);
+                    }
+                });
+                client
+            }
+        };
+
+        Ok(Self {
+            client,
+            schema_cache: None,
+        })
+    }
+
+    /// Check if connection is alive
+    pub async fn is_connected(&self) -> bool {
+        self.client.simple_query("SELECT 1").await.is_ok()
+    }
+
+    /// Execute a SQL query and return results
+    pub async fn execute_query(&self, sql: &str) -> DbResult<QueryResults> {
+        let start = std::time::Instant::now();
+
+        let stmt = self
+            .client
+            .prepare(sql)
+            .await
+            .map_err(|e| crate::error::DbError::QueryFailed(e.to_string()))?;
+
+        let columns: Vec<ColumnDef> = stmt
+            .columns()
+            .iter()
+            .map(|col| ColumnDef {
+                name: col.name().to_string(),
+                data_type: pg_type_to_datatype(col.type_()),
+                nullable: true,
+            })
+            .collect();
+
+        let pg_rows = self
+            .client
+            .query(&stmt, &[])
+            .await
+            .map_err(|e| crate::error::DbError::QueryFailed(e.to_string()))?;
+
+        let row_count = pg_rows.len();
+        let mut rows = Vec::with_capacity(row_count);
+
+        for pg_row in &pg_rows {
+            let mut values = Vec::with_capacity(columns.len());
+            for (i, col_def) in columns.iter().enumerate() {
+                let value = extract_cell_value(pg_row, i, &col_def.data_type);
+                values.push(value);
+            }
+            rows.push(Row { values });
+        }
+
+        Ok(QueryResults {
+            columns,
+            rows,
+            execution_time: start.elapsed(),
+            row_count,
+        })
+    }
+
+    /// Get the complete database schema tree
+    pub async fn get_schema(&mut self) -> DbResult<SchemaTree> {
+        if let Some(ref cached) = self.schema_cache {
+            return Ok(cached.clone());
+        }
+
+        let tree = self.fetch_schema_from_db().await?;
+        self.schema_cache = Some(tree.clone());
+        Ok(tree)
+    }
+
+    /// Invalidate the schema cache
     pub fn invalidate_cache(&mut self) {
         self.schema_cache = None;
     }
 
-    /// Fetch schema from database (internal helper)
-    #[allow(dead_code)]
     async fn fetch_schema_from_db(&self) -> DbResult<SchemaTree> {
-        // TODO: Phase 3 - Actual schema queries
-        // Query: SELECT schema_name FROM information_schema.schemata
-        // Query: SELECT table details from information_schema.tables
-        // Query: SELECT column details from information_schema.columns
-        // etc.
-        todo!("Schema fetching not yet implemented")
+        // Get schemas (exclude pg_ internal schemas)
+        let schema_rows = self
+            .client
+            .query(
+                "SELECT schema_name FROM information_schema.schemata \
+                 WHERE schema_name NOT LIKE 'pg_%' \
+                 AND schema_name != 'information_schema' \
+                 ORDER BY schema_name",
+                &[],
+            )
+            .await
+            .map_err(|e| crate::error::DbError::SchemaLoadFailed(e.to_string()))?;
+
+        let mut schemas = Vec::new();
+
+        for schema_row in &schema_rows {
+            let schema_name: String = schema_row.get(0);
+
+            // Get tables for this schema
+            let table_rows = self
+                .client
+                .query(
+                    "SELECT table_name FROM information_schema.tables \
+                     WHERE table_schema = $1 AND table_type = 'BASE TABLE' \
+                     ORDER BY table_name",
+                    &[&schema_name],
+                )
+                .await
+                .map_err(|e| crate::error::DbError::SchemaLoadFailed(e.to_string()))?;
+
+            let mut tables = Vec::new();
+
+            for table_row in &table_rows {
+                let table_name: String = table_row.get(0);
+
+                // Get columns for this table
+                let col_rows = self
+                    .client
+                    .query(
+                        "SELECT column_name, data_type, is_nullable, column_default, ordinal_position \
+                         FROM information_schema.columns \
+                         WHERE table_schema = $1 AND table_name = $2 \
+                         ORDER BY ordinal_position",
+                        &[&schema_name, &table_name],
+                    )
+                    .await
+                    .map_err(|e| crate::error::DbError::SchemaLoadFailed(e.to_string()))?;
+
+                let columns: Vec<Column> = col_rows
+                    .iter()
+                    .map(|r| {
+                        let col_name: String = r.get(0);
+                        let type_name: String = r.get(1);
+                        let nullable_str: String = r.get(2);
+                        let default: Option<String> = r.get(3);
+                        let ordinal: i32 = r.get(4);
+
+                        Column {
+                            name: col_name,
+                            data_type: datatype_from_info_schema(&type_name),
+                            nullable: nullable_str == "YES",
+                            default,
+                            is_primary_key: false,
+                            ordinal_position: ordinal,
+                        }
+                    })
+                    .collect();
+
+                tables.push(Table {
+                    name: table_name,
+                    schema: schema_name.clone(),
+                    columns,
+                    indexes: vec![],
+                    constraints: vec![],
+                    row_estimate: 0,
+                });
+            }
+
+            schemas.push(Schema {
+                name: schema_name,
+                tables,
+                views: vec![],
+                functions: vec![],
+                sequences: vec![],
+            });
+        }
+
+        Ok(SchemaTree { schemas })
     }
 }
 
-#[cfg(test)]
-mod tests {
-    #[allow(unused_imports)]
-    use super::*;
+/// Map tokio_postgres Type to our DataType enum
+fn pg_type_to_datatype(pg_type: &Type) -> DataType {
+    match *pg_type {
+        Type::INT2 => DataType::SmallInt,
+        Type::INT4 => DataType::Integer,
+        Type::INT8 => DataType::BigInt,
+        Type::FLOAT4 => DataType::Real,
+        Type::FLOAT8 => DataType::Double,
+        Type::NUMERIC => DataType::Numeric,
+        Type::TEXT | Type::NAME => DataType::Text,
+        Type::VARCHAR => DataType::Varchar(None),
+        Type::CHAR | Type::BPCHAR => DataType::Char(None),
+        Type::BOOL => DataType::Boolean,
+        Type::DATE => DataType::Date,
+        Type::TIME => DataType::Time,
+        Type::TIMESTAMP => DataType::Timestamp,
+        Type::TIMESTAMPTZ => DataType::TimestampTz,
+        Type::INTERVAL => DataType::Interval,
+        Type::JSON => DataType::Json,
+        Type::JSONB => DataType::Jsonb,
+        Type::BYTEA => DataType::Bytea,
+        Type::UUID => DataType::Uuid,
+        _ => DataType::Unknown(pg_type.name().to_string()),
+    }
+}
 
-    // Integration tests will use testcontainers in tests/integration/
-    // Unit tests here should test logic that doesn't require a real database
+/// Map information_schema type strings to our DataType enum
+fn datatype_from_info_schema(type_name: &str) -> DataType {
+    match type_name {
+        "smallint" => DataType::SmallInt,
+        "integer" => DataType::Integer,
+        "bigint" => DataType::BigInt,
+        "real" => DataType::Real,
+        "double precision" => DataType::Double,
+        "numeric" => DataType::Numeric,
+        "text" => DataType::Text,
+        "character varying" => DataType::Varchar(None),
+        "character" => DataType::Char(None),
+        "boolean" => DataType::Boolean,
+        "date" => DataType::Date,
+        "time without time zone" | "time with time zone" => DataType::Time,
+        "timestamp without time zone" => DataType::Timestamp,
+        "timestamp with time zone" => DataType::TimestampTz,
+        "interval" => DataType::Interval,
+        "json" => DataType::Json,
+        "jsonb" => DataType::Jsonb,
+        "bytea" => DataType::Bytea,
+        "uuid" => DataType::Uuid,
+        other => DataType::Unknown(other.to_string()),
+    }
+}
 
-    #[test]
-    fn test_invalidate_cache() {
-        // This is a placeholder - actual tests will be added in Phase 1
-        // when we have working implementation
+/// Build a rustls ClientConfig that trusts OS certificates (with Mozilla roots as fallback)
+fn make_tls_config() -> rustls::ClientConfig {
+    let mut root_store = rustls::RootCertStore::empty();
+
+    let native_certs = rustls_native_certs::load_native_certs();
+    let mut loaded = 0;
+    for cert in native_certs.certs {
+        if root_store.add(cert).is_ok() {
+            loaded += 1;
+        }
+    }
+    if loaded == 0 {
+        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    }
+
+    rustls::ClientConfig::builder()
+        .with_root_certificates(root_store)
+        .with_no_client_auth()
+}
+
+/// Extract a cell value from a tokio_postgres Row based on the column's DataType
+fn extract_cell_value(row: &tokio_postgres::Row, idx: usize, data_type: &DataType) -> CellValue {
+    // Check for NULL first
+    match data_type {
+        DataType::SmallInt => match row.try_get::<_, Option<i16>>(idx) {
+            Ok(Some(v)) => CellValue::Integer(v as i64),
+            Ok(None) => CellValue::Null,
+            Err(_) => CellValue::Null,
+        },
+        DataType::Integer => match row.try_get::<_, Option<i32>>(idx) {
+            Ok(Some(v)) => CellValue::Integer(v as i64),
+            Ok(None) => CellValue::Null,
+            Err(_) => CellValue::Null,
+        },
+        DataType::BigInt => match row.try_get::<_, Option<i64>>(idx) {
+            Ok(Some(v)) => CellValue::Integer(v),
+            Ok(None) => CellValue::Null,
+            Err(_) => CellValue::Null,
+        },
+        DataType::Real => match row.try_get::<_, Option<f32>>(idx) {
+            Ok(Some(v)) => CellValue::Float(v as f64),
+            Ok(None) => CellValue::Null,
+            Err(_) => CellValue::Null,
+        },
+        DataType::Double | DataType::Numeric => match row.try_get::<_, Option<f64>>(idx) {
+            Ok(Some(v)) => CellValue::Float(v),
+            Ok(None) => CellValue::Null,
+            Err(_) => {
+                // Numeric might not map to f64 directly, try as string
+                match row.try_get::<_, Option<String>>(idx) {
+                    Ok(Some(s)) => CellValue::Text(s),
+                    _ => CellValue::Null,
+                }
+            }
+        },
+        DataType::Boolean => match row.try_get::<_, Option<bool>>(idx) {
+            Ok(Some(v)) => CellValue::Boolean(v),
+            Ok(None) => CellValue::Null,
+            Err(_) => CellValue::Null,
+        },
+        DataType::Json | DataType::Jsonb => {
+            match row.try_get::<_, Option<serde_json::Value>>(idx) {
+                Ok(Some(v)) => CellValue::Json(v),
+                Ok(None) => CellValue::Null,
+                Err(_) => CellValue::Null,
+            }
+        }
+        DataType::Bytea => match row.try_get::<_, Option<Vec<u8>>>(idx) {
+            Ok(Some(v)) => CellValue::Binary(v),
+            Ok(None) => CellValue::Null,
+            Err(_) => CellValue::Null,
+        },
+        DataType::Uuid => match row.try_get::<_, Option<String>>(idx) {
+            Ok(Some(v)) => CellValue::Uuid(v),
+            Ok(None) => CellValue::Null,
+            Err(_) => CellValue::Null,
+        },
+        DataType::Timestamp
+        | DataType::TimestampTz
+        | DataType::Date
+        | DataType::Time
+        | DataType::Interval => match row.try_get::<_, Option<String>>(idx) {
+            Ok(Some(v)) => CellValue::DateTime(v),
+            Ok(None) => CellValue::Null,
+            Err(_) => {
+                // chrono types might be involved; fall back to text representation
+                match row.try_get::<_, Option<chrono::NaiveDateTime>>(idx) {
+                    Ok(Some(v)) => CellValue::DateTime(v.to_string()),
+                    _ => match row.try_get::<_, Option<chrono::DateTime<chrono::Utc>>>(idx) {
+                        Ok(Some(v)) => CellValue::DateTime(v.to_string()),
+                        _ => CellValue::Null,
+                    },
+                }
+            }
+        },
+        // Text types and fallback
+        _ => match row.try_get::<_, Option<String>>(idx) {
+            Ok(Some(v)) => CellValue::Text(v),
+            Ok(None) => CellValue::Null,
+            Err(_) => CellValue::Null,
+        },
     }
 }

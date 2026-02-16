@@ -1,9 +1,7 @@
 //! vizgres library
 //!
-//! This library contains the core functionality of vizgres, separated from the
-//! main binary for better testability and potential reuse.
+//! Core functionality of vizgres - a keyboard-driven PostgreSQL TUI client.
 
-// Allow dead code during scaffolding phase - most methods are stubs
 #![allow(dead_code)]
 
 pub mod app;
@@ -14,5 +12,4 @@ pub mod error;
 pub mod sql;
 pub mod ui;
 
-// Re-export commonly used types
 pub use error::{CommandError, ConfigError, DbError, Result, VizgresError};

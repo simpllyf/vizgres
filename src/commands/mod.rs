@@ -5,5 +5,4 @@
 pub mod handlers;
 pub mod parser;
 
-#[allow(unused_imports)]
-pub use parser::{Command, ExportFormat, parse_command};
+pub use parser::{Command, parse_command};
