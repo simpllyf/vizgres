@@ -4,29 +4,84 @@
 
 use ratatui::layout::Rect;
 
-/// Calculate panel layout for the main screen
-///
-/// Returns (tree_area, editor_area, results_area, command_area)
-pub fn calculate_layout(area: Rect) -> (Rect, Rect, Rect, Rect) {
-    // TODO: Phase 2 - Implement flexible layout
-    // Main layout:
-    // - Top row for main panels
-    // - Bottom row for command bar
-    // Left panel for tree, right side split for editor/results
-
-    // Temporary stub - returns dummy areas
-    let tree = Rect::new(0, 0, 20, area.height);
-    let editor = Rect::new(20, 0, area.width - 20, area.height / 2);
-    let results = Rect::new(20, area.height / 2, area.width - 20, area.height / 2);
-    let command = Rect::new(0, area.height - 1, area.width, 1);
-
-    (tree, editor, results, command)
+/// Layout areas for the main screen
+pub struct AppLayout {
+    /// Left panel: schema tree browser
+    pub tree: Rect,
+    /// Right top: query editor
+    pub editor: Rect,
+    /// Right bottom: query results
+    pub results: Rect,
+    /// Bottom row: command/status bar
+    pub command_bar: Rect,
 }
 
-/// Calculate layout with custom tree width
-pub fn calculate_layout_with_tree_width(area: Rect, _tree_width: u16) -> (Rect, Rect, Rect, Rect) {
-    // TODO: Phase 2 - Allow resizable tree panel
-    calculate_layout(area)
+/// Layout for split results + inspector
+pub struct ResultsSplit {
+    pub results: Rect,
+    pub inspector: Rect,
+}
+
+/// Calculate panel layout for the main screen
+pub fn calculate_layout(area: Rect) -> AppLayout {
+    if area.height < 4 || area.width < 20 {
+        // Too small - give everything to results
+        return AppLayout {
+            tree: Rect::new(area.x, area.y, 0, 0),
+            editor: Rect::new(area.x, area.y, 0, 0),
+            results: Rect::new(area.x, area.y, area.width, area.height.saturating_sub(1)),
+            command_bar: Rect::new(
+                area.x,
+                area.y + area.height.saturating_sub(1),
+                area.width,
+                1,
+            ),
+        };
+    }
+
+    // Reserve bottom row for command bar
+    let main_height = area.height - 1;
+    let command_bar = Rect::new(area.x, area.y + main_height, area.width, 1);
+
+    // Left panel: tree (25% width, min 20, max 40)
+    let tree_width = (area.width / 4).clamp(20, 40).min(area.width / 2);
+    let tree = Rect::new(area.x, area.y, tree_width, main_height);
+
+    // Right side
+    let right_x = area.x + tree_width;
+    let right_width = area.width - tree_width;
+
+    // Editor gets 40% of right side height, results gets 60%
+    let editor_height = (main_height * 2 / 5).max(3);
+    let results_height = main_height - editor_height;
+
+    let editor = Rect::new(right_x, area.y, right_width, editor_height);
+    let results = Rect::new(right_x, area.y + editor_height, right_width, results_height);
+
+    AppLayout {
+        tree,
+        editor,
+        results,
+        command_bar,
+    }
+}
+
+/// Split the results area into results + inspector (60/40 horizontal split)
+pub fn split_results_for_inspector(area: Rect) -> ResultsSplit {
+    if area.width < 20 {
+        return ResultsSplit {
+            results: area,
+            inspector: Rect::new(area.x + area.width, area.y, 0, 0),
+        };
+    }
+
+    let results_width = area.width * 3 / 5;
+    let inspector_width = area.width - results_width;
+
+    ResultsSplit {
+        results: Rect::new(area.x, area.y, results_width, area.height),
+        inspector: Rect::new(area.x + results_width, area.y, inspector_width, area.height),
+    }
 }
 
 #[cfg(test)]
@@ -36,11 +91,21 @@ mod tests {
     #[test]
     fn test_calculate_layout() {
         let area = Rect::new(0, 0, 100, 50);
-        let (tree, editor, results, command) = calculate_layout(area);
+        let layout = calculate_layout(area);
 
-        assert!(tree.width > 0);
-        assert!(editor.width > 0);
-        assert!(results.width > 0);
-        assert_eq!(command.height, 1);
+        assert!(layout.tree.width > 0);
+        assert!(layout.editor.width > 0);
+        assert!(layout.results.width > 0);
+        assert_eq!(layout.command_bar.height, 1);
+    }
+
+    #[test]
+    fn test_split_results_for_inspector() {
+        let area = Rect::new(20, 25, 80, 25);
+        let split = split_results_for_inspector(area);
+
+        assert!(split.results.width > 0);
+        assert!(split.inspector.width > 0);
+        assert_eq!(split.results.width + split.inspector.width, area.width);
     }
 }

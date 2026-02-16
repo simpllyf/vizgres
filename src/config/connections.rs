@@ -25,7 +25,7 @@ pub struct ConnectionConfig {
     /// Username
     pub username: String,
 
-    /// Password (not serialized to file - use keychain instead)
+    /// Password
     #[serde(skip_serializing)]
     pub password: Option<String>,
 
@@ -44,7 +44,6 @@ pub enum SslMode {
     Require,
 }
 
-/// Container for multiple connections in TOML file
 #[derive(Debug, Serialize, Deserialize)]
 struct ConnectionsFile {
     #[serde(default)]
@@ -56,12 +55,85 @@ fn default_port() -> u16 {
 }
 
 impl ConnectionConfig {
-    /// Build a PostgreSQL connection string
+    /// Parse a postgres:// URL into a ConnectionConfig
+    pub fn from_url(url: &str) -> ConfigResult<Self> {
+        // postgres://user:pass@host:port/dbname
+        let url = url.trim();
+        let rest = url
+            .strip_prefix("postgres://")
+            .or_else(|| url.strip_prefix("postgresql://"))
+            .ok_or_else(|| ConfigError::Invalid("URL must start with postgres://".into()))?;
+
+        // Split at @ to get credentials and host info
+        let (creds, host_part) = rest
+            .split_once('@')
+            .ok_or_else(|| ConfigError::Invalid("URL must contain @".into()))?;
+
+        // Parse credentials
+        let (username, password) = if let Some((u, p)) = creds.split_once(':') {
+            (u.to_string(), Some(p.to_string()))
+        } else {
+            (creds.to_string(), None)
+        };
+
+        // Split host:port/dbname
+        let (host_port, database) = host_part
+            .split_once('/')
+            .ok_or_else(|| ConfigError::Invalid("URL must contain /dbname".into()))?;
+
+        // Split database name from query params and parse sslmode
+        let (database, ssl_mode) = if let Some((db, query)) = database.split_once('?') {
+            let ssl = parse_sslmode_param(query);
+            (db.to_string(), ssl)
+        } else {
+            (database.to_string(), SslMode::Prefer)
+        };
+
+        let (host, port) = if let Some((h, p)) = host_port.split_once(':') {
+            let port = p
+                .parse::<u16>()
+                .map_err(|_| ConfigError::Invalid(format!("Invalid port: {}", p)))?;
+            (h.to_string(), port)
+        } else {
+            (host_port.to_string(), 5432)
+        };
+
+        Ok(Self {
+            name: format!("{}@{}", database, host),
+            host,
+            port,
+            database,
+            username,
+            password,
+            ssl_mode,
+        })
+    }
+
+    /// Build a PostgreSQL connection string (without password)
     pub fn connection_string(&self) -> String {
         format!(
             "host={} port={} dbname={} user={}",
             self.host, self.port, self.database, self.username
         )
+    }
+
+    /// Build a full connection string including password
+    pub fn connection_string_with_password(&self) -> String {
+        let base = self.connection_string();
+        let with_ssl = format!(
+            "{} sslmode={}",
+            base,
+            match self.ssl_mode {
+                SslMode::Disable => "disable",
+                SslMode::Prefer => "prefer",
+                SslMode::Require => "require",
+            }
+        );
+        if let Some(ref pw) = self.password {
+            format!("{} password={}", with_ssl, pw)
+        } else {
+            with_ssl
+        }
     }
 
     /// Get the config directory path (~/.vizgres/)
@@ -76,29 +148,30 @@ impl ConnectionConfig {
     }
 }
 
+/// Parse the `sslmode` value from a URL query string
+fn parse_sslmode_param(query: &str) -> SslMode {
+    for param in query.split('&') {
+        if let Some(value) = param.strip_prefix("sslmode=") {
+            return match value {
+                "disable" => SslMode::Disable,
+                "require" => SslMode::Require,
+                _ => SslMode::Prefer,
+            };
+        }
+    }
+    SslMode::Prefer
+}
+
 /// Load all connection profiles from config file
 pub fn load_connections() -> ConfigResult<Vec<ConnectionConfig>> {
     let path = ConnectionConfig::connections_file()?;
-
     if !path.exists() {
         return Ok(Vec::new());
     }
-
     let content = std::fs::read_to_string(&path)
         .map_err(|e| ConfigError::NotFound(format!("Failed to read connections file: {}", e)))?;
-
     let file: ConnectionsFile = toml::from_str(&content)?;
     Ok(file.connections)
-}
-
-/// Save a connection profile to config file
-pub fn save_connection(_config: &ConnectionConfig) -> ConfigResult<()> {
-    // TODO: Phase 8 - Implement connection saving
-    // 1. Load existing connections
-    // 2. Update or append new connection
-    // 3. Write back to file
-    // 4. Handle password storage in keychain
-    todo!("Saving connections not yet implemented")
 }
 
 /// Find a connection by name
@@ -112,7 +185,6 @@ pub fn find_connection(name: &str) -> ConfigResult<ConnectionConfig> {
 
 #[cfg(test)]
 mod tests {
-    #[allow(unused_imports)]
     use super::*;
 
     #[test]
@@ -126,7 +198,6 @@ mod tests {
             password: None,
             ssl_mode: SslMode::Disable,
         };
-
         assert_eq!(
             config.connection_string(),
             "host=localhost port=5432 dbname=mydb user=user"
@@ -134,12 +205,52 @@ mod tests {
     }
 
     #[test]
-    fn test_default_port() {
-        assert_eq!(default_port(), 5432);
+    fn test_from_url() {
+        let config =
+            ConnectionConfig::from_url("postgres://user:pass@localhost:5432/mydb").unwrap();
+        assert_eq!(config.host, "localhost");
+        assert_eq!(config.port, 5432);
+        assert_eq!(config.database, "mydb");
+        assert_eq!(config.username, "user");
+        assert_eq!(config.password, Some("pass".to_string()));
+        assert_eq!(config.ssl_mode, SslMode::Prefer);
     }
 
     #[test]
-    fn test_ssl_mode_default() {
-        assert_eq!(SslMode::default(), SslMode::Prefer);
+    fn test_from_url_default_port() {
+        let config = ConnectionConfig::from_url("postgres://user:pass@localhost/mydb").unwrap();
+        assert_eq!(config.port, 5432);
+    }
+
+    #[test]
+    fn test_from_url_sslmode_require() {
+        let config =
+            ConnectionConfig::from_url("postgres://user:pass@host/db?sslmode=require").unwrap();
+        assert_eq!(config.ssl_mode, SslMode::Require);
+        assert_eq!(config.database, "db");
+    }
+
+    #[test]
+    fn test_from_url_sslmode_disable() {
+        let config =
+            ConnectionConfig::from_url("postgres://user:pass@host/db?sslmode=disable").unwrap();
+        assert_eq!(config.ssl_mode, SslMode::Disable);
+    }
+
+    #[test]
+    fn test_connection_string_with_password() {
+        let config = ConnectionConfig {
+            name: "test".to_string(),
+            host: "localhost".to_string(),
+            port: 5432,
+            database: "mydb".to_string(),
+            username: "user".to_string(),
+            password: Some("secret".to_string()),
+            ssl_mode: SslMode::Disable,
+        };
+        assert_eq!(
+            config.connection_string_with_password(),
+            "host=localhost port=5432 dbname=mydb user=user sslmode=disable password=secret"
+        );
     }
 }
