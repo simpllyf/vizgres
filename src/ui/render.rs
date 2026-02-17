@@ -105,7 +105,7 @@ fn render_inspector_popup(frame: &mut Frame, theme: &Theme, app: &App) {
     let desired_w = content_w + 4;
     let desired_h = content_h + 4;
 
-    let min_w: u16 = 30;
+    let min_w: u16 = 42;
     let min_h: u16 = 6;
     let max_w = screen.width * 4 / 5;
     let max_h = screen.height * 3 / 4;
