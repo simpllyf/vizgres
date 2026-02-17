@@ -37,6 +37,8 @@ impl QueryEditor {
         self.lines.len() == 1 && self.lines[0].is_empty()
     }
 
+    /// Set the editor content (used for testing and future features like query history)
+    #[allow(dead_code)]
     pub fn set_content(&mut self, content: String) {
         self.lines = content.lines().map(String::from).collect();
         if self.lines.is_empty() {
@@ -120,6 +122,7 @@ impl QueryEditor {
         self.cursor.1 = self.lines[self.cursor.0].len();
     }
 
+    #[allow(dead_code)]
     fn ensure_cursor_visible(&mut self, visible_height: usize) {
         if visible_height == 0 {
             return;

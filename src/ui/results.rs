@@ -40,6 +40,8 @@ impl ResultsViewer {
         self.h_scroll_offset = 0;
     }
 
+    /// Clear results (reserved for future use)
+    #[allow(dead_code)]
     pub fn clear(&mut self) {
         self.results = None;
         self.selected_row = 0;
@@ -90,6 +92,7 @@ impl ResultsViewer {
         self.results.as_ref().map_or(0, |r| r.columns.len())
     }
 
+    #[allow(dead_code)]
     fn ensure_visible(&mut self, visible_height: usize) {
         if visible_height == 0 {
             return;

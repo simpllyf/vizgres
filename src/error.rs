@@ -20,7 +20,8 @@ pub enum VizgresError {
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
 
-    /// Terminal/UI errors
+    /// Terminal/UI errors (reserved for future use)
+    #[allow(dead_code)]
     #[error("Terminal error: {0}")]
     Terminal(String),
 
@@ -44,15 +45,18 @@ pub enum DbError {
     #[error("Schema loading failed: {0}")]
     SchemaLoadFailed(String),
 
-    /// Not connected to a database
+    /// Not connected to a database (reserved for future use)
+    #[allow(dead_code)]
     #[error("Not connected to database")]
     NotConnected,
 
-    /// Operation timed out
+    /// Operation timed out (reserved for future use)
+    #[allow(dead_code)]
     #[error("Operation timed out")]
     Timeout,
 
-    /// Type conversion error
+    /// Type conversion error (reserved for future use)
+    #[allow(dead_code)]
     #[error("Type conversion error: {0}")]
     TypeConversion(String),
 }
@@ -96,11 +100,13 @@ pub enum CommandError {
     #[error("Missing required argument for command")]
     MissingArgument,
 
-    /// Invalid argument
+    /// Invalid argument (reserved for future use)
+    #[allow(dead_code)]
     #[error("Invalid argument: {0}")]
     InvalidArgument(String),
 
-    /// Command execution failed
+    /// Command execution failed (reserved for future use)
+    #[allow(dead_code)]
     #[error("Command execution failed: {0}")]
     ExecutionFailed(String),
 }

@@ -58,11 +58,6 @@ impl PostgresProvider {
         })
     }
 
-    /// Check if connection is alive
-    pub async fn is_connected(&self) -> bool {
-        self.client.simple_query("SELECT 1").await.is_ok()
-    }
-
     /// Execute a SQL query and return results
     pub async fn execute_query(&self, sql: &str) -> DbResult<QueryResults> {
         let start = std::time::Instant::now();
@@ -165,7 +160,7 @@ impl PostgresProvider {
                 let col_rows = self
                     .client
                     .query(
-                        "SELECT column_name, data_type, is_nullable, column_default, ordinal_position \
+                        "SELECT column_name, data_type \
                          FROM information_schema.columns \
                          WHERE table_schema = $1 AND table_name = $2 \
                          ORDER BY ordinal_position",
@@ -179,37 +174,23 @@ impl PostgresProvider {
                     .map(|r| {
                         let col_name: String = r.get(0);
                         let type_name: String = r.get(1);
-                        let nullable_str: String = r.get(2);
-                        let default: Option<String> = r.get(3);
-                        let ordinal: i32 = r.get(4);
 
                         Column {
                             name: col_name,
                             data_type: datatype_from_info_schema(&type_name),
-                            nullable: nullable_str == "YES",
-                            default,
-                            is_primary_key: false,
-                            ordinal_position: ordinal,
                         }
                     })
                     .collect();
 
                 tables.push(Table {
                     name: table_name,
-                    schema: schema_name.clone(),
                     columns,
-                    indexes: vec![],
-                    constraints: vec![],
-                    row_estimate: 0,
                 });
             }
 
             schemas.push(Schema {
                 name: schema_name,
                 tables,
-                views: vec![],
-                functions: vec![],
-                sequences: vec![],
             });
         }
 
@@ -289,62 +270,62 @@ fn make_tls_config() -> rustls::ClientConfig {
         .with_no_client_auth()
 }
 
-/// Extract a cell value from a tokio_postgres Row based on the column's DataType
+/// Extract a cell value from a tokio_postgres Row based on the column's DataType.
+///
+/// This function attempts to extract values using the expected type first,
+/// then falls back to string representation if the type doesn't match.
+/// Returns CellValue::Null only for actual NULL values or when all fallbacks fail.
 fn extract_cell_value(row: &tokio_postgres::Row, idx: usize, data_type: &DataType) -> CellValue {
-    // Check for NULL first
     match data_type {
         DataType::SmallInt => match row.try_get::<_, Option<i16>>(idx) {
             Ok(Some(v)) => CellValue::Integer(v as i64),
             Ok(None) => CellValue::Null,
-            Err(_) => CellValue::Null,
+            Err(_) => try_as_string(row, idx),
         },
         DataType::Integer => match row.try_get::<_, Option<i32>>(idx) {
             Ok(Some(v)) => CellValue::Integer(v as i64),
             Ok(None) => CellValue::Null,
-            Err(_) => CellValue::Null,
+            Err(_) => try_as_string(row, idx),
         },
         DataType::BigInt => match row.try_get::<_, Option<i64>>(idx) {
             Ok(Some(v)) => CellValue::Integer(v),
             Ok(None) => CellValue::Null,
-            Err(_) => CellValue::Null,
+            Err(_) => try_as_string(row, idx),
         },
         DataType::Real => match row.try_get::<_, Option<f32>>(idx) {
             Ok(Some(v)) => CellValue::Float(v as f64),
             Ok(None) => CellValue::Null,
-            Err(_) => CellValue::Null,
+            Err(_) => try_as_string(row, idx),
         },
         DataType::Double | DataType::Numeric => match row.try_get::<_, Option<f64>>(idx) {
             Ok(Some(v)) => CellValue::Float(v),
             Ok(None) => CellValue::Null,
             Err(_) => {
                 // Numeric might not map to f64 directly, try as string
-                match row.try_get::<_, Option<String>>(idx) {
-                    Ok(Some(s)) => CellValue::Text(s),
-                    _ => CellValue::Null,
-                }
+                try_as_string(row, idx)
             }
         },
         DataType::Boolean => match row.try_get::<_, Option<bool>>(idx) {
             Ok(Some(v)) => CellValue::Boolean(v),
             Ok(None) => CellValue::Null,
-            Err(_) => CellValue::Null,
+            Err(_) => try_as_string(row, idx),
         },
         DataType::Json | DataType::Jsonb => {
             match row.try_get::<_, Option<serde_json::Value>>(idx) {
                 Ok(Some(v)) => CellValue::Json(v),
                 Ok(None) => CellValue::Null,
-                Err(_) => CellValue::Null,
+                Err(_) => try_as_string(row, idx),
             }
         }
         DataType::Bytea => match row.try_get::<_, Option<Vec<u8>>>(idx) {
             Ok(Some(v)) => CellValue::Binary(v),
             Ok(None) => CellValue::Null,
-            Err(_) => CellValue::Null,
+            Err(_) => try_as_string(row, idx),
         },
         DataType::Uuid => match row.try_get::<_, Option<String>>(idx) {
             Ok(Some(v)) => CellValue::Uuid(v),
             Ok(None) => CellValue::Null,
-            Err(_) => CellValue::Null,
+            Err(_) => try_as_string(row, idx),
         },
         DataType::Timestamp
         | DataType::TimestampTz
@@ -354,21 +335,32 @@ fn extract_cell_value(row: &tokio_postgres::Row, idx: usize, data_type: &DataTyp
             Ok(Some(v)) => CellValue::DateTime(v),
             Ok(None) => CellValue::Null,
             Err(_) => {
-                // chrono types might be involved; fall back to text representation
-                match row.try_get::<_, Option<chrono::NaiveDateTime>>(idx) {
-                    Ok(Some(v)) => CellValue::DateTime(v.to_string()),
-                    _ => match row.try_get::<_, Option<chrono::DateTime<chrono::Utc>>>(idx) {
-                        Ok(Some(v)) => CellValue::DateTime(v.to_string()),
-                        _ => CellValue::Null,
-                    },
+                // Try chrono types for date/time columns
+                if let Ok(Some(v)) = row.try_get::<_, Option<chrono::NaiveDateTime>>(idx) {
+                    return CellValue::DateTime(v.to_string());
                 }
+                if let Ok(Some(v)) = row.try_get::<_, Option<chrono::DateTime<chrono::Utc>>>(idx) {
+                    return CellValue::DateTime(v.to_string());
+                }
+                if let Ok(Some(v)) = row.try_get::<_, Option<chrono::NaiveDate>>(idx) {
+                    return CellValue::DateTime(v.to_string());
+                }
+                if let Ok(Some(v)) = row.try_get::<_, Option<chrono::NaiveTime>>(idx) {
+                    return CellValue::DateTime(v.to_string());
+                }
+                try_as_string(row, idx)
             }
         },
-        // Text types and fallback
-        _ => match row.try_get::<_, Option<String>>(idx) {
-            Ok(Some(v)) => CellValue::Text(v),
-            Ok(None) => CellValue::Null,
-            Err(_) => CellValue::Null,
-        },
+        // Text types and fallback for unknown types
+        _ => try_as_string(row, idx),
+    }
+}
+
+/// Try to extract a value as a string (fallback for type mismatches)
+fn try_as_string(row: &tokio_postgres::Row, idx: usize) -> CellValue {
+    match row.try_get::<_, Option<String>>(idx) {
+        Ok(Some(v)) => CellValue::Text(v),
+        Ok(None) => CellValue::Null,
+        Err(_) => CellValue::Text("<unable to display>".to_string()),
     }
 }

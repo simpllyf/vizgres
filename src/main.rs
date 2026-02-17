@@ -1,7 +1,5 @@
 //! vizgres - A fast, keyboard-driven PostgreSQL client for the terminal
 
-#![allow(dead_code)]
-
 use anyhow::Result;
 use clap::Parser;
 use crossterm::{
@@ -150,8 +148,8 @@ async fn run_app(
                             Action::None
                         }
                     }
-                    Ok(Some(Some(Event::Resize(w, h)))) => {
-                        app.handle_event(AppEvent::Resize(w, h))?
+                    Ok(Some(Some(Event::Resize(_, _)))) => {
+                        app.handle_event(AppEvent::Resize)?
                     }
                     _ => Action::None,
                 }
