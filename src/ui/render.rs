@@ -95,17 +95,27 @@ fn render_panel(
     render_inner(frame, inner);
 }
 
-/// Render the inspector as a centered floating popup with shadow
+/// Render the inspector as a centered floating popup with shadow.
+/// Popup sizes itself to fit the content, clamped to min/max bounds.
 fn render_inspector_popup(frame: &mut Frame, theme: &Theme, app: &App) {
     let screen = frame.area();
+    let (content_w, content_h) = app.inspector.content_size();
 
-    // Size the popup: 60% of screen width, 50% of screen height
-    let popup_w = (screen.width * 3 / 5)
-        .max(40)
-        .min(screen.width.saturating_sub(4));
-    let popup_h = (screen.height / 2)
-        .max(10)
-        .min(screen.height.saturating_sub(4));
+    // +2 for borders on each side, +1 for header line inside the popup
+    let desired_w = content_w + 4;
+    let desired_h = content_h + 4;
+
+    let min_w: u16 = 30;
+    let min_h: u16 = 6;
+    let max_w = screen.width * 4 / 5;
+    let max_h = screen.height * 3 / 4;
+
+    let popup_w = desired_w
+        .clamp(min_w, max_w)
+        .min(screen.width.saturating_sub(2));
+    let popup_h = desired_h
+        .clamp(min_h, max_h)
+        .min(screen.height.saturating_sub(2));
     let popup_x = (screen.width.saturating_sub(popup_w)) / 2;
     let popup_y = (screen.height.saturating_sub(popup_h)) / 2;
     let popup_area = Rect::new(popup_x, popup_y, popup_w, popup_h);

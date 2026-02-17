@@ -55,6 +55,19 @@ impl Inspector {
     pub fn content_text(&self) -> Option<String> {
         self.content.clone()
     }
+
+    /// Measure content dimensions (width, height) for variable-size popup.
+    /// Width is the longest line, height is the line count.
+    /// Returns (0, 0) if no content.
+    pub fn content_size(&self) -> (u16, u16) {
+        match &self.content {
+            Some(text) => {
+                let max_width = text.lines().map(|l| l.len()).max().unwrap_or(0) as u16;
+                (max_width, self.total_lines as u16)
+            }
+            None => (0, 0),
+        }
+    }
 }
 
 impl Default for Inspector {
@@ -167,6 +180,28 @@ mod tests {
         assert_eq!(inspector.content_text(), Some("test content".to_string()));
         inspector.hide();
         assert!(!inspector.is_visible());
+    }
+
+    #[test]
+    fn test_content_size_empty() {
+        let inspector = Inspector::new();
+        assert_eq!(inspector.content_size(), (0, 0));
+    }
+
+    #[test]
+    fn test_content_size_single_line() {
+        let mut inspector = Inspector::new();
+        inspector.show("hello".to_string(), "col".to_string(), "text".to_string());
+        assert_eq!(inspector.content_size(), (5, 1));
+    }
+
+    #[test]
+    fn test_content_size_multiline() {
+        let mut inspector = Inspector::new();
+        let content = "short\na longer line here\nmed";
+        inspector.show(content.to_string(), "col".to_string(), "json".to_string());
+        // width = longest line ("a longer line here" = 18), height = 3 lines
+        assert_eq!(inspector.content_size(), (18, 3));
     }
 
     #[test]
