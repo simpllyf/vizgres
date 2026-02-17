@@ -11,55 +11,55 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 /// Render the entire application
 pub fn render(frame: &mut Frame, app: &App) {
-    let theme = Theme::new();
+    let theme = &app.theme;
     let layout = calculate_layout(frame.area());
 
     // Tree browser
     render_panel(
         frame,
-        &theme,
+        theme,
         layout.tree,
         " Schema ",
         app.focus == PanelFocus::TreeBrowser,
         |f, inner| {
             app.tree_browser
-                .render(f, inner, app.focus == PanelFocus::TreeBrowser, &theme);
+                .render(f, inner, app.focus == PanelFocus::TreeBrowser, theme);
         },
     );
 
     // Editor
     render_panel(
         frame,
-        &theme,
+        theme,
         layout.editor,
         " Query ",
         app.focus == PanelFocus::QueryEditor,
         |f, inner| {
             app.editor
-                .render(f, inner, app.focus == PanelFocus::QueryEditor, &theme);
+                .render(f, inner, app.focus == PanelFocus::QueryEditor, theme);
         },
     );
 
     // Results
     render_panel(
         frame,
-        &theme,
+        theme,
         layout.results,
         " Results ",
         app.focus == PanelFocus::ResultsViewer,
         |f, inner| {
             app.results_viewer
-                .render(f, inner, app.focus == PanelFocus::ResultsViewer, &theme);
+                .render(f, inner, app.focus == PanelFocus::ResultsViewer, theme);
         },
     );
 
     // Inspector overlay (floating popup on top of everything)
     if app.inspector.is_visible() {
-        render_inspector_popup(frame, &theme, app);
+        render_inspector_popup(frame, theme, app);
     }
 
     // Status bar
-    render_status_bar(frame, layout.command_bar, app, &theme);
+    render_status_bar(frame, layout.command_bar, app, theme);
 }
 
 /// Render a panel with consistent focus indication
@@ -203,8 +203,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         );
     } else {
         frame.render_widget(
-            Paragraph::new("Ctrl+P=commands | F5=run | Ctrl+Q=quit")
-                .style(theme.status_help_hint),
+            Paragraph::new("Ctrl+P=commands | F5=run | Ctrl+Q=quit").style(theme.status_help_hint),
             Rect::new(area.x, area.y, max_left_width, 1),
         );
     }

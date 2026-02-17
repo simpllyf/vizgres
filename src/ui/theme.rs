@@ -132,9 +132,7 @@ impl Default for Theme {
                 .fg(Color::DarkGray)
                 .add_modifier(Modifier::ITALIC),
             results_empty: Style::default().fg(Color::DarkGray),
-            results_error_title: Style::default()
-                .fg(Color::Red)
-                .add_modifier(Modifier::BOLD),
+            results_error_title: Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             results_error_text: Style::default().fg(Color::Red),
             results_footer: Style::default().fg(Color::DarkGray),
 
@@ -164,11 +162,6 @@ impl Default for Theme {
 }
 
 impl Theme {
-    /// Create a new theme with default colors
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Get border style based on focus
     pub fn border_style(&self, focused: bool) -> Style {
         if focused {

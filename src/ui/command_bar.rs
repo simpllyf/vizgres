@@ -5,7 +5,7 @@
 use crate::ui::Component;
 use crate::ui::ComponentAction;
 use crate::ui::theme::Theme;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
@@ -58,6 +58,9 @@ impl Component for CommandBar {
         // Only free-form text input is handled here.
         match key.code {
             KeyCode::Char(c) => {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    return ComponentAction::Ignored;
+                }
                 self.input.insert(self.cursor, c);
                 self.cursor += 1;
                 ComponentAction::Consumed

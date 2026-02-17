@@ -58,9 +58,6 @@ impl Inspector {
         self.content.clone()
     }
 
-    /// Measure content dimensions (width, height) for variable-size popup.
-    /// Width is the longest line, height is the line count.
-    /// Returns (0, 0) if no content.
     pub fn scroll_up(&mut self) {
         if self.scroll_offset > 0 {
             self.scroll_offset -= 1;
@@ -89,6 +86,8 @@ impl Inspector {
         self.scroll_offset = self.total_lines.saturating_sub(1);
     }
 
+    /// Measure content dimensions (width, height) for variable-size popup.
+    /// Returns (0, 0) if no content.
     pub fn content_size(&self) -> (u16, u16) {
         match &self.content {
             Some(text) => {
@@ -199,7 +198,7 @@ mod tests {
     }
 
     #[test]
-    fn test_scroll() {
+    fn test_scroll_boundaries() {
         let mut inspector = Inspector::new();
         let content = (0..50)
             .map(|i| format!("line {}", i))
@@ -207,8 +206,51 @@ mod tests {
             .join("\n");
         inspector.show(content, "col".to_string(), "text".to_string());
         assert_eq!(inspector.scroll_offset, 0);
+        assert_eq!(inspector.total_lines, 50);
 
-        inspector.scroll_offset = 10;
-        assert_eq!(inspector.scroll_offset, 10);
+        // scroll_up at top stays at 0
+        inspector.scroll_up();
+        assert_eq!(inspector.scroll_offset, 0);
+
+        // scroll_down increments
+        inspector.scroll_down();
+        assert_eq!(inspector.scroll_offset, 1);
+
+        // scroll_to_bottom goes to last line
+        inspector.scroll_to_bottom();
+        assert_eq!(inspector.scroll_offset, 49);
+
+        // scroll_down at bottom stays at bottom
+        inspector.scroll_down();
+        assert_eq!(inspector.scroll_offset, 49);
+
+        // scroll_to_top resets
+        inspector.scroll_to_top();
+        assert_eq!(inspector.scroll_offset, 0);
+
+        // page_down from 0 goes to 20
+        inspector.page_down();
+        assert_eq!(inspector.scroll_offset, 20);
+
+        // page_up from 20 goes to 0
+        inspector.page_up();
+        assert_eq!(inspector.scroll_offset, 0);
+
+        // page_up at top stays at 0
+        inspector.page_up();
+        assert_eq!(inspector.scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_scroll_no_content() {
+        let mut inspector = Inspector::new();
+        // Should not panic on empty inspector
+        inspector.scroll_up();
+        inspector.scroll_down();
+        inspector.page_up();
+        inspector.page_down();
+        inspector.scroll_to_top();
+        inspector.scroll_to_bottom();
+        assert_eq!(inspector.scroll_offset, 0);
     }
 }

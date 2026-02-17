@@ -441,4 +441,70 @@ mod tests {
         assert!(viewer.error.is_none());
         assert!(viewer.results.is_some());
     }
+
+    #[test]
+    fn test_navigation_on_empty_results() {
+        let mut viewer = ResultsViewer::new();
+        // All navigation should be safe on empty state
+        viewer.move_up();
+        viewer.move_down();
+        viewer.move_left();
+        viewer.move_right();
+        viewer.page_up();
+        viewer.page_down();
+        viewer.go_to_top();
+        viewer.go_to_bottom();
+        viewer.go_to_home();
+        viewer.go_to_end();
+        assert_eq!(viewer.selected_row, 0);
+        assert_eq!(viewer.selected_col, 0);
+    }
+
+    #[test]
+    fn test_navigation_boundary_clamping() {
+        let mut viewer = ResultsViewer::new();
+        viewer.set_results(sample_results()); // 2 rows, 2 cols
+
+        // move_down stops at last row
+        viewer.move_down();
+        assert_eq!(viewer.selected_row, 1);
+        viewer.move_down();
+        assert_eq!(viewer.selected_row, 1); // stays at 1
+
+        // move_right stops at last column
+        viewer.move_right();
+        assert_eq!(viewer.selected_col, 1);
+        viewer.move_right();
+        assert_eq!(viewer.selected_col, 1); // stays at 1
+
+        // move_up stops at 0
+        viewer.selected_row = 0;
+        viewer.move_up();
+        assert_eq!(viewer.selected_row, 0);
+
+        // move_left stops at 0
+        viewer.selected_col = 0;
+        viewer.move_left();
+        assert_eq!(viewer.selected_col, 0);
+    }
+
+    #[test]
+    fn test_go_to_top_bottom() {
+        let mut viewer = ResultsViewer::new();
+        viewer.set_results(sample_results());
+        viewer.go_to_bottom();
+        assert_eq!(viewer.selected_row, 1); // last row (index 1 of 2)
+        viewer.go_to_top();
+        assert_eq!(viewer.selected_row, 0);
+    }
+
+    #[test]
+    fn test_go_to_home_end() {
+        let mut viewer = ResultsViewer::new();
+        viewer.set_results(sample_results());
+        viewer.go_to_end();
+        assert_eq!(viewer.selected_col, 1); // last col (index 1 of 2)
+        viewer.go_to_home();
+        assert_eq!(viewer.selected_col, 0);
+    }
 }

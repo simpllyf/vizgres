@@ -12,6 +12,7 @@ use crate::ui::command_bar::CommandBar;
 use crate::ui::editor::QueryEditor;
 use crate::ui::inspector::Inspector;
 use crate::ui::results::ResultsViewer;
+use crate::ui::theme::Theme;
 use crate::ui::tree::TreeBrowser;
 use crossterm::event::KeyEvent;
 
@@ -38,6 +39,9 @@ pub struct App {
 
     /// Data-driven keybinding configuration
     keymap: KeyMap,
+
+    /// UI theme (created once, reused every frame)
+    pub theme: Theme,
 
     /// Status message to display
     pub status_message: Option<StatusMessage>,
@@ -106,6 +110,7 @@ impl App {
             command_bar: CommandBar::new(),
             inspector: Inspector::new(),
             keymap: KeyMap::default(),
+            theme: Theme::default(),
             status_message: None,
             clipboard: arboard::Clipboard::new().ok(),
             running: true,
@@ -142,12 +147,19 @@ impl App {
 
         // Try KeyMap first — global bindings, then panel-specific
         if let Some(key_action) = self.keymap.resolve(self.focus, key) {
-            // Global actions that shouldn't fire from certain panels
+            // Suppress certain global actions in modal panels to avoid
+            // the key falling through to the component (e.g., Ctrl+P
+            // inserting 'p' in the command bar).
             match key_action {
-                KeyAction::OpenCommandBar if self.focus == PanelFocus::CommandBar => {}
+                KeyAction::OpenCommandBar if self.focus == PanelFocus::CommandBar => {
+                    return Action::None;
+                }
                 KeyAction::CycleFocus | KeyAction::CycleFocusReverse
                     if self.focus == PanelFocus::CommandBar
-                        || self.focus == PanelFocus::Inspector => {}
+                        || self.focus == PanelFocus::Inspector =>
+                {
+                    return Action::None;
+                }
                 _ => return self.execute_key_action(key_action),
             }
         }
@@ -271,8 +283,7 @@ impl App {
 
             // ── Results ──────────────────────────────────────
             KeyAction::OpenInspector => {
-                if let Some((value, col_name, data_type)) =
-                    self.results_viewer.selected_cell_info()
+                if let Some((value, col_name, data_type)) = self.results_viewer.selected_cell_info()
                 {
                     self.inspector.show(value, col_name, data_type);
                     self.previous_focus = self.focus;
@@ -354,10 +365,12 @@ impl App {
         }
     }
 
-    fn process_component_action(&mut self, _action: ComponentAction) -> Action {
+    fn process_component_action(&mut self, action: ComponentAction) -> Action {
         // Components only return Consumed/Ignored for text input.
         // All meaningful actions are handled by KeyMap → execute_key_action.
-        Action::None
+        match action {
+            ComponentAction::Consumed | ComponentAction::Ignored => Action::None,
+        }
     }
 
     fn execute_command(&mut self, command: Command) -> Action {
@@ -461,5 +474,61 @@ mod tests {
         app.set_status("test".to_string(), StatusLevel::Info);
         assert!(app.status_message.is_some());
         assert_eq!(app.status_message.as_ref().unwrap().message, "test");
+    }
+
+    #[test]
+    fn test_suppressed_global_keys_dont_fall_through() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+
+        // Ctrl+P in command bar should be suppressed (not insert 'p')
+        app.focus = PanelFocus::CommandBar;
+        app.command_bar.activate();
+        let ctrl_p = KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL);
+        app.handle_key(ctrl_p);
+        assert_eq!(app.command_bar.input_text(), "");
+
+        // Tab in inspector should be suppressed (not cycle focus)
+        app.focus = PanelFocus::Inspector;
+        let tab = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
+        app.handle_key(tab);
+        assert_eq!(app.focus, PanelFocus::Inspector);
+    }
+
+    #[test]
+    fn test_cycle_focus_reverse() {
+        let mut app = App::new();
+        assert_eq!(app.focus, PanelFocus::QueryEditor);
+        app.cycle_focus_reverse();
+        assert_eq!(app.focus, PanelFocus::TreeBrowser);
+        app.cycle_focus_reverse();
+        assert_eq!(app.focus, PanelFocus::ResultsViewer);
+        app.cycle_focus_reverse();
+        assert_eq!(app.focus, PanelFocus::QueryEditor);
+    }
+
+    #[test]
+    fn test_cycle_focus_noop_in_modal() {
+        let mut app = App::new();
+        app.focus = PanelFocus::Inspector;
+        app.cycle_focus();
+        assert_eq!(app.focus, PanelFocus::Inspector);
+
+        app.focus = PanelFocus::CommandBar;
+        app.cycle_focus();
+        assert_eq!(app.focus, PanelFocus::CommandBar);
+    }
+
+    #[test]
+    fn test_execute_query_ignores_empty() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+        // F5 with empty editor should return None
+        let f5 = KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE);
+        let action = app.handle_key(f5);
+        assert!(matches!(action, Action::None));
     }
 }

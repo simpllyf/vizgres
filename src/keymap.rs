@@ -84,10 +84,7 @@ impl KeyMap {
         if let Some(action) = self.global.get(&bind) {
             return Some(*action);
         }
-        self.panels
-            .get(&focus)
-            .and_then(|m| m.get(&bind))
-            .copied()
+        self.panels.get(&focus).and_then(|m| m.get(&bind)).copied()
     }
 }
 
@@ -318,7 +315,9 @@ fn insert_vim_nav(map: &mut HashMap<KeyBind, KeyAction>) {
     );
 }
 
-/// Insert vertical navigation bindings (arrows + jk + page + g/G)
+/// Insert vertical navigation bindings (arrows + jk + page + g/G).
+/// Home/End map to GoToTop/GoToBottom here (vertical-only contexts like inspector).
+/// `insert_vim_nav` overwrites these with Home/End for horizontal contexts.
 fn insert_scroll_nav(map: &mut HashMap<KeyBind, KeyAction>) {
     map.insert(
         KeyBind {
@@ -400,8 +399,14 @@ mod tests {
     fn test_global_quit() {
         let km = KeyMap::default();
         let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL);
-        assert_eq!(km.resolve(PanelFocus::QueryEditor, key), Some(KeyAction::Quit));
-        assert_eq!(km.resolve(PanelFocus::ResultsViewer, key), Some(KeyAction::Quit));
+        assert_eq!(
+            km.resolve(PanelFocus::QueryEditor, key),
+            Some(KeyAction::Quit)
+        );
+        assert_eq!(
+            km.resolve(PanelFocus::ResultsViewer, key),
+            Some(KeyAction::Quit)
+        );
     }
 
     #[test]
@@ -443,8 +448,14 @@ mod tests {
         let km = KeyMap::default();
         let j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
         let k = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
-        assert_eq!(km.resolve(PanelFocus::ResultsViewer, j), Some(KeyAction::MoveDown));
-        assert_eq!(km.resolve(PanelFocus::ResultsViewer, k), Some(KeyAction::MoveUp));
+        assert_eq!(
+            km.resolve(PanelFocus::ResultsViewer, j),
+            Some(KeyAction::MoveDown)
+        );
+        assert_eq!(
+            km.resolve(PanelFocus::ResultsViewer, k),
+            Some(KeyAction::MoveUp)
+        );
     }
 
     #[test]
@@ -460,7 +471,85 @@ mod tests {
         let km = KeyMap::default();
         let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
         let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
-        assert_eq!(km.resolve(PanelFocus::CommandBar, enter), Some(KeyAction::Submit));
-        assert_eq!(km.resolve(PanelFocus::CommandBar, esc), Some(KeyAction::Dismiss));
+        assert_eq!(
+            km.resolve(PanelFocus::CommandBar, enter),
+            Some(KeyAction::Submit)
+        );
+        assert_eq!(
+            km.resolve(PanelFocus::CommandBar, esc),
+            Some(KeyAction::Dismiss)
+        );
+    }
+
+    #[test]
+    fn test_tree_specific_bindings() {
+        let km = KeyMap::default();
+        let space = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
+        let h = KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE);
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(
+            km.resolve(PanelFocus::TreeBrowser, space),
+            Some(KeyAction::ToggleExpand)
+        );
+        assert_eq!(
+            km.resolve(PanelFocus::TreeBrowser, h),
+            Some(KeyAction::Collapse)
+        );
+        assert_eq!(
+            km.resolve(PanelFocus::TreeBrowser, enter),
+            Some(KeyAction::Expand)
+        );
+    }
+
+    #[test]
+    fn test_inspector_bindings() {
+        let km = KeyMap::default();
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        let y = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE);
+        let j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
+        assert_eq!(
+            km.resolve(PanelFocus::Inspector, esc),
+            Some(KeyAction::Dismiss)
+        );
+        assert_eq!(
+            km.resolve(PanelFocus::Inspector, y),
+            Some(KeyAction::CopyContent)
+        );
+        assert_eq!(
+            km.resolve(PanelFocus::Inspector, j),
+            Some(KeyAction::MoveDown)
+        );
+    }
+
+    #[test]
+    fn test_results_home_end_are_horizontal() {
+        let km = KeyMap::default();
+        let home = KeyEvent::new(KeyCode::Home, KeyModifiers::NONE);
+        let end = KeyEvent::new(KeyCode::End, KeyModifiers::NONE);
+        // In results viewer, Home/End navigate columns (horizontal)
+        assert_eq!(
+            km.resolve(PanelFocus::ResultsViewer, home),
+            Some(KeyAction::Home)
+        );
+        assert_eq!(
+            km.resolve(PanelFocus::ResultsViewer, end),
+            Some(KeyAction::End)
+        );
+    }
+
+    #[test]
+    fn test_inspector_home_end_are_vertical() {
+        let km = KeyMap::default();
+        let home = KeyEvent::new(KeyCode::Home, KeyModifiers::NONE);
+        let end = KeyEvent::new(KeyCode::End, KeyModifiers::NONE);
+        // In inspector, Home/End navigate vertically (scroll to top/bottom)
+        assert_eq!(
+            km.resolve(PanelFocus::Inspector, home),
+            Some(KeyAction::GoToTop)
+        );
+        assert_eq!(
+            km.resolve(PanelFocus::Inspector, end),
+            Some(KeyAction::GoToBottom)
+        );
     }
 }
