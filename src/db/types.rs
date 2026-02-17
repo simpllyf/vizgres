@@ -68,8 +68,7 @@ pub enum DataType {
     // UUID
     Uuid,
 
-    // Array type (reserved for future array support)
-    #[allow(dead_code)]
+    // Array type
     Array(Box<DataType>),
 
     // Other/unknown types
@@ -113,8 +112,7 @@ pub enum CellValue {
     /// UUID value
     Uuid(String),
 
-    /// Array value (reserved for future array support)
-    #[allow(dead_code)]
+    /// Array value
     Array(Vec<CellValue>),
 }
 
@@ -162,7 +160,10 @@ impl CellValue {
             CellValue::Binary(b) => format!("<binary {} bytes>", b.len()),
             CellValue::DateTime(s) => s.clone(),
             CellValue::Uuid(s) => s.clone(),
-            CellValue::Array(arr) => format!("[{} items]", arr.len()),
+            CellValue::Array(arr) => {
+                let items: Vec<String> = arr.iter().map(|v| v.display_string(max_len)).collect();
+                format!("{{{}}}", items.join(","))
+            }
         };
 
         if full.len() > max_len {
@@ -203,5 +204,24 @@ mod tests {
     fn test_cell_value_is_null() {
         assert!(CellValue::Null.is_null());
         assert!(!CellValue::Integer(42).is_null());
+    }
+
+    #[test]
+    fn test_array_display_string() {
+        let arr = CellValue::Array(vec![
+            CellValue::Text("a".to_string()),
+            CellValue::Text("b".to_string()),
+        ]);
+        assert_eq!(arr.display_string(100), "{a,b}");
+    }
+
+    #[test]
+    fn test_array_display_truncates() {
+        let arr = CellValue::Array(vec![
+            CellValue::Text("hello".to_string()),
+            CellValue::Text("world".to_string()),
+        ]);
+        let display = arr.display_string(10);
+        assert!(display.len() <= 13); // some overshoot from joining is ok
     }
 }
