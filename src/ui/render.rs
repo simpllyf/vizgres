@@ -78,7 +78,9 @@ fn render_panel(
     };
 
     let title_style = if focused {
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::DarkGray)
     };
@@ -98,8 +100,12 @@ fn render_inspector_popup(frame: &mut Frame, theme: &Theme, results_area: Rect, 
     let screen = frame.area();
 
     // Size the popup: 60% of screen width, 50% of screen height
-    let popup_w = (screen.width * 3 / 5).max(40).min(screen.width.saturating_sub(4));
-    let popup_h = (screen.height / 2).max(10).min(screen.height.saturating_sub(4));
+    let popup_w = (screen.width * 3 / 5)
+        .max(40)
+        .min(screen.width.saturating_sub(4));
+    let popup_h = (screen.height / 2)
+        .max(10)
+        .min(screen.height.saturating_sub(4));
     let popup_x = (screen.width.saturating_sub(popup_w)) / 2;
     let popup_y = (screen.height.saturating_sub(popup_h)) / 2;
     let popup_area = Rect::new(popup_x, popup_y, popup_w, popup_h);
@@ -136,11 +142,7 @@ fn render_inspector_popup(frame: &mut Frame, theme: &Theme, results_area: Rect, 
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         ))
-        .border_style(
-            theme
-                .border_focused
-                .fg(Color::Yellow),
-        );
+        .border_style(theme.border_focused.fg(Color::Yellow));
 
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);

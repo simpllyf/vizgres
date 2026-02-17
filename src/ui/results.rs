@@ -188,12 +188,13 @@ impl Component for ResultsViewer {
             let lines: Vec<Line> = vec![
                 Line::from(Span::styled(
                     "Query Error",
-                    Style::default()
-                        .fg(Color::Red)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                 )),
                 Line::from(""),
-                Line::from(Span::styled(error.as_str(), Style::default().fg(Color::Red))),
+                Line::from(Span::styled(
+                    error.as_str(),
+                    Style::default().fg(Color::Red),
+                )),
             ];
             let p = Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false });
             frame.render_widget(p, area);

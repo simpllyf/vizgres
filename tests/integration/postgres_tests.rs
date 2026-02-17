@@ -192,7 +192,11 @@ async fn test_query_numeric_types() {
     // NUMERIC is extracted via rust_decimal as a Text string
     match &row.values[1] {
         CellValue::Text(s) => {
-            assert!(s.parse::<f64>().is_ok(), "Amount should be a valid number string, got: {}", s);
+            assert!(
+                s.parse::<f64>().is_ok(),
+                "Amount should be a valid number string, got: {}",
+                s
+            );
         }
         other => panic!("Expected Text for NUMERIC amount, got {:?}", other),
     }
@@ -415,14 +419,22 @@ async fn test_query_aggregation_numeric() {
     let results = provider
         .execute_query("SELECT SUM(amount) as total FROM orders")
         .await;
-    assert!(results.is_ok(), "Aggregation query should succeed: {:?}", results.err());
+    assert!(
+        results.is_ok(),
+        "Aggregation query should succeed: {:?}",
+        results.err()
+    );
 
     let results = results.unwrap();
     assert_eq!(results.row_count, 1);
     // SUM of NUMERIC returns NUMERIC, extracted as Text via rust_decimal
     match &results.rows[0].values[0] {
         CellValue::Text(s) => {
-            assert!(s.parse::<f64>().is_ok(), "SUM should be a valid number, got: {}", s);
+            assert!(
+                s.parse::<f64>().is_ok(),
+                "SUM should be a valid number, got: {}",
+                s
+            );
         }
         other => panic!("Expected Text for SUM(numeric), got {:?}", other),
     }

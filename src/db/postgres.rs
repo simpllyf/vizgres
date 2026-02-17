@@ -389,16 +389,20 @@ fn extract_array_value(row: &tokio_postgres::Row, idx: usize, inner: &DataType) 
             }
         }
         DataType::SmallInt => match row.try_get::<_, Option<Vec<i16>>>(idx) {
-            Ok(Some(v)) => {
-                CellValue::Array(v.into_iter().map(|n| CellValue::Integer(n as i64)).collect())
-            }
+            Ok(Some(v)) => CellValue::Array(
+                v.into_iter()
+                    .map(|n| CellValue::Integer(n as i64))
+                    .collect(),
+            ),
             Ok(None) => CellValue::Null,
             Err(_) => try_as_string(row, idx),
         },
         DataType::Integer => match row.try_get::<_, Option<Vec<i32>>>(idx) {
-            Ok(Some(v)) => {
-                CellValue::Array(v.into_iter().map(|n| CellValue::Integer(n as i64)).collect())
-            }
+            Ok(Some(v)) => CellValue::Array(
+                v.into_iter()
+                    .map(|n| CellValue::Integer(n as i64))
+                    .collect(),
+            ),
             Ok(None) => CellValue::Null,
             Err(_) => try_as_string(row, idx),
         },
