@@ -113,7 +113,7 @@ impl Component for Inspector {
         }
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect, _focused: bool, _theme: &Theme) {
+    fn render(&self, frame: &mut Frame, area: Rect, _focused: bool, theme: &Theme) {
         let content = match &self.content {
             Some(c) => c,
             None => return,
@@ -125,11 +125,8 @@ impl Component for Inspector {
 
         // Header: column name and type
         let header = format!("{} ({})", self.column_name, self.data_type);
-        let header_style = Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD);
         frame.render_widget(
-            Paragraph::new(header).style(header_style),
+            Paragraph::new(header).style(theme.inspector_header),
             Rect::new(area.x, area.y, area.width, 1),
         );
 
@@ -146,9 +143,8 @@ impl Component for Inspector {
                 let line = lines[line_idx];
                 let width = content_area.width as usize;
                 let display: String = line.chars().take(width).collect();
-                let style = Style::default().fg(Color::White);
                 frame.render_widget(
-                    Paragraph::new(display).style(style),
+                    Paragraph::new(display).style(theme.inspector_text),
                     Rect::new(content_area.x, y, content_area.width, 1),
                 );
             }

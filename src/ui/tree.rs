@@ -213,14 +213,14 @@ impl Component for TreeBrowser {
         }
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect, focused: bool, _theme: &Theme) {
+    fn render(&self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
         if self.items.is_empty() {
             let msg = if self.schema.is_some() {
                 "No schemas found"
             } else {
                 "Not connected"
             };
-            let p = Paragraph::new(msg).style(Style::default().fg(Color::DarkGray));
+            let p = Paragraph::new(msg).style(theme.tree_empty);
             frame.render_widget(p, area);
             return;
         }
@@ -268,17 +268,12 @@ impl Component for TreeBrowser {
             };
 
             let style = if is_selected {
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
+                theme.tree_selected
             } else {
                 match item.kind {
-                    NodeKind::Schema => Style::default()
-                        .fg(Color::Blue)
-                        .add_modifier(Modifier::BOLD),
-                    NodeKind::Table => Style::default().fg(Color::Green),
-                    NodeKind::Column => Style::default().fg(Color::Gray),
+                    NodeKind::Schema => theme.tree_schema,
+                    NodeKind::Table => theme.tree_table,
+                    NodeKind::Column => theme.tree_column,
                 }
             };
 

@@ -90,15 +90,14 @@ impl Component for CommandBar {
         }
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect, _focused: bool, _theme: &Theme) {
+    fn render(&self, frame: &mut Frame, area: Rect, _focused: bool, theme: &Theme) {
         if !self.active {
             return;
         }
 
         let prompt = "/";
         let display = format!("{}{}", prompt, self.input);
-        let style = Style::default().fg(Color::White);
-        let paragraph = Paragraph::new(display).style(style);
+        let paragraph = Paragraph::new(display).style(theme.command_text);
         frame.render_widget(paragraph, area);
 
         // Show cursor

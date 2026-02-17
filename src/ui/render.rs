@@ -78,11 +78,9 @@ fn render_panel(
     };
 
     let title_style = if focused {
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD)
+        theme.panel_title_focused
     } else {
-        Style::default().fg(Color::DarkGray)
+        theme.panel_title_unfocused
     };
 
     let block = Block::default()
@@ -127,7 +125,7 @@ fn render_inspector_popup(frame: &mut Frame, theme: &Theme, app: &App) {
         popup_w.min(screen.width.saturating_sub(popup_x + 1)),
         popup_h.min(screen.height.saturating_sub(popup_y + 1)),
     );
-    let shadow_style = Style::default().bg(Color::DarkGray).fg(Color::DarkGray);
+    let shadow_style = theme.shadow;
     for y in shadow_area.y..shadow_area.y + shadow_area.height {
         for x in shadow_area.x..shadow_area.x + shadow_area.width {
             if x < screen.width && y < screen.height {
@@ -145,11 +143,9 @@ fn render_inspector_popup(frame: &mut Frame, theme: &Theme, app: &App) {
         .borders(Borders::ALL)
         .title(Span::styled(
             " Inspector \u{2014} Esc to close, y to copy ",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
+            theme.popup_title,
         ))
-        .border_style(theme.border_focused.fg(Color::Yellow));
+        .border_style(theme.popup_border);
 
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
@@ -176,7 +172,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     let right_x = area.x + area.width.saturating_sub(right_len);
 
     frame.render_widget(
-        Paragraph::new(conn_info).style(Style::default().fg(Color::DarkGray)),
+        Paragraph::new(conn_info).style(theme.status_conn_info),
         Rect::new(right_x, area.y, right_len.min(area.width), 1),
     );
 
@@ -208,7 +204,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     } else {
         frame.render_widget(
             Paragraph::new("Ctrl+P=commands | F5=run | Ctrl+Q=quit")
-                .style(Style::default().fg(Color::DarkGray)),
+                .style(theme.status_help_hint),
             Rect::new(area.x, area.y, max_left_width, 1),
         );
     }

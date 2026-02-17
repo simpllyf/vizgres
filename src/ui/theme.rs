@@ -31,8 +31,11 @@ pub struct Theme {
 
     // Query editor
     pub editor_text: Style,
+    #[allow(dead_code)] // reserved for syntax highlighting
     pub editor_keyword: Style,
+    #[allow(dead_code)] // reserved for syntax highlighting
     pub editor_string: Style,
+    #[allow(dead_code)] // reserved for syntax highlighting
     pub editor_cursor: Style,
     pub editor_line_number: Style,
     pub editor_tilde: Style,
@@ -54,9 +57,12 @@ pub struct Theme {
     pub inspector_text: Style,
 
     // Command bar
+    #[allow(dead_code)] // reserved for styled prompt prefix
     pub command_prompt: Style,
+    #[allow(dead_code)] // reserved for input vs autocomplete split
     pub command_input: Style,
     pub command_text: Style,
+    #[allow(dead_code)] // reserved for autocomplete suggestions
     pub command_autocomplete: Style,
 
     // Status bar

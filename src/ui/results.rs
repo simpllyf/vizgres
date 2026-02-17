@@ -183,19 +183,13 @@ impl Component for ResultsViewer {
         }
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect, focused: bool, _theme: &Theme) {
+    fn render(&self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
         // Show error if present
         if let Some(ref error) = self.error {
             let lines: Vec<Line> = vec![
-                Line::from(Span::styled(
-                    "Query Error",
-                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-                )),
+                Line::from(Span::styled("Query Error", theme.results_error_title)),
                 Line::from(""),
-                Line::from(Span::styled(
-                    error.as_str(),
-                    Style::default().fg(Color::Red),
-                )),
+                Line::from(Span::styled(error.as_str(), theme.results_error_text)),
             ];
             let p = Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false });
             frame.render_widget(p, area);
@@ -210,7 +204,7 @@ impl Component for ResultsViewer {
                 } else {
                     "No results yet. Write a query and press F5 to execute."
                 };
-                let p = Paragraph::new(msg).style(Style::default().fg(Color::DarkGray));
+                let p = Paragraph::new(msg).style(theme.results_empty);
                 frame.render_widget(p, area);
                 return;
             }
@@ -248,13 +242,9 @@ impl Component for ResultsViewer {
                 .unwrap_or(10)
                 .min(area.x + area.width - x);
             let style = if focused && col_idx == viewer.selected_col {
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+                theme.results_header_selected
             } else {
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
+                theme.results_header
             };
             let name = truncate_str(&col_def.name, w as usize);
             let padded = format!("{:<width$}", name, width = w as usize);
@@ -280,9 +270,9 @@ impl Component for ResultsViewer {
             let row = &results.rows[row_idx];
             let is_selected_row = row_idx == viewer.selected_row;
             let row_base_style = if vis_row % 2 == 0 {
-                Style::default().fg(Color::White)
+                theme.results_row_even
             } else {
-                Style::default().fg(Color::Gray)
+                theme.results_row_odd
             };
 
             let mut x = area.x;
@@ -297,11 +287,9 @@ impl Component for ResultsViewer {
                     .min(area.x + area.width - x);
 
                 let style = if focused && is_selected_row && col_idx == viewer.selected_col {
-                    Style::default().fg(Color::Black).bg(Color::Yellow)
+                    theme.results_selected
                 } else if cell.is_null() {
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::ITALIC)
+                    theme.results_null
                 } else {
                     row_base_style
                 };
@@ -323,7 +311,7 @@ impl Component for ResultsViewer {
             results.columns.len(),
             results.execution_time.as_secs_f64() * 1000.0,
         );
-        let footer_style = Style::default().fg(Color::DarkGray);
+        let footer_style = theme.results_footer;
         frame.render_widget(
             Paragraph::new(footer).style(footer_style),
             Rect::new(area.x, footer_y, area.width, 1),
