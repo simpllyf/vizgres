@@ -46,10 +46,42 @@ exits with a clear error — the TUI never opens in a disconnected state.
 Each UI panel implements:
 ```rust
 pub trait Component {
-    fn handle_key(&mut self, key: KeyEvent) -> bool;
-    fn render(&self, frame: &mut Frame, area: Rect, focused: bool);
+    fn handle_key(&mut self, key: KeyEvent) -> ComponentAction;
+    fn render(&self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme);
 }
 ```
+
+Components only handle free-form text input (editor, command bar). All
+navigation and action keybindings are resolved by `KeyMap` before reaching
+the component. `ComponentAction::Consumed`/`Ignored` signals whether the
+component consumed the event.
+
+### Theme
+
+All colors are defined in `src/ui/theme.rs`. Components receive `&Theme`
+in their `render()` method and use `theme.field_name` instead of hardcoded
+`Color::` literals. To change the palette, edit only `theme.rs`.
+
+### KeyMap (Data-Driven Keybindings)
+
+All keybindings are defined as data in `src/keymap.rs`:
+
+```rust
+// In KeyMap::default()
+editor.insert(
+    KeyBind { code: KeyCode::F(5), modifiers: KeyModifiers::NONE },
+    KeyAction::ExecuteQuery,
+);
+```
+
+**To add a new keybinding:**
+1. Add a variant to `KeyAction` if the action is new
+2. Add the binding entry in `KeyMap::default()` under the appropriate panel
+3. Handle the `KeyAction` variant in `App::execute_key_action()`
+
+**Resolution order:** `KeyMap::resolve()` checks global bindings first, then
+panel-specific bindings. Unresolved keys fall through to `Component::handle_key()`
+for text input.
 
 ### UI Rendering Patterns
 
