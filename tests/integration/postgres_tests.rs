@@ -189,10 +189,16 @@ async fn test_query_numeric_types() {
         CellValue::Integer(_) => {}
         other => panic!("Expected Integer for id, got {:?}", other),
     }
-    // NUMERIC can be Float or Text depending on precision
+    // NUMERIC is extracted via rust_decimal as a Text string
     match &row.values[1] {
-        CellValue::Float(_) | CellValue::Text(_) => {}
-        other => panic!("Expected Float or Text for amount, got {:?}", other),
+        CellValue::Text(s) => {
+            assert!(
+                s.parse::<f64>().is_ok(),
+                "Amount should be a valid number string, got: {}",
+                s
+            );
+        }
+        other => panic!("Expected Text for NUMERIC amount, got {:?}", other),
     }
 }
 
@@ -367,4 +373,69 @@ async fn test_multiple_schemas() {
         table_names.contains(&"settings"),
         "test_schema should have settings table"
     );
+}
+
+#[tokio::test]
+async fn test_query_array_types() {
+    let config = test_config();
+    let provider = match PostgresProvider::connect(&config).await {
+        Ok(p) => p,
+        Err(_) => {
+            eprintln!("Skipping test: Database not available");
+            return;
+        }
+    };
+
+    let results = provider
+        .execute_query("SELECT name, tags FROM products WHERE tags IS NOT NULL ORDER BY id LIMIT 1")
+        .await;
+    assert!(results.is_ok(), "Query should succeed: {:?}", results.err());
+
+    let results = results.unwrap();
+    let row = &results.rows[0];
+    match &row.values[1] {
+        CellValue::Array(items) => {
+            assert!(!items.is_empty(), "Tags array should not be empty");
+            match &items[0] {
+                CellValue::Text(_) => {}
+                other => panic!("Expected Text elements in array, got {:?}", other),
+            }
+        }
+        other => panic!("Expected Array for tags, got {:?}", other),
+    }
+}
+
+#[tokio::test]
+async fn test_query_aggregation_numeric() {
+    let config = test_config();
+    let provider = match PostgresProvider::connect(&config).await {
+        Ok(p) => p,
+        Err(_) => {
+            eprintln!("Skipping test: Database not available");
+            return;
+        }
+    };
+
+    let results = provider
+        .execute_query("SELECT SUM(amount) as total FROM orders")
+        .await;
+    assert!(
+        results.is_ok(),
+        "Aggregation query should succeed: {:?}",
+        results.err()
+    );
+
+    let results = results.unwrap();
+    assert_eq!(results.row_count, 1);
+    // SUM of NUMERIC returns NUMERIC, extracted as Text via rust_decimal
+    match &results.rows[0].values[0] {
+        CellValue::Text(s) => {
+            assert!(
+                s.parse::<f64>().is_ok(),
+                "SUM should be a valid number, got: {}",
+                s
+            );
+        }
+        other => panic!("Expected Text for SUM(numeric), got {:?}", other),
+    }
 }

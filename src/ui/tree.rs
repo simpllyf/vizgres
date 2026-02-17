@@ -66,6 +66,7 @@ impl TreeBrowser {
         self.rebuild_items();
     }
 
+    #[allow(dead_code)]
     pub fn clear(&mut self) {
         self.schema = None;
         self.items.clear();
@@ -195,7 +196,7 @@ impl Component for TreeBrowser {
                 }
                 true
             }
-            KeyCode::Enter | KeyCode::Char('l') => {
+            KeyCode::Enter => {
                 self.expand_current();
                 true
             }

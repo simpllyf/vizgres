@@ -17,6 +17,8 @@ pub struct ResultsViewer {
     h_scroll_offset: usize,
     /// Computed column widths
     col_widths: Vec<u16>,
+    /// Last query error (shown in results area)
+    error: Option<String>,
 }
 
 impl ResultsViewer {
@@ -28,16 +30,24 @@ impl ResultsViewer {
             scroll_offset: 0,
             h_scroll_offset: 0,
             col_widths: Vec::new(),
+            error: None,
         }
     }
 
     pub fn set_results(&mut self, results: QueryResults) {
         self.col_widths = compute_column_widths(&results);
         self.results = Some(results);
+        self.error = None;
         self.selected_row = 0;
         self.selected_col = 0;
         self.scroll_offset = 0;
         self.h_scroll_offset = 0;
+    }
+
+    /// Set an error to display in the results area
+    pub fn set_error(&mut self, error: String) {
+        self.error = Some(error);
+        self.results = None;
     }
 
     /// Clear results (reserved for future use)
@@ -173,13 +183,31 @@ impl Component for ResultsViewer {
     }
 
     fn render(&self, frame: &mut Frame, area: Rect, focused: bool) {
+        // Show error if present
+        if let Some(ref error) = self.error {
+            let lines: Vec<Line> = vec![
+                Line::from(Span::styled(
+                    "Query Error",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    error.as_str(),
+                    Style::default().fg(Color::Red),
+                )),
+            ];
+            let p = Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false });
+            frame.render_widget(p, area);
+            return;
+        }
+
         let results = match &self.results {
             Some(r) if !r.columns.is_empty() => r,
             _ => {
                 let msg = if self.results.is_some() {
                     "Query returned no columns"
                 } else {
-                    "No results. Execute a query with Ctrl+Enter."
+                    "No results yet. Write a query and press F5 to execute."
                 };
                 let p = Paragraph::new(msg).style(Style::default().fg(Color::DarkGray));
                 frame.render_widget(p, area);
@@ -401,5 +429,27 @@ mod tests {
         let mut viewer = ResultsViewer::new();
         viewer.set_results(sample_results());
         assert_eq!(viewer.selected_row_text(), Some("1\tAlice".to_string()));
+    }
+
+    #[test]
+    fn test_set_error_clears_results() {
+        let mut viewer = ResultsViewer::new();
+        viewer.set_results(sample_results());
+        assert!(viewer.results.is_some());
+
+        viewer.set_error("relation \"foo\" does not exist".to_string());
+        assert!(viewer.results.is_none());
+        assert!(viewer.error.is_some());
+    }
+
+    #[test]
+    fn test_set_results_clears_error() {
+        let mut viewer = ResultsViewer::new();
+        viewer.set_error("some error".to_string());
+        assert!(viewer.error.is_some());
+
+        viewer.set_results(sample_results());
+        assert!(viewer.error.is_none());
+        assert!(viewer.results.is_some());
     }
 }

@@ -3,7 +3,6 @@
 //! Central state machine: events come in, state updates, actions go out.
 
 use crate::commands::{Command, parse_command};
-use crate::config::ConnectionConfig;
 use crate::db::{PostgresProvider, QueryResults};
 use crate::error::Result;
 use crate::ui::Component;
@@ -13,7 +12,6 @@ use crate::ui::inspector::Inspector;
 use crate::ui::results::ResultsViewer;
 use crate::ui::tree::TreeBrowser;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use std::time::Duration;
 
 /// Main application state
 pub struct App {
@@ -39,6 +37,9 @@ pub struct App {
     /// Status message to display
     pub status_message: Option<StatusMessage>,
 
+    /// Persistent clipboard handle (kept alive to avoid Linux clipboard drop race)
+    clipboard: Option<arboard::Clipboard>,
+
     /// Whether the application is running
     pub running: bool,
 }
@@ -57,7 +58,6 @@ pub enum PanelFocus {
 pub struct StatusMessage {
     pub message: String,
     pub level: StatusLevel,
-    pub timestamp: std::time::Instant,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,8 +83,6 @@ pub enum AppEvent {
 /// Actions returned by event handlers for the main loop to execute
 pub enum Action {
     ExecuteQuery(String),
-    Connect(ConnectionConfig),
-    Disconnect,
     LoadSchema,
     Quit,
     None,
@@ -103,6 +101,7 @@ impl App {
             command_bar: CommandBar::new(),
             inspector: Inspector::new(),
             status_message: None,
+            clipboard: arboard::Clipboard::new().ok(),
             running: true,
         }
     }
@@ -124,16 +123,30 @@ impl App {
                 Ok(Action::None)
             }
             AppEvent::QueryFailed(err) => {
-                self.set_status(format!("Query failed: {}", err), StatusLevel::Error);
+                self.results_viewer.set_error(err.clone());
+                self.set_status("Query failed".to_string(), StatusLevel::Error);
+                self.focus = PanelFocus::ResultsViewer;
                 Ok(Action::None)
             }
         }
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Action {
+        // Clear toast on any user action
+        self.status_message = None;
+
         // Global keybindings (always active)
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('q') {
             return Action::Quit;
+        }
+
+        // Ctrl+P opens command bar from anywhere (except when already in it)
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && key.code == KeyCode::Char('p')
+            && self.focus != PanelFocus::CommandBar
+        {
+            self.open_command_bar();
+            return Action::None;
         }
 
         // Tab cycles focus (except when in command bar or inspector)
@@ -164,10 +177,10 @@ impl App {
     }
 
     fn handle_editor_key(&mut self, key: KeyEvent) -> Action {
-        // Ctrl+Enter = execute query
-        if key.modifiers.contains(KeyModifiers::CONTROL)
-            && (key.code == KeyCode::Enter || key.code == KeyCode::Char('j'))
-        {
+        // Execute query: Ctrl+Enter or F5
+        let is_execute = key.code == KeyCode::F(5)
+            || (key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Enter);
+        if is_execute {
             let sql = self.editor.get_content();
             if !sql.trim().is_empty() {
                 self.set_status("Executing query...".to_string(), StatusLevel::Info);
@@ -176,13 +189,9 @@ impl App {
             return Action::None;
         }
 
-        // `:` when at start of empty editor opens command bar
-        // But we don't intercept `:` in the editor - it's a valid SQL character
-        // Instead, only intercept `:` when editor has no content
-        if key.code == KeyCode::Char(':') && self.editor.is_empty() {
-            self.previous_focus = self.focus;
-            self.focus = PanelFocus::CommandBar;
-            self.command_bar.activate();
+        // Ctrl+L = clear editor
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('l') {
+            self.editor.clear();
             return Action::None;
         }
 
@@ -191,14 +200,6 @@ impl App {
     }
 
     fn handle_results_key(&mut self, key: KeyEvent) -> Action {
-        // `:` opens command bar
-        if key.code == KeyCode::Char(':') {
-            self.previous_focus = self.focus;
-            self.focus = PanelFocus::CommandBar;
-            self.command_bar.activate();
-            return Action::None;
-        }
-
         // Enter opens inspector
         if key.code == KeyCode::Enter {
             if let Some((value, col_name, data_type)) = self.results_viewer.selected_cell_info() {
@@ -228,14 +229,6 @@ impl App {
     }
 
     fn handle_tree_key(&mut self, key: KeyEvent) -> Action {
-        // `:` opens command bar
-        if key.code == KeyCode::Char(':') {
-            self.previous_focus = self.focus;
-            self.focus = PanelFocus::CommandBar;
-            self.command_bar.activate();
-            return Action::None;
-        }
-
         self.tree_browser.handle_key(key);
         Action::None
     }
@@ -293,55 +286,17 @@ impl App {
 
     fn execute_command(&mut self, command: Command) -> Action {
         match command {
-            Command::Connect(target) => {
-                // Try as URL first, then as profile name
-                let config =
-                    if target.starts_with("postgres://") || target.starts_with("postgresql://") {
-                        match ConnectionConfig::from_url(&target) {
-                            Ok(c) => c,
-                            Err(e) => {
-                                self.set_status(format!("Invalid URL: {}", e), StatusLevel::Error);
-                                return Action::None;
-                            }
-                        }
-                    } else {
-                        match crate::config::find_connection(&target) {
-                            Ok(c) => c,
-                            Err(e) => {
-                                self.set_status(
-                                    format!("Profile not found: {}", e),
-                                    StatusLevel::Error,
-                                );
-                                return Action::None;
-                            }
-                        }
-                    };
-                self.set_status(
-                    format!("Connecting to {}...", config.name),
-                    StatusLevel::Info,
-                );
-                Action::Connect(config)
-            }
-            Command::Disconnect => {
-                self.connection = None;
-                self.connection_name = None;
-                self.tree_browser.clear();
-                self.set_status("Disconnected".to_string(), StatusLevel::Info);
-                Action::Disconnect
-            }
             Command::Refresh => {
-                if self.connection.is_some() {
-                    self.set_status("Refreshing schema...".to_string(), StatusLevel::Info);
-                    Action::LoadSchema
-                } else {
-                    self.set_status("Not connected".to_string(), StatusLevel::Warning);
-                    Action::None
-                }
+                self.set_status("Refreshing schema...".to_string(), StatusLevel::Info);
+                Action::LoadSchema
+            }
+            Command::Clear => {
+                self.editor.clear();
+                Action::None
             }
             Command::Help => {
                 self.set_status(
-                    "Tab=cycle panels | Ctrl+Q=quit | :connect <url> | :q=quit | Ctrl+Enter=execute"
-                        .to_string(),
+                    "Tab=cycle | Ctrl+Q=quit | F5=run | Ctrl+P=commands | /help".to_string(),
                     StatusLevel::Info,
                 );
                 Action::None
@@ -368,31 +323,26 @@ impl App {
         };
     }
 
-    pub fn set_status(&mut self, message: String, level: StatusLevel) {
-        self.status_message = Some(StatusMessage {
-            message,
-            level,
-            timestamp: std::time::Instant::now(),
-        });
+    fn open_command_bar(&mut self) {
+        self.previous_focus = self.focus;
+        self.focus = PanelFocus::CommandBar;
+        self.command_bar.activate();
     }
 
-    pub fn should_clear_status(&self) -> bool {
-        if let Some(msg) = &self.status_message {
-            msg.timestamp.elapsed() > Duration::from_secs(10)
-        } else {
-            false
-        }
+    pub fn set_status(&mut self, message: String, level: StatusLevel) {
+        self.status_message = Some(StatusMessage { message, level });
     }
 
     fn copy_to_clipboard(&mut self, text: &str) {
-        match arboard::Clipboard::new() {
-            Ok(mut clipboard) => match clipboard.set_text(text) {
+        if let Some(clipboard) = self.clipboard.as_mut() {
+            match clipboard.set_text(text) {
                 Ok(()) => self.set_status("Copied to clipboard".to_string(), StatusLevel::Success),
-                Err(e) => self.set_status(format!("Clipboard error: {}", e), StatusLevel::Warning),
-            },
-            Err(_) => {
-                self.set_status("Clipboard unavailable".to_string(), StatusLevel::Warning);
+                Err(e) => {
+                    self.set_status(format!("Clipboard error: {}", e), StatusLevel::Warning);
+                }
             }
+        } else {
+            self.set_status("Clipboard unavailable".to_string(), StatusLevel::Warning);
         }
     }
 }
@@ -428,8 +378,12 @@ mod tests {
     }
 
     #[test]
-    fn test_status_message_timeout() {
-        let app = App::new();
-        assert!(!app.should_clear_status());
+    fn test_status_cleared_on_set() {
+        let mut app = App::new();
+        assert!(app.status_message.is_none());
+
+        app.set_status("test".to_string(), StatusLevel::Info);
+        assert!(app.status_message.is_some());
+        assert_eq!(app.status_message.as_ref().unwrap().message, "test");
     }
 }

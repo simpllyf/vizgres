@@ -3,7 +3,7 @@
 ## Rust Edition and MSRV
 
 - **Edition**: 2024
-- **MSRV**: 1.85
+- **MSRV**: 1.93
 - **Target**: Latest stable
 
 ## Code Style
@@ -35,6 +35,12 @@ cargo clippy --all-targets --all-features -- -D warnings
 
 Events → `App::handle_event()` → `Action` → Main loop executes → UI renders from state.
 
+### Connection Lifecycle
+
+Connection is established **before** the TUI starts. The app validates
+the URL, connects, and loads the schema. If anything fails, the process
+exits with a clear error — the TUI never opens in a disconnected state.
+
 ### Component Trait
 
 Each UI panel implements:
@@ -44,6 +50,21 @@ pub trait Component {
     fn render(&self, frame: &mut Frame, area: Rect, focused: bool);
 }
 ```
+
+### UI Rendering Patterns
+
+- **Panels** use `render_panel()` in `render.rs` for consistent focus styling
+- **Overlays** (like Inspector) are floating popups rendered last with `Clear` + shadow
+- **Status bar** is partitioned: left = ephemeral toast, right = connection info
+- **Errors** from queries display in the results panel, not the status bar
+- Focus is shown via border color (cyan), title arrow prefix (▸), and bold title
+
+### Clipboard
+
+On Linux, the `arboard::Clipboard` object must be kept alive (stored in `App`)
+to avoid the "dropped too quickly" race condition. Keyboard copy (`y`/`Y`) is
+the primary copy mechanism — mouse selection in TUI includes terminal padding
+(this is a fundamental terminal grid limitation, not a bug).
 
 ### Error Handling
 
@@ -92,6 +113,36 @@ Before committing:
 1. `cargo fmt`
 2. `cargo clippy --all-targets -- -D warnings`
 3. `cargo test`
+
+## Keybindings
+
+### Global
+- `Ctrl+Q` — Quit
+- `Ctrl+P` — Open command bar (works from any panel)
+- `Tab` / `Shift+Tab` — Cycle panel focus
+
+### Query Editor
+- `F5` / `Ctrl+Enter` — Execute query
+- `Ctrl+L` — Clear editor
+- `Delete` — Forward delete
+
+### Results Viewer
+- `h/j/k/l` or arrow keys — Navigate cells
+- `Enter` — Open inspector popup
+- `y` — Copy cell to clipboard
+- `Y` — Copy row to clipboard
+- `g` / `G` — Jump to first/last row
+
+### Inspector (popup)
+- `Esc` — Close
+- `y` — Copy content
+- `j/k` or arrows — Scroll
+
+### Command Bar
+- `/refresh` / `/r` — Reload schema
+- `/clear` / `/cl` — Clear query editor
+- `/help` / `/h` — Show help
+- `/quit` / `/q` — Quit
 
 ## Security
 

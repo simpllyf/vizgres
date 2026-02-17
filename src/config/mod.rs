@@ -4,4 +4,4 @@
 
 pub mod connections;
 
-pub use connections::{ConnectionConfig, find_connection};
+pub use connections::ConnectionConfig;

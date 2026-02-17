@@ -16,12 +16,6 @@ pub struct AppLayout {
     pub command_bar: Rect,
 }
 
-/// Layout for split results + inspector
-pub struct ResultsSplit {
-    pub results: Rect,
-    pub inspector: Rect,
-}
-
 /// Calculate panel layout for the main screen
 pub fn calculate_layout(area: Rect) -> AppLayout {
     if area.height < 4 || area.width < 20 {
@@ -66,24 +60,6 @@ pub fn calculate_layout(area: Rect) -> AppLayout {
     }
 }
 
-/// Split the results area into results + inspector (60/40 horizontal split)
-pub fn split_results_for_inspector(area: Rect) -> ResultsSplit {
-    if area.width < 20 {
-        return ResultsSplit {
-            results: area,
-            inspector: Rect::new(area.x + area.width, area.y, 0, 0),
-        };
-    }
-
-    let results_width = area.width * 3 / 5;
-    let inspector_width = area.width - results_width;
-
-    ResultsSplit {
-        results: Rect::new(area.x, area.y, results_width, area.height),
-        inspector: Rect::new(area.x + results_width, area.y, inspector_width, area.height),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,12 +76,13 @@ mod tests {
     }
 
     #[test]
-    fn test_split_results_for_inspector() {
-        let area = Rect::new(20, 25, 80, 25);
-        let split = split_results_for_inspector(area);
+    fn test_layout_reserves_command_bar() {
+        let area = Rect::new(0, 0, 80, 40);
+        let layout = calculate_layout(area);
 
-        assert!(split.results.width > 0);
-        assert!(split.inspector.width > 0);
-        assert_eq!(split.results.width + split.inspector.width, area.width);
+        // Command bar should be at the very bottom
+        assert_eq!(layout.command_bar.y, area.height - 1);
+        assert_eq!(layout.command_bar.height, 1);
+        assert_eq!(layout.command_bar.width, area.width);
     }
 }

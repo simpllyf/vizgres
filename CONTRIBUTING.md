@@ -10,7 +10,7 @@ Please be respectful and constructive in all interactions. We welcome contributo
 
 ### Prerequisites
 
-- Rust 1.85 or later (check `rust-toolchain.toml`)
+- Rust 1.93 or later (check `rust-toolchain.toml`)
 - Docker and Docker Compose (for integration tests)
 - Git
 

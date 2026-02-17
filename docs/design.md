@@ -27,8 +27,8 @@ The MVP provides: connect to a database, browse schema, write and execute querie
 ### Data Flow
 
 1. Terminal events → `App::handle_event()` → returns `Action`
-2. Main loop executes `Action` (spawn DB tasks, quit, etc.)
-3. DB task results sent back via `tokio::sync::mpsc` channel
+2. Main loop executes `Action` (run query, load schema, quit, etc.)
+3. Query results handled inline via `App::handle_event(AppEvent::QueryCompleted)`
 4. `App` state updated → `render(&app, &mut frame)` draws UI
 
 ### Key Design Decisions
@@ -36,7 +36,7 @@ The MVP provides: connect to a database, browse schema, write and execute querie
 - **No trait abstraction for DB**: `PostgresProvider` used directly. Postgres-only for now.
 - **Component trait**: Each UI panel implements `handle_key` + `render`.
 - **Manual table rendering**: Results viewer renders cells manually (not ratatui Table widget) to support cell-level selection highlight.
-- **Inspector as split panel**: Not an overlay. Right-side 40% split of results area when open.
+- **Inspector as floating popup**: Centered overlay with shadow, variable-sized to fit content.
 
 ## Module Map
 
@@ -52,10 +52,10 @@ The MVP provides: connect to a database, browse schema, write and execute querie
 | `ui/tree.rs` | Schema tree browser |
 | `ui/editor.rs` | Multi-line SQL editor |
 | `ui/results.rs` | Results table with cell navigation |
-| `ui/inspector.rs` | Cell value inspector (split panel) |
+| `ui/inspector.rs` | Cell value inspector (floating popup) |
 | `ui/command_bar.rs` | Command input bar |
 | `ui/theme.rs` | Colors and styles |
-| `commands/parser.rs` | `:command` parsing |
+| `commands/parser.rs` | `/command` parsing |
 | `config/connections.rs` | Connection profiles + URL parsing |
 
 ## Type Mapping (PostgreSQL → Vizgres)
@@ -69,25 +69,30 @@ The MVP provides: connect to a database, browse schema, write and execute querie
 | JSON/JSONB | Json/Jsonb | Json(serde_json::Value) |
 | TIMESTAMP/TIMESTAMPTZ | Timestamp/TimestampTz | DateTime(String) |
 | UUID | Uuid | Uuid(String) |
+| NUMERIC/DECIMAL | Numeric | Text(String) via rust_decimal |
+| Arrays (INT[], TEXT[], etc.) | Array(Box\<DataType\>) | Array(Vec\<CellValue\>) |
 | Fallback | Unknown | Text(to_string) |
 
 ## Keyboard Reference
 
 | Key | Context | Action |
 |-----|---------|--------|
-| Tab | Global | Cycle focus: Tree → Editor → Results |
+| Tab / Shift+Tab | Global | Cycle focus: Tree → Editor → Results |
 | Ctrl+Q | Global | Quit |
-| `:` | Global (not editor) | Open command bar |
+| Ctrl+P | Global | Open command bar |
+| F5 / Ctrl+Enter | Editor | Execute query |
+| Ctrl+L | Editor | Clear editor |
+| Delete | Editor | Forward delete |
 | j/k | Tree, Results | Move down/up |
-| h/l | Tree | Collapse/expand |
+| h | Tree | Collapse / go to parent |
+| Enter | Tree | Expand node |
 | h/l | Results | Move left/right column |
-| Enter | Tree | Toggle expand/collapse |
 | Enter | Results | Open inspector |
 | Escape | Inspector, Command | Close, return focus |
-| Ctrl+Enter | Editor | Execute query |
 | y | Results | Copy cell |
 | Y | Results | Copy row |
 | y | Inspector | Copy content |
+| g/G | Results, Inspector | Jump to top/bottom |
 | Arrows | Editor | Cursor movement |
 | Home/End | Editor | Start/end of line |
 
@@ -95,7 +100,7 @@ The MVP provides: connect to a database, browse schema, write and execute querie
 
 - No syntax highlighting in the editor
 - No SQL autocomplete
-- No connection profile file management (URL-only via CLI arg or `:connect`)
+- No connection profile file management (URL-only via CLI arg or interactive prompt)
 - No query history
 - No multiple result tabs
 - No resizable panels

@@ -44,6 +44,7 @@ pub enum SslMode {
     Require,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 struct ConnectionsFile {
     #[serde(default)]
@@ -137,12 +138,14 @@ impl ConnectionConfig {
     }
 
     /// Get the config directory path (~/.vizgres/)
+    #[allow(dead_code)]
     pub fn config_dir() -> ConfigResult<PathBuf> {
         let home = dirs::home_dir().ok_or(ConfigError::NoHomeDir)?;
         Ok(home.join(".vizgres"))
     }
 
     /// Get the connections file path
+    #[allow(dead_code)]
     pub fn connections_file() -> ConfigResult<PathBuf> {
         Ok(Self::config_dir()?.join("connections.toml"))
     }
@@ -163,6 +166,7 @@ fn parse_sslmode_param(query: &str) -> SslMode {
 }
 
 /// Load all connection profiles from config file
+#[allow(dead_code)]
 pub fn load_connections() -> ConfigResult<Vec<ConnectionConfig>> {
     let path = ConnectionConfig::connections_file()?;
     if !path.exists() {
@@ -175,6 +179,7 @@ pub fn load_connections() -> ConfigResult<Vec<ConnectionConfig>> {
 }
 
 /// Find a connection by name
+#[allow(dead_code)]
 pub fn find_connection(name: &str) -> ConfigResult<ConnectionConfig> {
     let connections = load_connections()?;
     connections

@@ -7,6 +7,7 @@ use crate::config::connections::SslMode;
 use crate::db::schema::{Column, Schema, SchemaTree, Table};
 use crate::db::types::{CellValue, ColumnDef, DataType, QueryResults, Row};
 use crate::error::DbResult;
+use rust_decimal::Decimal;
 use tokio_postgres::Client;
 use tokio_postgres::types::Type;
 
@@ -220,6 +221,20 @@ fn pg_type_to_datatype(pg_type: &Type) -> DataType {
         Type::JSONB => DataType::Jsonb,
         Type::BYTEA => DataType::Bytea,
         Type::UUID => DataType::Uuid,
+        // Array types
+        Type::BOOL_ARRAY => DataType::Array(Box::new(DataType::Boolean)),
+        Type::INT2_ARRAY => DataType::Array(Box::new(DataType::SmallInt)),
+        Type::INT4_ARRAY => DataType::Array(Box::new(DataType::Integer)),
+        Type::INT8_ARRAY => DataType::Array(Box::new(DataType::BigInt)),
+        Type::FLOAT4_ARRAY => DataType::Array(Box::new(DataType::Real)),
+        Type::FLOAT8_ARRAY => DataType::Array(Box::new(DataType::Double)),
+        Type::TEXT_ARRAY | Type::VARCHAR_ARRAY | Type::NAME_ARRAY => {
+            DataType::Array(Box::new(DataType::Text))
+        }
+        Type::UUID_ARRAY => DataType::Array(Box::new(DataType::Uuid)),
+        Type::JSONB_ARRAY => DataType::Array(Box::new(DataType::Jsonb)),
+        Type::JSON_ARRAY => DataType::Array(Box::new(DataType::Json)),
+        Type::NUMERIC_ARRAY => DataType::Array(Box::new(DataType::Numeric)),
         _ => DataType::Unknown(pg_type.name().to_string()),
     }
 }
@@ -246,6 +261,7 @@ fn datatype_from_info_schema(type_name: &str) -> DataType {
         "jsonb" => DataType::Jsonb,
         "bytea" => DataType::Bytea,
         "uuid" => DataType::Uuid,
+        "ARRAY" => DataType::Array(Box::new(DataType::Unknown("array".to_string()))),
         other => DataType::Unknown(other.to_string()),
     }
 }
@@ -297,13 +313,15 @@ fn extract_cell_value(row: &tokio_postgres::Row, idx: usize, data_type: &DataTyp
             Ok(None) => CellValue::Null,
             Err(_) => try_as_string(row, idx),
         },
-        DataType::Double | DataType::Numeric => match row.try_get::<_, Option<f64>>(idx) {
+        DataType::Double => match row.try_get::<_, Option<f64>>(idx) {
             Ok(Some(v)) => CellValue::Float(v),
             Ok(None) => CellValue::Null,
-            Err(_) => {
-                // Numeric might not map to f64 directly, try as string
-                try_as_string(row, idx)
-            }
+            Err(_) => try_as_string(row, idx),
+        },
+        DataType::Numeric => match row.try_get::<_, Option<Decimal>>(idx) {
+            Ok(Some(v)) => CellValue::Text(v.to_string()),
+            Ok(None) => CellValue::Null,
+            Err(_) => try_as_string(row, idx),
         },
         DataType::Boolean => match row.try_get::<_, Option<bool>>(idx) {
             Ok(Some(v)) => CellValue::Boolean(v),
@@ -322,11 +340,12 @@ fn extract_cell_value(row: &tokio_postgres::Row, idx: usize, data_type: &DataTyp
             Ok(None) => CellValue::Null,
             Err(_) => try_as_string(row, idx),
         },
-        DataType::Uuid => match row.try_get::<_, Option<String>>(idx) {
-            Ok(Some(v)) => CellValue::Uuid(v),
+        DataType::Uuid => match row.try_get::<_, Option<uuid::Uuid>>(idx) {
+            Ok(Some(v)) => CellValue::Uuid(v.to_string()),
             Ok(None) => CellValue::Null,
             Err(_) => try_as_string(row, idx),
         },
+        DataType::Array(inner) => extract_array_value(row, idx, inner),
         DataType::Timestamp
         | DataType::TimestampTz
         | DataType::Date
@@ -352,6 +371,88 @@ fn extract_cell_value(row: &tokio_postgres::Row, idx: usize, data_type: &DataTyp
             }
         },
         // Text types and fallback for unknown types
+        _ => try_as_string(row, idx),
+    }
+}
+
+/// Extract an array value from a tokio_postgres Row.
+///
+/// Tries typed extraction based on inner element type, falling back to
+/// Vec<String> for types without a direct Rust mapping.
+fn extract_array_value(row: &tokio_postgres::Row, idx: usize, inner: &DataType) -> CellValue {
+    match inner {
+        DataType::Text | DataType::Varchar(_) | DataType::Char(_) => {
+            match row.try_get::<_, Option<Vec<String>>>(idx) {
+                Ok(Some(v)) => CellValue::Array(v.into_iter().map(CellValue::Text).collect()),
+                Ok(None) => CellValue::Null,
+                Err(_) => try_as_string(row, idx),
+            }
+        }
+        DataType::SmallInt => match row.try_get::<_, Option<Vec<i16>>>(idx) {
+            Ok(Some(v)) => CellValue::Array(
+                v.into_iter()
+                    .map(|n| CellValue::Integer(n as i64))
+                    .collect(),
+            ),
+            Ok(None) => CellValue::Null,
+            Err(_) => try_as_string(row, idx),
+        },
+        DataType::Integer => match row.try_get::<_, Option<Vec<i32>>>(idx) {
+            Ok(Some(v)) => CellValue::Array(
+                v.into_iter()
+                    .map(|n| CellValue::Integer(n as i64))
+                    .collect(),
+            ),
+            Ok(None) => CellValue::Null,
+            Err(_) => try_as_string(row, idx),
+        },
+        DataType::BigInt => match row.try_get::<_, Option<Vec<i64>>>(idx) {
+            Ok(Some(v)) => CellValue::Array(v.into_iter().map(CellValue::Integer).collect()),
+            Ok(None) => CellValue::Null,
+            Err(_) => try_as_string(row, idx),
+        },
+        DataType::Real => match row.try_get::<_, Option<Vec<f32>>>(idx) {
+            Ok(Some(v)) => {
+                CellValue::Array(v.into_iter().map(|n| CellValue::Float(n as f64)).collect())
+            }
+            Ok(None) => CellValue::Null,
+            Err(_) => try_as_string(row, idx),
+        },
+        DataType::Double => match row.try_get::<_, Option<Vec<f64>>>(idx) {
+            Ok(Some(v)) => CellValue::Array(v.into_iter().map(CellValue::Float).collect()),
+            Ok(None) => CellValue::Null,
+            Err(_) => try_as_string(row, idx),
+        },
+        DataType::Boolean => match row.try_get::<_, Option<Vec<bool>>>(idx) {
+            Ok(Some(v)) => CellValue::Array(v.into_iter().map(CellValue::Boolean).collect()),
+            Ok(None) => CellValue::Null,
+            Err(_) => try_as_string(row, idx),
+        },
+        DataType::Uuid => match row.try_get::<_, Option<Vec<uuid::Uuid>>>(idx) {
+            Ok(Some(v)) => CellValue::Array(
+                v.into_iter()
+                    .map(|u| CellValue::Uuid(u.to_string()))
+                    .collect(),
+            ),
+            Ok(None) => CellValue::Null,
+            Err(_) => try_as_string(row, idx),
+        },
+        DataType::Json | DataType::Jsonb => {
+            match row.try_get::<_, Option<Vec<serde_json::Value>>>(idx) {
+                Ok(Some(v)) => CellValue::Array(v.into_iter().map(CellValue::Json).collect()),
+                Ok(None) => CellValue::Null,
+                Err(_) => try_as_string(row, idx),
+            }
+        }
+        DataType::Numeric => match row.try_get::<_, Option<Vec<Decimal>>>(idx) {
+            Ok(Some(v)) => CellValue::Array(
+                v.into_iter()
+                    .map(|d| CellValue::Text(d.to_string()))
+                    .collect(),
+            ),
+            Ok(None) => CellValue::Null,
+            Err(_) => try_as_string(row, idx),
+        },
         _ => try_as_string(row, idx),
     }
 }

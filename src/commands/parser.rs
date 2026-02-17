@@ -1,20 +1,18 @@
 //! Command parsing
 //!
 //! Parses user input from the command bar into structured Command enums.
+//! Commands use `/` prefix (e.g., `/help`, `/quit`).
 
 use crate::error::{CommandError, CommandResult};
 
 /// Commands that can be executed from the command bar
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
-    /// Connect to a saved connection profile or URL
-    Connect(String),
-
-    /// Disconnect from current database
-    Disconnect,
-
     /// Refresh database schema
     Refresh,
+
+    /// Clear the query editor
+    Clear,
 
     /// Show help
     Help,
@@ -26,7 +24,11 @@ pub enum Command {
 /// Parse a command string into a Command enum
 pub fn parse_command(input: &str) -> CommandResult<Command> {
     let input = input.trim();
-    let input = input.strip_prefix(':').unwrap_or(input);
+    // Strip optional / or : prefix (accept both during transition)
+    let input = input
+        .strip_prefix('/')
+        .or_else(|| input.strip_prefix(':'))
+        .unwrap_or(input);
     let parts: Vec<&str> = input.split_whitespace().collect();
 
     if parts.is_empty() {
@@ -34,15 +36,8 @@ pub fn parse_command(input: &str) -> CommandResult<Command> {
     }
 
     match parts[0] {
-        "connect" | "c" => {
-            let name = parts
-                .get(1)
-                .ok_or(CommandError::MissingArgument)?
-                .to_string();
-            Ok(Command::Connect(name))
-        }
-        "disconnect" | "dc" => Ok(Command::Disconnect),
         "refresh" | "r" => Ok(Command::Refresh),
+        "clear" | "cl" => Ok(Command::Clear),
         "help" | "h" | "?" => Ok(Command::Help),
         "quit" | "q" | "exit" => Ok(Command::Quit),
         unknown => Err(CommandError::Unknown(unknown.to_string())),
@@ -54,45 +49,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_connect_command() {
-        let cmd = parse_command(":connect prod").unwrap();
-        assert_eq!(cmd, Command::Connect("prod".to_string()));
+    fn test_parse_refresh() {
+        assert_eq!(parse_command("/refresh").unwrap(), Command::Refresh);
+        assert_eq!(parse_command("/r").unwrap(), Command::Refresh);
     }
 
     #[test]
-    fn test_parse_connect_short() {
-        let cmd = parse_command(":c mydb").unwrap();
-        assert_eq!(cmd, Command::Connect("mydb".to_string()));
-    }
-
-    #[test]
-    fn test_parse_disconnect() {
-        let cmd = parse_command(":disconnect").unwrap();
-        assert_eq!(cmd, Command::Disconnect);
+    fn test_parse_clear() {
+        assert_eq!(parse_command("/clear").unwrap(), Command::Clear);
+        assert_eq!(parse_command("/cl").unwrap(), Command::Clear);
     }
 
     #[test]
     fn test_parse_quit_variants() {
-        assert_eq!(parse_command(":quit").unwrap(), Command::Quit);
-        assert_eq!(parse_command(":q").unwrap(), Command::Quit);
-        assert_eq!(parse_command(":exit").unwrap(), Command::Quit);
+        assert_eq!(parse_command("/quit").unwrap(), Command::Quit);
+        assert_eq!(parse_command("/q").unwrap(), Command::Quit);
+        assert_eq!(parse_command("/exit").unwrap(), Command::Quit);
     }
 
     #[test]
-    fn test_parse_missing_argument() {
-        let result = parse_command(":connect");
-        assert!(matches!(result, Err(CommandError::MissingArgument)));
+    fn test_parse_help() {
+        assert_eq!(parse_command("/help").unwrap(), Command::Help);
+        assert_eq!(parse_command("/h").unwrap(), Command::Help);
+        assert_eq!(parse_command("/?").unwrap(), Command::Help);
     }
 
     #[test]
     fn test_parse_unknown_command() {
-        let result = parse_command(":foobar");
+        let result = parse_command("/foobar");
         assert!(matches!(result, Err(CommandError::Unknown(_))));
     }
 
     #[test]
-    fn test_parse_without_colon() {
-        let cmd = parse_command("quit").unwrap();
-        assert_eq!(cmd, Command::Quit);
+    fn test_parse_without_prefix() {
+        assert_eq!(parse_command("quit").unwrap(), Command::Quit);
+    }
+
+    #[test]
+    fn test_parse_colon_prefix_still_works() {
+        assert_eq!(parse_command(":quit").unwrap(), Command::Quit);
+        assert_eq!(parse_command(":help").unwrap(), Command::Help);
     }
 }
