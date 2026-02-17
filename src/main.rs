@@ -81,7 +81,9 @@ async fn main() -> Result<()> {
 
 /// Prompt the user for a connection URL on stdin (before TUI starts)
 fn prompt_for_url() -> Result<String> {
+    use std::io::Write;
     eprint!("PostgreSQL URL: ");
+    std::io::stderr().flush()?;
     let mut url = String::new();
     std::io::stdin().read_line(&mut url)?;
     let url = url.trim().to_string();
@@ -159,6 +161,11 @@ async fn run_app(
                             app.handle_event(AppEvent::QueryFailed(e.to_string()))?;
                         }
                     }
+                } else {
+                    app.set_status(
+                        "Not connected to a database".to_string(),
+                        app::StatusLevel::Error,
+                    );
                 }
             }
             Action::LoadSchema => {

@@ -143,11 +143,8 @@ impl Component for Inspector {
 
             if line_idx < lines.len() {
                 let line = lines[line_idx];
-                let display = if line.len() > content_area.width as usize {
-                    &line[..content_area.width as usize]
-                } else {
-                    line
-                };
+                let width = content_area.width as usize;
+                let display: String = line.chars().take(width).collect();
                 let style = Style::default().fg(Color::White);
                 frame.render_widget(
                     Paragraph::new(display).style(style),
