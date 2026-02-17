@@ -55,7 +55,7 @@ pub trait Component {
 
 - **Panels** use `render_panel()` in `render.rs` for consistent focus styling
 - **Overlays** (like Inspector) are floating popups rendered last with `Clear` + shadow
-- **Status bar** is partitioned: left = persistent info, right = ephemeral toast
+- **Status bar** is partitioned: left = ephemeral toast, right = connection info
 - **Errors** from queries display in the results panel, not the status bar
 - Focus is shown via border color (cyan), title arrow prefix (▸), and bold title
 

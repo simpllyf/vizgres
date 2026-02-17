@@ -8,7 +8,7 @@ A fast, keyboard-driven PostgreSQL client for the terminal.
 - **Query Editor**: Multi-line SQL editing with line numbers
 - **Results Viewer**: Scrollable table with cell-level navigation
 - **Inspector**: Full cell content viewer with JSON pretty-printing
-- **Command Bar**: `:connect`, `:disconnect`, `:refresh`, `:quit`
+- **Command Bar**: `/refresh`, `/clear`, `/help`, `/quit` (via `Ctrl+P`)
 - **Clipboard**: Copy cells (`y`) and rows (`Y`) to clipboard
 
 ## Install
@@ -17,7 +17,7 @@ A fast, keyboard-driven PostgreSQL client for the terminal.
 cargo install --path .
 ```
 
-Requires Rust 1.85+ (2024 edition).
+Requires Rust 1.93+ (2024 edition).
 
 ## Usage
 
@@ -25,7 +25,7 @@ Requires Rust 1.85+ (2024 edition).
 # Connect via URL
 vizgres postgres://user:pass@localhost:5432/mydb
 
-# Start without connection (use :connect later)
+# Interactive prompt for URL
 vizgres
 ```
 
@@ -35,13 +35,15 @@ vizgres
 |-----|---------|--------|
 | Tab / Shift+Tab | Global | Cycle focus between panels |
 | Ctrl+Q | Global | Quit |
-| `:` | Tree, Results | Open command bar |
+| Ctrl+P | Global | Open command bar |
+| F5 / Ctrl+Enter | Editor | Execute query |
+| Ctrl+L | Editor | Clear editor |
 | j/k | Tree, Results | Move down/up |
-| h/l | Tree | Collapse/expand |
+| h | Tree | Collapse / go to parent |
+| Enter | Tree | Expand node |
 | h/l | Results | Move left/right column |
 | Enter | Results | Open inspector for selected cell |
 | Escape | Inspector, Command bar | Close, return to previous panel |
-| Ctrl+Enter | Editor | Execute query |
 | y | Results, Inspector | Copy cell to clipboard |
 | Y | Results | Copy row to clipboard |
 | g/G | Results, Inspector | Jump to top/bottom |
@@ -49,13 +51,14 @@ vizgres
 
 ## Commands
 
+Open the command bar with `Ctrl+P`, then type a command:
+
 | Command | Short | Action |
 |---------|-------|--------|
-| `:connect <url>` | `:c` | Connect to database |
-| `:disconnect` | `:dc` | Disconnect |
-| `:refresh` | `:r` | Reload schema |
-| `:help` | `:h` | Show help |
-| `:quit` | `:q` | Quit |
+| `/refresh` | `/r` | Reload schema |
+| `/clear` | `/cl` | Clear query editor |
+| `/help` | `/h` | Show help |
+| `/quit` | `/q` | Quit |
 
 ## Architecture
 
