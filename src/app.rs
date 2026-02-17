@@ -164,10 +164,11 @@ impl App {
     }
 
     fn handle_editor_key(&mut self, key: KeyEvent) -> Action {
-        // Ctrl+Enter = execute query
-        if key.modifiers.contains(KeyModifiers::CONTROL)
-            && (key.code == KeyCode::Enter || key.code == KeyCode::Char('j'))
-        {
+        // Execute query: Ctrl+Enter, Ctrl+J, or F5
+        let is_execute = key.code == KeyCode::F(5)
+            || (key.modifiers.contains(KeyModifiers::CONTROL)
+                && (key.code == KeyCode::Enter || key.code == KeyCode::Char('j')));
+        if is_execute {
             let sql = self.editor.get_content();
             if !sql.trim().is_empty() {
                 self.set_status("Executing query...".to_string(), StatusLevel::Info);
@@ -340,7 +341,7 @@ impl App {
             }
             Command::Help => {
                 self.set_status(
-                    "Tab=cycle panels | Ctrl+Q=quit | :connect <url> | :q=quit | Ctrl+Enter=execute"
+                    "Tab=cycle | Ctrl+Q=quit | F5/Ctrl+J=execute | :q=quit | :help"
                         .to_string(),
                     StatusLevel::Info,
                 );
