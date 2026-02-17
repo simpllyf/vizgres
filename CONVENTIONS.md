@@ -118,8 +118,9 @@ Before committing:
 
 ### Global
 - `Ctrl+Q` — Quit
+- `Ctrl+P` — Open command bar (works from any panel)
 - `Tab` / `Shift+Tab` — Cycle panel focus
-- `:` — Open command bar (from tree/results, or empty editor)
+- `/` — Open command bar (from tree/results, or empty editor)
 
 ### Query Editor
 - `F5` / `Ctrl+J` / `Ctrl+Enter` — Execute query
@@ -139,10 +140,10 @@ Before committing:
 - `j/k` or arrows — Scroll
 
 ### Command Bar
-- `:refresh` / `:r` — Reload schema
-- `:clear` / `:cl` — Clear query editor
-- `:help` / `:h` — Show help
-- `:quit` / `:q` — Quit
+- `/refresh` / `/r` — Reload schema
+- `/clear` / `/cl` — Clear query editor
+- `/help` / `/h` — Show help
+- `/quit` / `/q` — Quit
 
 ## Security
 

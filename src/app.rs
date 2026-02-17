@@ -140,6 +140,15 @@ impl App {
             return Action::Quit;
         }
 
+        // Ctrl+P opens command bar from anywhere (except when already in it)
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && key.code == KeyCode::Char('p')
+            && self.focus != PanelFocus::CommandBar
+        {
+            self.open_command_bar();
+            return Action::None;
+        }
+
         // Tab cycles focus (except when in command bar or inspector)
         if key.code == KeyCode::Tab
             && self.focus != PanelFocus::CommandBar
@@ -187,11 +196,9 @@ impl App {
             return Action::None;
         }
 
-        // `:` when editor is empty opens command bar
-        if key.code == KeyCode::Char(':') && self.editor.is_empty() {
-            self.previous_focus = self.focus;
-            self.focus = PanelFocus::CommandBar;
-            self.command_bar.activate();
+        // `/` when editor is empty opens command bar
+        if key.code == KeyCode::Char('/') && self.editor.is_empty() {
+            self.open_command_bar();
             return Action::None;
         }
 
@@ -200,11 +207,9 @@ impl App {
     }
 
     fn handle_results_key(&mut self, key: KeyEvent) -> Action {
-        // `:` opens command bar
-        if key.code == KeyCode::Char(':') {
-            self.previous_focus = self.focus;
-            self.focus = PanelFocus::CommandBar;
-            self.command_bar.activate();
+        // `/` opens command bar
+        if key.code == KeyCode::Char('/') {
+            self.open_command_bar();
             return Action::None;
         }
 
@@ -237,11 +242,9 @@ impl App {
     }
 
     fn handle_tree_key(&mut self, key: KeyEvent) -> Action {
-        // `:` opens command bar
-        if key.code == KeyCode::Char(':') {
-            self.previous_focus = self.focus;
-            self.focus = PanelFocus::CommandBar;
-            self.command_bar.activate();
+        // `/` opens command bar
+        if key.code == KeyCode::Char('/') {
+            self.open_command_bar();
             return Action::None;
         }
 
@@ -312,8 +315,7 @@ impl App {
             }
             Command::Help => {
                 self.set_status(
-                    "Tab=cycle | Ctrl+Q=quit | F5/Ctrl+J=run | :clear | :refresh | :q=quit"
-                        .to_string(),
+                    "Tab=cycle | Ctrl+Q=quit | F5=run | Ctrl+P=commands | /help".to_string(),
                     StatusLevel::Info,
                 );
                 Action::None
@@ -338,6 +340,12 @@ impl App {
             PanelFocus::ResultsViewer => PanelFocus::QueryEditor,
             other => other,
         };
+    }
+
+    fn open_command_bar(&mut self) {
+        self.previous_focus = self.focus;
+        self.focus = PanelFocus::CommandBar;
+        self.command_bar.activate();
     }
 
     pub fn set_status(&mut self, message: String, level: StatusLevel) {

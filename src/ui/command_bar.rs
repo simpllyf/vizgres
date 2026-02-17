@@ -1,6 +1,6 @@
 //! Command bar widget
 //!
-//! Input bar for entering commands (starting with :)
+//! Input bar for entering commands (starting with /)
 
 use crate::ui::Component;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -94,7 +94,7 @@ impl Component for CommandBar {
             return;
         }
 
-        let prompt = ":";
+        let prompt = "/";
         let display = format!("{}{}", prompt, self.input);
         let style = Style::default().fg(Color::White);
         let paragraph = Paragraph::new(display).style(style);
