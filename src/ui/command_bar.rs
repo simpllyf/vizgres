@@ -3,6 +3,7 @@
 //! Input bar for entering commands (starting with /)
 
 use crate::ui::Component;
+use crate::ui::ComponentAction;
 use crate::ui::theme::Theme;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
@@ -39,10 +40,6 @@ impl CommandBar {
     pub fn is_active(&self) -> bool {
         self.active
     }
-
-    pub fn input(&self) -> &str {
-        &self.input
-    }
 }
 
 impl Default for CommandBar {
@@ -52,41 +49,46 @@ impl Default for CommandBar {
 }
 
 impl Component for CommandBar {
-    fn handle_key(&mut self, key: KeyEvent) -> bool {
+    fn handle_key(&mut self, key: KeyEvent) -> ComponentAction {
         match key.code {
+            KeyCode::Enter => {
+                let input = self.input.clone();
+                ComponentAction::ExecuteCommand(input)
+            }
+            KeyCode::Esc => ComponentAction::DismissCommandBar,
             KeyCode::Char(c) => {
                 self.input.insert(self.cursor, c);
                 self.cursor += 1;
-                true
+                ComponentAction::Consumed
             }
             KeyCode::Backspace => {
                 if self.cursor > 0 {
                     self.input.remove(self.cursor - 1);
                     self.cursor -= 1;
                 }
-                true
+                ComponentAction::Consumed
             }
             KeyCode::Left => {
                 if self.cursor > 0 {
                     self.cursor -= 1;
                 }
-                true
+                ComponentAction::Consumed
             }
             KeyCode::Right => {
                 if self.cursor < self.input.len() {
                     self.cursor += 1;
                 }
-                true
+                ComponentAction::Consumed
             }
             KeyCode::Home => {
                 self.cursor = 0;
-                true
+                ComponentAction::Consumed
             }
             KeyCode::End => {
                 self.cursor = self.input.len();
-                true
+                ComponentAction::Consumed
             }
-            _ => false,
+            _ => ComponentAction::Ignored,
         }
     }
 
@@ -116,7 +118,7 @@ mod tests {
     fn test_command_bar_new() {
         let bar = CommandBar::new();
         assert!(!bar.is_active());
-        assert_eq!(bar.input(), "");
+        assert!(bar.input.is_empty());
     }
 
     #[test]

@@ -4,6 +4,7 @@
 
 use crate::db::schema::SchemaTree;
 use crate::ui::Component;
+use crate::ui::ComponentAction;
 use crate::ui::theme::Theme;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
@@ -179,9 +180,9 @@ impl Default for TreeBrowser {
 }
 
 impl Component for TreeBrowser {
-    fn handle_key(&mut self, key: KeyEvent) -> bool {
+    fn handle_key(&mut self, key: KeyEvent) -> ComponentAction {
         if self.items.is_empty() {
-            return false;
+            return ComponentAction::Ignored;
         }
 
         match key.code {
@@ -189,27 +190,27 @@ impl Component for TreeBrowser {
                 if self.selected < self.items.len() - 1 {
                     self.selected += 1;
                 }
-                true
+                ComponentAction::Consumed
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 if self.selected > 0 {
                     self.selected -= 1;
                 }
-                true
+                ComponentAction::Consumed
             }
             KeyCode::Enter => {
                 self.expand_current();
-                true
+                ComponentAction::Consumed
             }
             KeyCode::Char('h') => {
                 self.collapse_current();
-                true
+                ComponentAction::Consumed
             }
             KeyCode::Char(' ') => {
                 self.toggle_expand();
-                true
+                ComponentAction::Consumed
             }
-            _ => false,
+            _ => ComponentAction::Ignored,
         }
     }
 

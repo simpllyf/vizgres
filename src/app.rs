@@ -6,6 +6,7 @@ use crate::commands::{Command, parse_command};
 use crate::db::{PostgresProvider, QueryResults};
 use crate::error::Result;
 use crate::ui::Component;
+use crate::ui::ComponentAction;
 use crate::ui::command_bar::CommandBar;
 use crate::ui::editor::QueryEditor;
 use crate::ui::inspector::Inspector;
@@ -195,48 +196,48 @@ impl App {
             return Action::None;
         }
 
-        self.editor.handle_key(key);
-        Action::None
+        let action = self.editor.handle_key(key);
+        self.process_component_action(action)
     }
 
     fn handle_results_key(&mut self, key: KeyEvent) -> Action {
-        // Enter opens inspector
-        if key.code == KeyCode::Enter {
-            if let Some((value, col_name, data_type)) = self.results_viewer.selected_cell_info() {
-                self.inspector.show(value, col_name, data_type);
-                self.previous_focus = self.focus;
-                self.focus = PanelFocus::Inspector;
-            }
-            return Action::None;
-        }
-
-        // y = copy cell, Y = copy row
-        if key.code == KeyCode::Char('y') && !key.modifiers.contains(KeyModifiers::SHIFT) {
-            if let Some(text) = self.results_viewer.selected_cell_text() {
-                self.copy_to_clipboard(&text);
-            }
-            return Action::None;
-        }
-        if key.code == KeyCode::Char('Y') {
-            if let Some(text) = self.results_viewer.selected_row_text() {
-                self.copy_to_clipboard(&text);
-            }
-            return Action::None;
-        }
-
-        self.results_viewer.handle_key(key);
-        Action::None
+        let action = self.results_viewer.handle_key(key);
+        self.process_component_action(action)
     }
 
     fn handle_tree_key(&mut self, key: KeyEvent) -> Action {
-        self.tree_browser.handle_key(key);
-        Action::None
+        let action = self.tree_browser.handle_key(key);
+        self.process_component_action(action)
     }
 
     fn handle_command_bar_key(&mut self, key: KeyEvent) -> Action {
-        match key.code {
-            KeyCode::Enter => {
-                let input = self.command_bar.input().to_string();
+        let action = self.command_bar.handle_key(key);
+        self.process_component_action(action)
+    }
+
+    fn handle_inspector_key(&mut self, key: KeyEvent) -> Action {
+        let action = self.inspector.handle_key(key);
+        self.process_component_action(action)
+    }
+
+    fn process_component_action(&mut self, action: ComponentAction) -> Action {
+        match action {
+            ComponentAction::OpenInspector(val, col, dtype) => {
+                self.inspector.show(val, col, dtype);
+                self.previous_focus = self.focus;
+                self.focus = PanelFocus::Inspector;
+                Action::None
+            }
+            ComponentAction::CloseInspector => {
+                self.inspector.hide();
+                self.focus = self.previous_focus;
+                Action::None
+            }
+            ComponentAction::CopyToClipboard(text) => {
+                self.copy_to_clipboard(&text);
+                Action::None
+            }
+            ComponentAction::ExecuteCommand(input) => {
                 self.command_bar.deactivate();
                 self.focus = self.previous_focus;
 
@@ -252,35 +253,12 @@ impl App {
                     }
                 }
             }
-            KeyCode::Esc => {
+            ComponentAction::DismissCommandBar => {
                 self.command_bar.deactivate();
                 self.focus = self.previous_focus;
                 Action::None
             }
-            _ => {
-                self.command_bar.handle_key(key);
-                Action::None
-            }
-        }
-    }
-
-    fn handle_inspector_key(&mut self, key: KeyEvent) -> Action {
-        match key.code {
-            KeyCode::Esc => {
-                self.inspector.hide();
-                self.focus = self.previous_focus;
-                Action::None
-            }
-            KeyCode::Char('y') => {
-                if let Some(text) = self.inspector.content_text() {
-                    self.copy_to_clipboard(&text);
-                }
-                Action::None
-            }
-            _ => {
-                self.inspector.handle_key(key);
-                Action::None
-            }
+            ComponentAction::Consumed | ComponentAction::Ignored => Action::None,
         }
     }
 

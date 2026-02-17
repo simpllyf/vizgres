@@ -4,6 +4,7 @@
 //! JSON values are pretty-printed. Scrollable for large content.
 
 use crate::ui::Component;
+use crate::ui::ComponentAction;
 use crate::ui::theme::Theme;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
@@ -78,38 +79,46 @@ impl Default for Inspector {
 }
 
 impl Component for Inspector {
-    fn handle_key(&mut self, key: KeyEvent) -> bool {
+    fn handle_key(&mut self, key: KeyEvent) -> ComponentAction {
         match key.code {
+            KeyCode::Esc => ComponentAction::CloseInspector,
+            KeyCode::Char('y') => {
+                if let Some(text) = self.content_text() {
+                    ComponentAction::CopyToClipboard(text)
+                } else {
+                    ComponentAction::Consumed
+                }
+            }
             KeyCode::Down | KeyCode::Char('j') => {
                 if self.scroll_offset + 1 < self.total_lines {
                     self.scroll_offset += 1;
                 }
-                true
+                ComponentAction::Consumed
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 if self.scroll_offset > 0 {
                     self.scroll_offset -= 1;
                 }
-                true
+                ComponentAction::Consumed
             }
             KeyCode::PageDown => {
                 self.scroll_offset =
                     (self.scroll_offset + 20).min(self.total_lines.saturating_sub(1));
-                true
+                ComponentAction::Consumed
             }
             KeyCode::PageUp => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(20);
-                true
+                ComponentAction::Consumed
             }
             KeyCode::Home | KeyCode::Char('g') => {
                 self.scroll_offset = 0;
-                true
+                ComponentAction::Consumed
             }
             KeyCode::End | KeyCode::Char('G') => {
                 self.scroll_offset = self.total_lines.saturating_sub(1);
-                true
+                ComponentAction::Consumed
             }
-            _ => false,
+            _ => ComponentAction::Ignored,
         }
     }
 

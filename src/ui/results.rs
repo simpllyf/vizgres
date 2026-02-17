@@ -4,8 +4,9 @@
 
 use crate::db::types::{CellValue, QueryResults};
 use crate::ui::Component;
+use crate::ui::ComponentAction;
 use crate::ui::theme::Theme;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
@@ -123,63 +124,84 @@ impl Default for ResultsViewer {
 }
 
 impl Component for ResultsViewer {
-    fn handle_key(&mut self, key: KeyEvent) -> bool {
+    fn handle_key(&mut self, key: KeyEvent) -> ComponentAction {
         let row_count = self.row_count();
         let col_count = self.col_count();
         if row_count == 0 {
-            return false;
+            return ComponentAction::Ignored;
         }
 
         match key.code {
+            KeyCode::Enter => {
+                if let Some((value, col_name, data_type)) = self.selected_cell_info() {
+                    ComponentAction::OpenInspector(value, col_name, data_type)
+                } else {
+                    ComponentAction::Consumed
+                }
+            }
+            KeyCode::Char('y') if !key.modifiers.contains(KeyModifiers::SHIFT) => {
+                if let Some(text) = self.selected_cell_text() {
+                    ComponentAction::CopyToClipboard(text)
+                } else {
+                    ComponentAction::Consumed
+                }
+            }
+            KeyCode::Char('Y') => {
+                if let Some(text) = self.selected_row_text() {
+                    ComponentAction::CopyToClipboard(text)
+                } else {
+                    ComponentAction::Consumed
+                }
+            }
             KeyCode::Down | KeyCode::Char('j') => {
                 if self.selected_row < row_count - 1 {
                     self.selected_row += 1;
                 }
-                true
+                ComponentAction::Consumed
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 if self.selected_row > 0 {
                     self.selected_row -= 1;
                 }
-                true
+                ComponentAction::Consumed
             }
             KeyCode::Right | KeyCode::Char('l') => {
                 if self.selected_col < col_count.saturating_sub(1) {
                     self.selected_col += 1;
                 }
-                true
+                ComponentAction::Consumed
             }
             KeyCode::Left | KeyCode::Char('h') => {
                 if self.selected_col > 0 {
                     self.selected_col -= 1;
                 }
-                true
+                ComponentAction::Consumed
             }
             KeyCode::Home => {
                 self.selected_col = 0;
-                true
+                ComponentAction::Consumed
             }
             KeyCode::End => {
                 self.selected_col = col_count.saturating_sub(1);
-                true
+                ComponentAction::Consumed
             }
             KeyCode::PageDown => {
                 self.selected_row = (self.selected_row + 20).min(row_count.saturating_sub(1));
-                true
+                ComponentAction::Consumed
             }
             KeyCode::PageUp => {
                 self.selected_row = self.selected_row.saturating_sub(20);
-                true
+                ComponentAction::Consumed
             }
             KeyCode::Char('g') => {
                 self.selected_row = 0;
-                true
+                ComponentAction::Consumed
             }
             KeyCode::Char('G') => {
                 self.selected_row = row_count.saturating_sub(1);
-                true
+                ComponentAction::Consumed
             }
-            _ => false,
+            _ => ComponentAction::Ignored,
         }
     }
 
