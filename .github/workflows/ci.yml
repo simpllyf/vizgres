@@ -114,8 +114,6 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-        volumes:
-          - ${{ github.workspace }}/tests/fixtures:/docker-entrypoint-initdb.d:ro
 
     steps:
       - uses: actions/checkout@v4
@@ -141,13 +139,9 @@ jobs:
           path: target
           key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Wait for PostgreSQL
+      - name: Initialize test database
         run: |
-          for i in {1..30}; do
-            pg_isready -h localhost -p 5433 -U test_user && break
-            echo "Waiting for PostgreSQL..."
-            sleep 1
-          done
+          PGPASSWORD=test_password psql -h localhost -p 5433 -U test_user -d test_db -f tests/fixtures/init.sql
 
       - name: Run integration tests
         env:
