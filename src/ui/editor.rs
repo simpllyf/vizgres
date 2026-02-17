@@ -56,7 +56,7 @@ impl QueryEditor {
         self.cursor.1 = col + 1;
     }
 
-    fn delete_char(&mut self) {
+    fn backspace(&mut self) {
         if self.cursor.1 > 0 {
             let col = self.cursor.1.min(self.lines[self.cursor.0].len());
             if col > 0 {
@@ -69,6 +69,18 @@ impl QueryEditor {
             self.cursor.0 -= 1;
             self.cursor.1 = self.lines[self.cursor.0].len();
             self.lines[self.cursor.0].push_str(&current_line);
+        }
+    }
+
+    fn delete_forward(&mut self) {
+        let line_len = self.lines[self.cursor.0].len();
+        let col = self.cursor.1.min(line_len);
+        if col < line_len {
+            self.lines[self.cursor.0].remove(col);
+        } else if self.cursor.0 < self.lines.len() - 1 {
+            // Join next line into current
+            let next_line = self.lines.remove(self.cursor.0 + 1);
+            self.lines[self.cursor.0].push_str(&next_line);
         }
     }
 
@@ -152,7 +164,11 @@ impl Component for QueryEditor {
                 true
             }
             KeyCode::Backspace => {
-                self.delete_char();
+                self.backspace();
+                true
+            }
+            KeyCode::Delete => {
+                self.delete_forward();
                 true
             }
             KeyCode::Enter => {
@@ -271,13 +287,35 @@ mod tests {
     }
 
     #[test]
-    fn test_delete_joins_lines() {
+    fn test_backspace_joins_lines() {
         let mut editor = QueryEditor::new();
         editor.insert_char('a');
         editor.new_line();
         editor.insert_char('b');
         editor.cursor = (1, 0);
-        editor.delete_char();
+        editor.backspace();
+        assert_eq!(editor.get_content(), "ab");
+    }
+
+    #[test]
+    fn test_delete_forward() {
+        let mut editor = QueryEditor::new();
+        editor.insert_char('a');
+        editor.insert_char('b');
+        editor.insert_char('c');
+        editor.cursor = (0, 1);
+        editor.delete_forward();
+        assert_eq!(editor.get_content(), "ac");
+    }
+
+    #[test]
+    fn test_delete_forward_joins_lines() {
+        let mut editor = QueryEditor::new();
+        editor.insert_char('a');
+        editor.new_line();
+        editor.insert_char('b');
+        editor.cursor = (0, 1);
+        editor.delete_forward();
         assert_eq!(editor.get_content(), "ab");
     }
 
