@@ -100,23 +100,12 @@ jobs:
   integration-test:
     name: Integration Tests
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:18-alpine
-        env:
-          POSTGRES_USER: test_user
-          POSTGRES_PASSWORD: test_password
-          POSTGRES_DB: test_db
-        ports:
-          - 5433:5432
-        options: >-
-          --health-cmd "pg_isready -U test_user -d test_db"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Start PostgreSQL
+        run: docker compose -f docker-compose.test.yml up -d --wait
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -139,10 +128,6 @@ jobs:
           path: target
           key: ${{ runner.os }}-target-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Initialize test database
-        run: |
-          PGPASSWORD=test_password psql -h localhost -p 5433 -U test_user -d test_db -f tests/fixtures/init.sql
-
       - name: Run integration tests
         env:
           TEST_DB_HOST: localhost
@@ -151,6 +136,10 @@ jobs:
           TEST_DB_USER: test_user
           TEST_DB_PASSWORD: test_password
         run: cargo test --test integration
+
+      - name: Stop PostgreSQL
+        if: always()
+        run: docker compose -f docker-compose.test.yml down
 
   msrv:
     name: MSRV Check
