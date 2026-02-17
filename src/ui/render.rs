@@ -53,9 +53,9 @@ pub fn render(frame: &mut Frame, app: &App) {
         },
     );
 
-    // Inspector overlay (floating popup on top of results)
+    // Inspector overlay (floating popup on top of everything)
     if app.inspector.is_visible() {
-        render_inspector_popup(frame, &theme, layout.results, app);
+        render_inspector_popup(frame, &theme, app);
     }
 
     // Status bar
@@ -96,7 +96,7 @@ fn render_panel(
 }
 
 /// Render the inspector as a centered floating popup with shadow
-fn render_inspector_popup(frame: &mut Frame, theme: &Theme, results_area: Rect, app: &App) {
+fn render_inspector_popup(frame: &mut Frame, theme: &Theme, app: &App) {
     let screen = frame.area();
 
     // Size the popup: 60% of screen width, 50% of screen height
@@ -131,9 +131,6 @@ fn render_inspector_popup(frame: &mut Frame, theme: &Theme, results_area: Rect, 
 
     // Clear the popup area
     frame.render_widget(Clear, popup_area);
-
-    // Popup border with distinct style
-    let _ = results_area; // inspector is now a floating overlay, not tied to results split
     let block = Block::default()
         .borders(Borders::ALL)
         .title(Span::styled(
