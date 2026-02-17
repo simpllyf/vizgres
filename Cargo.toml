@@ -25,9 +25,6 @@ rustls = { version = "0.23", default-features = false, features = ["std", "tls12
 rustls-native-certs = "0.8"
 webpki-roots = "0.26"
 
-# SQL utilities
-sqlformat = "0.2"
-
 # Serialization & configuration
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"

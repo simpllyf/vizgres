@@ -56,7 +56,6 @@ The MVP provides: connect to a database, browse schema, write and execute querie
 | `ui/command_bar.rs` | Command input bar |
 | `ui/theme.rs` | Colors and styles |
 | `commands/parser.rs` | `:command` parsing |
-| `commands/handlers.rs` | Command execution |
 | `config/connections.rs` | Connection profiles + URL parsing |
 
 ## Type Mapping (PostgreSQL → Vizgres)
@@ -92,9 +91,7 @@ The MVP provides: connect to a database, browse schema, write and execute querie
 | Arrows | Editor | Cursor movement |
 | Home/End | Editor | Start/end of line |
 
-## MVP Limitations
-
-Things the MVP intentionally does not handle:
+## Current Limitations
 
 - No syntax highlighting in the editor
 - No SQL autocomplete
@@ -138,7 +135,7 @@ Roughly in priority order. Each item is independent and can be tackled standalon
 | **Transaction support** | `:begin`, `:commit`, `:rollback` commands, transaction indicator in status bar |
 | **Multi-database** | Multiple simultaneous connections, switch with `:use <name>` |
 | **Vim mode** | Full vim keybindings in editor (normal/insert/visual modes) |
-| **SQL formatter** | `sqlformat` crate already in deps — wire to `:format` command |
+| **SQL formatter** | Add `sqlformat` crate, wire to `:format` command |
 | **Saved queries** | `:save <name>`, `:load <name>` for frequently-used queries |
 | **Column stats** | `Ctrl+I` on column in results → count, distinct, min, max, nulls |
 | **Mouse support** | Click to focus panel, click cell to select, scroll wheel |

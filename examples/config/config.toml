@@ -2,36 +2,8 @@
 #
 # Copy this file to ~/.vizgres/config.toml and customize.
 
-# Query history settings
-history_size = 1000
-save_history = true
-
 # Query result settings
 default_row_limit = 1000
 
-# Editor settings
-syntax_highlighting = true
-auto_format = false
-
 # Theme (default, dark, light)
 theme = "default"
-
-# Additional settings (to be implemented in later phases)
-[editor]
-tab_size = 2
-show_line_numbers = true
-wrap_long_lines = false
-
-[display]
-# Maximum cell width in results table
-max_cell_width = 50
-# Show data types in results header
-show_data_types = true
-# Date/time display format
-datetime_format = "ISO8601"
-
-[keybindings]
-# Custom keybindings (Phase 6+ feature)
-# quit = "Ctrl+Q"
-# execute_query = "Ctrl+Enter"
-# format_sql = "Ctrl+Shift+F"
