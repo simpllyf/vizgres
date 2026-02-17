@@ -15,6 +15,7 @@ mod commands;
 mod config;
 mod db;
 mod error;
+mod keymap;
 mod ui;
 
 use app::{Action, App, AppEvent};

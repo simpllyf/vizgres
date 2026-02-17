@@ -4,7 +4,9 @@
 
 use crate::db::schema::SchemaTree;
 use crate::ui::Component;
-use crossterm::event::{KeyCode, KeyEvent};
+use crate::ui::ComponentAction;
+use crate::ui::theme::Theme;
+use crossterm::event::KeyEvent;
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 use std::collections::HashSet;
@@ -126,7 +128,7 @@ impl TreeBrowser {
         }
     }
 
-    fn toggle_expand(&mut self) {
+    pub fn toggle_expand(&mut self) {
         if let Some(item) = self.items.get(self.selected)
             && item.expandable
         {
@@ -140,7 +142,7 @@ impl TreeBrowser {
         }
     }
 
-    fn expand_current(&mut self) {
+    pub fn expand_current(&mut self) {
         if let Some(item) = self.items.get(self.selected)
             && item.expandable
             && !self.expanded.contains(&item.path)
@@ -151,7 +153,19 @@ impl TreeBrowser {
         }
     }
 
-    fn collapse_current(&mut self) {
+    pub fn move_up(&mut self) {
+        if !self.items.is_empty() && self.selected > 0 {
+            self.selected -= 1;
+        }
+    }
+
+    pub fn move_down(&mut self) {
+        if !self.items.is_empty() && self.selected < self.items.len() - 1 {
+            self.selected += 1;
+        }
+    }
+
+    pub fn collapse_current(&mut self) {
         if let Some(item) = self.items.get(self.selected) {
             let path = item.path.clone();
             if self.expanded.contains(&path) {
@@ -178,48 +192,20 @@ impl Default for TreeBrowser {
 }
 
 impl Component for TreeBrowser {
-    fn handle_key(&mut self, key: KeyEvent) -> bool {
-        if self.items.is_empty() {
-            return false;
-        }
-
-        match key.code {
-            KeyCode::Down | KeyCode::Char('j') => {
-                if self.selected < self.items.len() - 1 {
-                    self.selected += 1;
-                }
-                true
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                if self.selected > 0 {
-                    self.selected -= 1;
-                }
-                true
-            }
-            KeyCode::Enter => {
-                self.expand_current();
-                true
-            }
-            KeyCode::Char('h') => {
-                self.collapse_current();
-                true
-            }
-            KeyCode::Char(' ') => {
-                self.toggle_expand();
-                true
-            }
-            _ => false,
-        }
+    fn handle_key(&mut self, _key: KeyEvent) -> ComponentAction {
+        // Navigation is handled by KeyMap → App::execute_key_action().
+        // TreeBrowser has no free-form text input, so nothing to handle here.
+        ComponentAction::Ignored
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect, focused: bool) {
+    fn render(&self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
         if self.items.is_empty() {
             let msg = if self.schema.is_some() {
                 "No schemas found"
             } else {
                 "Not connected"
             };
-            let p = Paragraph::new(msg).style(Style::default().fg(Color::DarkGray));
+            let p = Paragraph::new(msg).style(theme.tree_empty);
             frame.render_widget(p, area);
             return;
         }
@@ -267,17 +253,12 @@ impl Component for TreeBrowser {
             };
 
             let style = if is_selected {
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
+                theme.tree_selected
             } else {
                 match item.kind {
-                    NodeKind::Schema => Style::default()
-                        .fg(Color::Blue)
-                        .add_modifier(Modifier::BOLD),
-                    NodeKind::Table => Style::default().fg(Color::Green),
-                    NodeKind::Column => Style::default().fg(Color::Gray),
+                    NodeKind::Schema => theme.tree_schema,
+                    NodeKind::Table => theme.tree_table,
+                    NodeKind::Column => theme.tree_column,
                 }
             };
 

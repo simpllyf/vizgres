@@ -3,7 +3,9 @@
 //! Input bar for entering commands (starting with /)
 
 use crate::ui::Component;
-use crossterm::event::{KeyCode, KeyEvent};
+use crate::ui::ComponentAction;
+use crate::ui::theme::Theme;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
@@ -39,7 +41,7 @@ impl CommandBar {
         self.active
     }
 
-    pub fn input(&self) -> &str {
+    pub fn input_text(&self) -> &str {
         &self.input
     }
 }
@@ -51,53 +53,57 @@ impl Default for CommandBar {
 }
 
 impl Component for CommandBar {
-    fn handle_key(&mut self, key: KeyEvent) -> bool {
+    fn handle_key(&mut self, key: KeyEvent) -> ComponentAction {
+        // Submit (Enter) and Dismiss (Esc) are handled by KeyMap.
+        // Only free-form text input is handled here.
         match key.code {
             KeyCode::Char(c) => {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    return ComponentAction::Ignored;
+                }
                 self.input.insert(self.cursor, c);
                 self.cursor += 1;
-                true
+                ComponentAction::Consumed
             }
             KeyCode::Backspace => {
                 if self.cursor > 0 {
                     self.input.remove(self.cursor - 1);
                     self.cursor -= 1;
                 }
-                true
+                ComponentAction::Consumed
             }
             KeyCode::Left => {
                 if self.cursor > 0 {
                     self.cursor -= 1;
                 }
-                true
+                ComponentAction::Consumed
             }
             KeyCode::Right => {
                 if self.cursor < self.input.len() {
                     self.cursor += 1;
                 }
-                true
+                ComponentAction::Consumed
             }
             KeyCode::Home => {
                 self.cursor = 0;
-                true
+                ComponentAction::Consumed
             }
             KeyCode::End => {
                 self.cursor = self.input.len();
-                true
+                ComponentAction::Consumed
             }
-            _ => false,
+            _ => ComponentAction::Ignored,
         }
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect, _focused: bool) {
+    fn render(&self, frame: &mut Frame, area: Rect, _focused: bool, theme: &Theme) {
         if !self.active {
             return;
         }
 
         let prompt = "/";
         let display = format!("{}{}", prompt, self.input);
-        let style = Style::default().fg(Color::White);
-        let paragraph = Paragraph::new(display).style(style);
+        let paragraph = Paragraph::new(display).style(theme.command_text);
         frame.render_widget(paragraph, area);
 
         // Show cursor
@@ -116,7 +122,7 @@ mod tests {
     fn test_command_bar_new() {
         let bar = CommandBar::new();
         assert!(!bar.is_active());
-        assert_eq!(bar.input(), "");
+        assert!(bar.input.is_empty());
     }
 
     #[test]

@@ -4,7 +4,9 @@
 
 use crate::db::types::{CellValue, QueryResults};
 use crate::ui::Component;
-use crossterm::event::{KeyCode, KeyEvent};
+use crate::ui::ComponentAction;
+use crate::ui::theme::Theme;
+use crossterm::event::KeyEvent;
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
@@ -94,6 +96,59 @@ impl ResultsViewer {
         Some(parts.join("\t"))
     }
 
+    pub fn move_up(&mut self) {
+        if self.selected_row > 0 {
+            self.selected_row -= 1;
+        }
+    }
+
+    pub fn move_down(&mut self) {
+        let count = self.row_count();
+        if count > 0 && self.selected_row < count - 1 {
+            self.selected_row += 1;
+        }
+    }
+
+    pub fn move_left(&mut self) {
+        if self.selected_col > 0 {
+            self.selected_col -= 1;
+        }
+    }
+
+    pub fn move_right(&mut self) {
+        let count = self.col_count();
+        if self.selected_col < count.saturating_sub(1) {
+            self.selected_col += 1;
+        }
+    }
+
+    pub fn page_up(&mut self) {
+        self.selected_row = self.selected_row.saturating_sub(20);
+    }
+
+    pub fn page_down(&mut self) {
+        let count = self.row_count();
+        self.selected_row = (self.selected_row + 20).min(count.saturating_sub(1));
+    }
+
+    pub fn go_to_top(&mut self) {
+        self.selected_row = 0;
+    }
+
+    pub fn go_to_bottom(&mut self) {
+        let count = self.row_count();
+        self.selected_row = count.saturating_sub(1);
+    }
+
+    pub fn go_to_home(&mut self) {
+        self.selected_col = 0;
+    }
+
+    pub fn go_to_end(&mut self) {
+        let count = self.col_count();
+        self.selected_col = count.saturating_sub(1);
+    }
+
     fn row_count(&self) -> usize {
         self.results.as_ref().map_or(0, |r| r.rows.len())
     }
@@ -122,79 +177,19 @@ impl Default for ResultsViewer {
 }
 
 impl Component for ResultsViewer {
-    fn handle_key(&mut self, key: KeyEvent) -> bool {
-        let row_count = self.row_count();
-        let col_count = self.col_count();
-        if row_count == 0 {
-            return false;
-        }
-
-        match key.code {
-            KeyCode::Down | KeyCode::Char('j') => {
-                if self.selected_row < row_count - 1 {
-                    self.selected_row += 1;
-                }
-                true
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                if self.selected_row > 0 {
-                    self.selected_row -= 1;
-                }
-                true
-            }
-            KeyCode::Right | KeyCode::Char('l') => {
-                if self.selected_col < col_count.saturating_sub(1) {
-                    self.selected_col += 1;
-                }
-                true
-            }
-            KeyCode::Left | KeyCode::Char('h') => {
-                if self.selected_col > 0 {
-                    self.selected_col -= 1;
-                }
-                true
-            }
-            KeyCode::Home => {
-                self.selected_col = 0;
-                true
-            }
-            KeyCode::End => {
-                self.selected_col = col_count.saturating_sub(1);
-                true
-            }
-            KeyCode::PageDown => {
-                self.selected_row = (self.selected_row + 20).min(row_count.saturating_sub(1));
-                true
-            }
-            KeyCode::PageUp => {
-                self.selected_row = self.selected_row.saturating_sub(20);
-                true
-            }
-            KeyCode::Char('g') => {
-                self.selected_row = 0;
-                true
-            }
-            KeyCode::Char('G') => {
-                self.selected_row = row_count.saturating_sub(1);
-                true
-            }
-            _ => false,
-        }
+    fn handle_key(&mut self, _key: KeyEvent) -> ComponentAction {
+        // Navigation and actions are handled by KeyMap → App::execute_key_action().
+        // ResultsViewer has no free-form text input, so nothing to handle here.
+        ComponentAction::Ignored
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect, focused: bool) {
+    fn render(&self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
         // Show error if present
         if let Some(ref error) = self.error {
             let lines: Vec<Line> = vec![
-                Line::from(Span::styled(
-                    "Query Error",
-                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-                )),
+                Line::from(Span::styled("Query Error", theme.results_error_title)),
                 Line::from(""),
-                Line::from(Span::styled(
-                    error.as_str(),
-                    Style::default().fg(Color::Red),
-                )),
+                Line::from(Span::styled(error.as_str(), theme.results_error_text)),
             ];
             let p = Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false });
             frame.render_widget(p, area);
@@ -209,7 +204,7 @@ impl Component for ResultsViewer {
                 } else {
                     "No results yet. Write a query and press F5 to execute."
                 };
-                let p = Paragraph::new(msg).style(Style::default().fg(Color::DarkGray));
+                let p = Paragraph::new(msg).style(theme.results_empty);
                 frame.render_widget(p, area);
                 return;
             }
@@ -247,13 +242,9 @@ impl Component for ResultsViewer {
                 .unwrap_or(10)
                 .min(area.x + area.width - x);
             let style = if focused && col_idx == viewer.selected_col {
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+                theme.results_header_selected
             } else {
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
+                theme.results_header
             };
             let name = truncate_str(&col_def.name, w as usize);
             let padded = format!("{:<width$}", name, width = w as usize);
@@ -279,9 +270,9 @@ impl Component for ResultsViewer {
             let row = &results.rows[row_idx];
             let is_selected_row = row_idx == viewer.selected_row;
             let row_base_style = if vis_row % 2 == 0 {
-                Style::default().fg(Color::White)
+                theme.results_row_even
             } else {
-                Style::default().fg(Color::Gray)
+                theme.results_row_odd
             };
 
             let mut x = area.x;
@@ -296,11 +287,9 @@ impl Component for ResultsViewer {
                     .min(area.x + area.width - x);
 
                 let style = if focused && is_selected_row && col_idx == viewer.selected_col {
-                    Style::default().fg(Color::Black).bg(Color::Yellow)
+                    theme.results_selected
                 } else if cell.is_null() {
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::ITALIC)
+                    theme.results_null
                 } else {
                     row_base_style
                 };
@@ -322,7 +311,7 @@ impl Component for ResultsViewer {
             results.columns.len(),
             results.execution_time.as_secs_f64() * 1000.0,
         );
-        let footer_style = Style::default().fg(Color::DarkGray);
+        let footer_style = theme.results_footer;
         frame.render_widget(
             Paragraph::new(footer).style(footer_style),
             Rect::new(area.x, footer_y, area.width, 1),
@@ -451,5 +440,71 @@ mod tests {
         viewer.set_results(sample_results());
         assert!(viewer.error.is_none());
         assert!(viewer.results.is_some());
+    }
+
+    #[test]
+    fn test_navigation_on_empty_results() {
+        let mut viewer = ResultsViewer::new();
+        // All navigation should be safe on empty state
+        viewer.move_up();
+        viewer.move_down();
+        viewer.move_left();
+        viewer.move_right();
+        viewer.page_up();
+        viewer.page_down();
+        viewer.go_to_top();
+        viewer.go_to_bottom();
+        viewer.go_to_home();
+        viewer.go_to_end();
+        assert_eq!(viewer.selected_row, 0);
+        assert_eq!(viewer.selected_col, 0);
+    }
+
+    #[test]
+    fn test_navigation_boundary_clamping() {
+        let mut viewer = ResultsViewer::new();
+        viewer.set_results(sample_results()); // 2 rows, 2 cols
+
+        // move_down stops at last row
+        viewer.move_down();
+        assert_eq!(viewer.selected_row, 1);
+        viewer.move_down();
+        assert_eq!(viewer.selected_row, 1); // stays at 1
+
+        // move_right stops at last column
+        viewer.move_right();
+        assert_eq!(viewer.selected_col, 1);
+        viewer.move_right();
+        assert_eq!(viewer.selected_col, 1); // stays at 1
+
+        // move_up stops at 0
+        viewer.selected_row = 0;
+        viewer.move_up();
+        assert_eq!(viewer.selected_row, 0);
+
+        // move_left stops at 0
+        viewer.selected_col = 0;
+        viewer.move_left();
+        assert_eq!(viewer.selected_col, 0);
+    }
+
+    #[test]
+    fn test_go_to_top_bottom() {
+        let mut viewer = ResultsViewer::new();
+        viewer.set_results(sample_results());
+        viewer.go_to_bottom();
+        assert_eq!(viewer.selected_row, 1); // last row (index 1 of 2)
+        viewer.go_to_top();
+        assert_eq!(viewer.selected_row, 0);
+    }
+
+    #[test]
+    fn test_go_to_home_end() {
+        let mut viewer = ResultsViewer::new();
+        viewer.set_results(sample_results());
+        viewer.go_to_end();
+        assert_eq!(viewer.selected_col, 1); // last col (index 1 of 2)
+        viewer.go_to_home();
+        assert_eq!(viewer.selected_col, 0);
     }
 }

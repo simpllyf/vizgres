@@ -5,13 +5,16 @@
 use crate::commands::{Command, parse_command};
 use crate::db::{PostgresProvider, QueryResults};
 use crate::error::Result;
+use crate::keymap::{KeyAction, KeyMap};
 use crate::ui::Component;
+use crate::ui::ComponentAction;
 use crate::ui::command_bar::CommandBar;
 use crate::ui::editor::QueryEditor;
 use crate::ui::inspector::Inspector;
 use crate::ui::results::ResultsViewer;
+use crate::ui::theme::Theme;
 use crate::ui::tree::TreeBrowser;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::KeyEvent;
 
 /// Main application state
 pub struct App {
@@ -34,6 +37,12 @@ pub struct App {
     pub command_bar: CommandBar,
     pub inspector: Inspector,
 
+    /// Data-driven keybinding configuration
+    keymap: KeyMap,
+
+    /// UI theme (created once, reused every frame)
+    pub theme: Theme,
+
     /// Status message to display
     pub status_message: Option<StatusMessage>,
 
@@ -45,7 +54,7 @@ pub struct App {
 }
 
 /// Panel focus state
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PanelFocus {
     TreeBrowser,
     QueryEditor,
@@ -100,6 +109,8 @@ impl App {
             results_viewer: ResultsViewer::new(),
             command_bar: CommandBar::new(),
             inspector: Inspector::new(),
+            keymap: KeyMap::default(),
+            theme: Theme::default(),
             status_message: None,
             clipboard: arboard::Clipboard::new().ok(),
             running: true,
@@ -132,155 +143,233 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Action {
-        // Clear toast on any user action
         self.status_message = None;
 
-        // Global keybindings (always active)
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('q') {
-            return Action::Quit;
-        }
-
-        // Ctrl+P opens command bar from anywhere (except when already in it)
-        if key.modifiers.contains(KeyModifiers::CONTROL)
-            && key.code == KeyCode::Char('p')
-            && self.focus != PanelFocus::CommandBar
-        {
-            self.open_command_bar();
-            return Action::None;
-        }
-
-        // Tab cycles focus (except when in command bar or inspector)
-        if key.code == KeyCode::Tab
-            && self.focus != PanelFocus::CommandBar
-            && self.focus != PanelFocus::Inspector
-        {
-            self.cycle_focus();
-            return Action::None;
-        }
-
-        // Backtab (Shift+Tab) cycles focus backwards
-        if key.code == KeyCode::BackTab
-            && self.focus != PanelFocus::CommandBar
-            && self.focus != PanelFocus::Inspector
-        {
-            self.cycle_focus_reverse();
-            return Action::None;
-        }
-
-        match self.focus {
-            PanelFocus::QueryEditor => self.handle_editor_key(key),
-            PanelFocus::ResultsViewer => self.handle_results_key(key),
-            PanelFocus::TreeBrowser => self.handle_tree_key(key),
-            PanelFocus::CommandBar => self.handle_command_bar_key(key),
-            PanelFocus::Inspector => self.handle_inspector_key(key),
-        }
-    }
-
-    fn handle_editor_key(&mut self, key: KeyEvent) -> Action {
-        // Execute query: Ctrl+Enter or F5
-        let is_execute = key.code == KeyCode::F(5)
-            || (key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Enter);
-        if is_execute {
-            let sql = self.editor.get_content();
-            if !sql.trim().is_empty() {
-                self.set_status("Executing query...".to_string(), StatusLevel::Info);
-                return Action::ExecuteQuery(sql);
-            }
-            return Action::None;
-        }
-
-        // Ctrl+L = clear editor
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('l') {
-            self.editor.clear();
-            return Action::None;
-        }
-
-        self.editor.handle_key(key);
-        Action::None
-    }
-
-    fn handle_results_key(&mut self, key: KeyEvent) -> Action {
-        // Enter opens inspector
-        if key.code == KeyCode::Enter {
-            if let Some((value, col_name, data_type)) = self.results_viewer.selected_cell_info() {
-                self.inspector.show(value, col_name, data_type);
-                self.previous_focus = self.focus;
-                self.focus = PanelFocus::Inspector;
-            }
-            return Action::None;
-        }
-
-        // y = copy cell, Y = copy row
-        if key.code == KeyCode::Char('y') && !key.modifiers.contains(KeyModifiers::SHIFT) {
-            if let Some(text) = self.results_viewer.selected_cell_text() {
-                self.copy_to_clipboard(&text);
-            }
-            return Action::None;
-        }
-        if key.code == KeyCode::Char('Y') {
-            if let Some(text) = self.results_viewer.selected_row_text() {
-                self.copy_to_clipboard(&text);
-            }
-            return Action::None;
-        }
-
-        self.results_viewer.handle_key(key);
-        Action::None
-    }
-
-    fn handle_tree_key(&mut self, key: KeyEvent) -> Action {
-        self.tree_browser.handle_key(key);
-        Action::None
-    }
-
-    fn handle_command_bar_key(&mut self, key: KeyEvent) -> Action {
-        match key.code {
-            KeyCode::Enter => {
-                let input = self.command_bar.input().to_string();
-                self.command_bar.deactivate();
-                self.focus = self.previous_focus;
-
-                if input.is_empty() {
+        // Try KeyMap first — global bindings, then panel-specific
+        if let Some(key_action) = self.keymap.resolve(self.focus, key) {
+            // Suppress certain global actions in modal panels to avoid
+            // the key falling through to the component (e.g., Ctrl+P
+            // inserting 'p' in the command bar).
+            match key_action {
+                KeyAction::OpenCommandBar if self.focus == PanelFocus::CommandBar => {
                     return Action::None;
                 }
-
-                match parse_command(&input) {
-                    Ok(cmd) => self.execute_command(cmd),
-                    Err(e) => {
-                        self.set_status(e.to_string(), StatusLevel::Error);
-                        Action::None
-                    }
+                KeyAction::CycleFocus | KeyAction::CycleFocusReverse
+                    if self.focus == PanelFocus::CommandBar
+                        || self.focus == PanelFocus::Inspector =>
+                {
+                    return Action::None;
                 }
-            }
-            KeyCode::Esc => {
-                self.command_bar.deactivate();
-                self.focus = self.previous_focus;
-                Action::None
-            }
-            _ => {
-                self.command_bar.handle_key(key);
-                Action::None
+                _ => return self.execute_key_action(key_action),
             }
         }
+
+        // Fall through to component for free-form text input (editor, command bar)
+        let component_action = match self.focus {
+            PanelFocus::QueryEditor => self.editor.handle_key(key),
+            PanelFocus::CommandBar => self.command_bar.handle_key(key),
+            _ => ComponentAction::Ignored,
+        };
+        self.process_component_action(component_action)
     }
 
-    fn handle_inspector_key(&mut self, key: KeyEvent) -> Action {
-        match key.code {
-            KeyCode::Esc => {
-                self.inspector.hide();
-                self.focus = self.previous_focus;
+    fn execute_key_action(&mut self, action: KeyAction) -> Action {
+        match action {
+            // ── Global ───────────────────────────────────────
+            KeyAction::Quit => Action::Quit,
+            KeyAction::OpenCommandBar => {
+                self.open_command_bar();
                 Action::None
             }
-            KeyCode::Char('y') => {
+            KeyAction::CycleFocus => {
+                self.cycle_focus();
+                Action::None
+            }
+            KeyAction::CycleFocusReverse => {
+                self.cycle_focus_reverse();
+                Action::None
+            }
+
+            // ── Navigation ───────────────────────────────────
+            KeyAction::MoveUp => {
+                match self.focus {
+                    PanelFocus::ResultsViewer => self.results_viewer.move_up(),
+                    PanelFocus::TreeBrowser => self.tree_browser.move_up(),
+                    PanelFocus::Inspector => self.inspector.scroll_up(),
+                    _ => {}
+                }
+                Action::None
+            }
+            KeyAction::MoveDown => {
+                match self.focus {
+                    PanelFocus::ResultsViewer => self.results_viewer.move_down(),
+                    PanelFocus::TreeBrowser => self.tree_browser.move_down(),
+                    PanelFocus::Inspector => self.inspector.scroll_down(),
+                    _ => {}
+                }
+                Action::None
+            }
+            KeyAction::MoveLeft => {
+                if self.focus == PanelFocus::ResultsViewer {
+                    self.results_viewer.move_left();
+                }
+                Action::None
+            }
+            KeyAction::MoveRight => {
+                if self.focus == PanelFocus::ResultsViewer {
+                    self.results_viewer.move_right();
+                }
+                Action::None
+            }
+            KeyAction::PageUp => {
+                match self.focus {
+                    PanelFocus::ResultsViewer => self.results_viewer.page_up(),
+                    PanelFocus::Inspector => self.inspector.page_up(),
+                    _ => {}
+                }
+                Action::None
+            }
+            KeyAction::PageDown => {
+                match self.focus {
+                    PanelFocus::ResultsViewer => self.results_viewer.page_down(),
+                    PanelFocus::Inspector => self.inspector.page_down(),
+                    _ => {}
+                }
+                Action::None
+            }
+            KeyAction::GoToTop => {
+                match self.focus {
+                    PanelFocus::ResultsViewer => self.results_viewer.go_to_top(),
+                    PanelFocus::Inspector => self.inspector.scroll_to_top(),
+                    _ => {}
+                }
+                Action::None
+            }
+            KeyAction::GoToBottom => {
+                match self.focus {
+                    PanelFocus::ResultsViewer => self.results_viewer.go_to_bottom(),
+                    PanelFocus::Inspector => self.inspector.scroll_to_bottom(),
+                    _ => {}
+                }
+                Action::None
+            }
+            KeyAction::Home => {
+                if self.focus == PanelFocus::ResultsViewer {
+                    self.results_viewer.go_to_home();
+                }
+                Action::None
+            }
+            KeyAction::End => {
+                if self.focus == PanelFocus::ResultsViewer {
+                    self.results_viewer.go_to_end();
+                }
+                Action::None
+            }
+
+            // ── Editor ───────────────────────────────────────
+            KeyAction::ExecuteQuery => {
+                let sql = self.editor.get_content();
+                if !sql.trim().is_empty() {
+                    self.set_status("Executing query...".to_string(), StatusLevel::Info);
+                    Action::ExecuteQuery(sql)
+                } else {
+                    Action::None
+                }
+            }
+            KeyAction::ClearEditor => {
+                self.editor.clear();
+                Action::None
+            }
+
+            // ── Results ──────────────────────────────────────
+            KeyAction::OpenInspector => {
+                if let Some((value, col_name, data_type)) = self.results_viewer.selected_cell_info()
+                {
+                    self.inspector.show(value, col_name, data_type);
+                    self.previous_focus = self.focus;
+                    self.focus = PanelFocus::Inspector;
+                }
+                Action::None
+            }
+            KeyAction::CopyCell => {
+                if let Some(text) = self.results_viewer.selected_cell_text() {
+                    self.copy_to_clipboard(&text);
+                }
+                Action::None
+            }
+            KeyAction::CopyRow => {
+                if let Some(text) = self.results_viewer.selected_row_text() {
+                    self.copy_to_clipboard(&text);
+                }
+                Action::None
+            }
+
+            // ── Inspector ────────────────────────────────────
+            KeyAction::CopyContent => {
                 if let Some(text) = self.inspector.content_text() {
                     self.copy_to_clipboard(&text);
                 }
                 Action::None
             }
-            _ => {
-                self.inspector.handle_key(key);
+
+            // ── Tree ─────────────────────────────────────────
+            KeyAction::ToggleExpand => {
+                self.tree_browser.toggle_expand();
                 Action::None
             }
+            KeyAction::Expand => {
+                self.tree_browser.expand_current();
+                Action::None
+            }
+            KeyAction::Collapse => {
+                self.tree_browser.collapse_current();
+                Action::None
+            }
+
+            // ── Modal (inspector, command bar) ───────────────
+            KeyAction::Dismiss => {
+                match self.focus {
+                    PanelFocus::Inspector => {
+                        self.inspector.hide();
+                        self.focus = self.previous_focus;
+                    }
+                    PanelFocus::CommandBar => {
+                        self.command_bar.deactivate();
+                        self.focus = self.previous_focus;
+                    }
+                    _ => {}
+                }
+                Action::None
+            }
+            KeyAction::Submit => {
+                if self.focus == PanelFocus::CommandBar {
+                    let input = self.command_bar.input_text().to_string();
+                    self.command_bar.deactivate();
+                    self.focus = self.previous_focus;
+
+                    if input.is_empty() {
+                        return Action::None;
+                    }
+
+                    match parse_command(&input) {
+                        Ok(cmd) => self.execute_command(cmd),
+                        Err(e) => {
+                            self.set_status(e.to_string(), StatusLevel::Error);
+                            Action::None
+                        }
+                    }
+                } else {
+                    Action::None
+                }
+            }
+        }
+    }
+
+    fn process_component_action(&mut self, action: ComponentAction) -> Action {
+        // Components only return Consumed/Ignored for text input.
+        // All meaningful actions are handled by KeyMap → execute_key_action.
+        match action {
+            ComponentAction::Consumed | ComponentAction::Ignored => Action::None,
         }
     }
 
@@ -385,5 +474,61 @@ mod tests {
         app.set_status("test".to_string(), StatusLevel::Info);
         assert!(app.status_message.is_some());
         assert_eq!(app.status_message.as_ref().unwrap().message, "test");
+    }
+
+    #[test]
+    fn test_suppressed_global_keys_dont_fall_through() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+
+        // Ctrl+P in command bar should be suppressed (not insert 'p')
+        app.focus = PanelFocus::CommandBar;
+        app.command_bar.activate();
+        let ctrl_p = KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL);
+        app.handle_key(ctrl_p);
+        assert_eq!(app.command_bar.input_text(), "");
+
+        // Tab in inspector should be suppressed (not cycle focus)
+        app.focus = PanelFocus::Inspector;
+        let tab = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
+        app.handle_key(tab);
+        assert_eq!(app.focus, PanelFocus::Inspector);
+    }
+
+    #[test]
+    fn test_cycle_focus_reverse() {
+        let mut app = App::new();
+        assert_eq!(app.focus, PanelFocus::QueryEditor);
+        app.cycle_focus_reverse();
+        assert_eq!(app.focus, PanelFocus::TreeBrowser);
+        app.cycle_focus_reverse();
+        assert_eq!(app.focus, PanelFocus::ResultsViewer);
+        app.cycle_focus_reverse();
+        assert_eq!(app.focus, PanelFocus::QueryEditor);
+    }
+
+    #[test]
+    fn test_cycle_focus_noop_in_modal() {
+        let mut app = App::new();
+        app.focus = PanelFocus::Inspector;
+        app.cycle_focus();
+        assert_eq!(app.focus, PanelFocus::Inspector);
+
+        app.focus = PanelFocus::CommandBar;
+        app.cycle_focus();
+        assert_eq!(app.focus, PanelFocus::CommandBar);
+    }
+
+    #[test]
+    fn test_execute_query_ignores_empty() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+        // F5 with empty editor should return None
+        let f5 = KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE);
+        let action = app.handle_key(f5);
+        assert!(matches!(action, Action::None));
     }
 }

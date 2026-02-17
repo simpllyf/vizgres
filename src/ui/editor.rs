@@ -3,6 +3,8 @@
 //! Multi-line SQL editor with line numbers and cursor.
 
 use crate::ui::Component;
+use crate::ui::ComponentAction;
+use crate::ui::theme::Theme;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
@@ -157,56 +159,56 @@ impl Default for QueryEditor {
 }
 
 impl Component for QueryEditor {
-    fn handle_key(&mut self, key: KeyEvent) -> bool {
+    fn handle_key(&mut self, key: KeyEvent) -> ComponentAction {
         match key.code {
             KeyCode::Char(c) => {
                 if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    return false; // Let parent handle Ctrl combos
+                    return ComponentAction::Ignored; // Let parent handle Ctrl combos
                 }
                 self.insert_char(c);
-                true
+                ComponentAction::Consumed
             }
             KeyCode::Backspace => {
                 self.backspace();
-                true
+                ComponentAction::Consumed
             }
             KeyCode::Delete => {
                 self.delete_forward();
-                true
+                ComponentAction::Consumed
             }
             KeyCode::Enter => {
                 self.new_line();
-                true
+                ComponentAction::Consumed
             }
             KeyCode::Up => {
                 self.move_up();
-                true
+                ComponentAction::Consumed
             }
             KeyCode::Down => {
                 self.move_down();
-                true
+                ComponentAction::Consumed
             }
             KeyCode::Left => {
                 self.move_left();
-                true
+                ComponentAction::Consumed
             }
             KeyCode::Right => {
                 self.move_right();
-                true
+                ComponentAction::Consumed
             }
             KeyCode::Home => {
                 self.move_home();
-                true
+                ComponentAction::Consumed
             }
             KeyCode::End => {
                 self.move_end();
-                true
+                ComponentAction::Consumed
             }
-            _ => false,
+            _ => ComponentAction::Ignored,
         }
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect, focused: bool) {
+    fn render(&self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
         if area.width < 2 || area.height == 0 {
             return;
         }
@@ -223,7 +225,7 @@ impl Component for QueryEditor {
             if line_idx < self.lines.len() {
                 // Line number
                 let line_num = format!("{:>width$}", line_idx + 1, width = line_num_width as usize);
-                let num_style = Style::default().fg(Color::DarkGray);
+                let num_style = theme.editor_line_number;
                 frame.render_widget(
                     Paragraph::new(line_num).style(num_style),
                     Rect::new(area.x, y, line_num_width, 1),
@@ -237,9 +239,8 @@ impl Component for QueryEditor {
                     line.as_str()
                 };
 
-                let style = Style::default().fg(Color::White);
                 frame.render_widget(
-                    Paragraph::new(display_line).style(style),
+                    Paragraph::new(display_line).style(theme.editor_text),
                     Rect::new(content_x, y, content_width, 1),
                 );
 
@@ -253,7 +254,7 @@ impl Component for QueryEditor {
                 }
             } else {
                 // Empty line indicator
-                let tilde = Paragraph::new("~").style(Style::default().fg(Color::DarkGray));
+                let tilde = Paragraph::new("~").style(theme.editor_tilde);
                 frame.render_widget(tilde, Rect::new(area.x, y, 1, 1));
             }
         }

@@ -11,55 +11,55 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 /// Render the entire application
 pub fn render(frame: &mut Frame, app: &App) {
-    let theme = Theme::new();
+    let theme = &app.theme;
     let layout = calculate_layout(frame.area());
 
     // Tree browser
     render_panel(
         frame,
-        &theme,
+        theme,
         layout.tree,
         " Schema ",
         app.focus == PanelFocus::TreeBrowser,
         |f, inner| {
             app.tree_browser
-                .render(f, inner, app.focus == PanelFocus::TreeBrowser);
+                .render(f, inner, app.focus == PanelFocus::TreeBrowser, theme);
         },
     );
 
     // Editor
     render_panel(
         frame,
-        &theme,
+        theme,
         layout.editor,
         " Query ",
         app.focus == PanelFocus::QueryEditor,
         |f, inner| {
             app.editor
-                .render(f, inner, app.focus == PanelFocus::QueryEditor);
+                .render(f, inner, app.focus == PanelFocus::QueryEditor, theme);
         },
     );
 
     // Results
     render_panel(
         frame,
-        &theme,
+        theme,
         layout.results,
         " Results ",
         app.focus == PanelFocus::ResultsViewer,
         |f, inner| {
             app.results_viewer
-                .render(f, inner, app.focus == PanelFocus::ResultsViewer);
+                .render(f, inner, app.focus == PanelFocus::ResultsViewer, theme);
         },
     );
 
     // Inspector overlay (floating popup on top of everything)
     if app.inspector.is_visible() {
-        render_inspector_popup(frame, &theme, app);
+        render_inspector_popup(frame, theme, app);
     }
 
     // Status bar
-    render_status_bar(frame, layout.command_bar, app, &theme);
+    render_status_bar(frame, layout.command_bar, app, theme);
 }
 
 /// Render a panel with consistent focus indication
@@ -78,11 +78,9 @@ fn render_panel(
     };
 
     let title_style = if focused {
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD)
+        theme.panel_title_focused
     } else {
-        Style::default().fg(Color::DarkGray)
+        theme.panel_title_unfocused
     };
 
     let block = Block::default()
@@ -127,7 +125,7 @@ fn render_inspector_popup(frame: &mut Frame, theme: &Theme, app: &App) {
         popup_w.min(screen.width.saturating_sub(popup_x + 1)),
         popup_h.min(screen.height.saturating_sub(popup_y + 1)),
     );
-    let shadow_style = Style::default().bg(Color::DarkGray).fg(Color::DarkGray);
+    let shadow_style = theme.shadow;
     for y in shadow_area.y..shadow_area.y + shadow_area.height {
         for x in shadow_area.x..shadow_area.x + shadow_area.width {
             if x < screen.width && y < screen.height {
@@ -145,16 +143,14 @@ fn render_inspector_popup(frame: &mut Frame, theme: &Theme, app: &App) {
         .borders(Borders::ALL)
         .title(Span::styled(
             " Inspector \u{2014} Esc to close, y to copy ",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
+            theme.popup_title,
         ))
-        .border_style(theme.border_focused.fg(Color::Yellow));
+        .border_style(theme.popup_border);
 
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
     app.inspector
-        .render(frame, inner, app.focus == PanelFocus::Inspector);
+        .render(frame, inner, app.focus == PanelFocus::Inspector, theme);
 }
 
 /// Render the status bar with partitioned layout:
@@ -162,7 +158,7 @@ fn render_inspector_popup(frame: &mut Frame, theme: &Theme, app: &App) {
 /// Right: connection info (ambient context, always visible)
 fn render_status_bar(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     if app.command_bar.is_active() {
-        app.command_bar.render(frame, area, true);
+        app.command_bar.render(frame, area, true, theme);
         return;
     }
 
@@ -176,7 +172,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     let right_x = area.x + area.width.saturating_sub(right_len);
 
     frame.render_widget(
-        Paragraph::new(conn_info).style(Style::default().fg(Color::DarkGray)),
+        Paragraph::new(conn_info).style(theme.status_conn_info),
         Rect::new(right_x, area.y, right_len.min(area.width), 1),
     );
 
@@ -207,8 +203,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         );
     } else {
         frame.render_widget(
-            Paragraph::new("Ctrl+P=commands | F5=run | Ctrl+Q=quit")
-                .style(Style::default().fg(Color::DarkGray)),
+            Paragraph::new("Ctrl+P=commands | F5=run | Ctrl+Q=quit").style(theme.status_help_hint),
             Rect::new(area.x, area.y, max_left_width, 1),
         );
     }

@@ -4,7 +4,9 @@
 //! JSON values are pretty-printed. Scrollable for large content.
 
 use crate::ui::Component;
-use crossterm::event::{KeyCode, KeyEvent};
+use crate::ui::ComponentAction;
+use crate::ui::theme::Theme;
+use crossterm::event::KeyEvent;
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
@@ -56,8 +58,35 @@ impl Inspector {
         self.content.clone()
     }
 
+    pub fn scroll_up(&mut self) {
+        if self.scroll_offset > 0 {
+            self.scroll_offset -= 1;
+        }
+    }
+
+    pub fn scroll_down(&mut self) {
+        if self.scroll_offset + 1 < self.total_lines {
+            self.scroll_offset += 1;
+        }
+    }
+
+    pub fn page_up(&mut self) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(20);
+    }
+
+    pub fn page_down(&mut self) {
+        self.scroll_offset = (self.scroll_offset + 20).min(self.total_lines.saturating_sub(1));
+    }
+
+    pub fn scroll_to_top(&mut self) {
+        self.scroll_offset = 0;
+    }
+
+    pub fn scroll_to_bottom(&mut self) {
+        self.scroll_offset = self.total_lines.saturating_sub(1);
+    }
+
     /// Measure content dimensions (width, height) for variable-size popup.
-    /// Width is the longest line, height is the line count.
     /// Returns (0, 0) if no content.
     pub fn content_size(&self) -> (u16, u16) {
         match &self.content {
@@ -77,42 +106,13 @@ impl Default for Inspector {
 }
 
 impl Component for Inspector {
-    fn handle_key(&mut self, key: KeyEvent) -> bool {
-        match key.code {
-            KeyCode::Down | KeyCode::Char('j') => {
-                if self.scroll_offset + 1 < self.total_lines {
-                    self.scroll_offset += 1;
-                }
-                true
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                if self.scroll_offset > 0 {
-                    self.scroll_offset -= 1;
-                }
-                true
-            }
-            KeyCode::PageDown => {
-                self.scroll_offset =
-                    (self.scroll_offset + 20).min(self.total_lines.saturating_sub(1));
-                true
-            }
-            KeyCode::PageUp => {
-                self.scroll_offset = self.scroll_offset.saturating_sub(20);
-                true
-            }
-            KeyCode::Home | KeyCode::Char('g') => {
-                self.scroll_offset = 0;
-                true
-            }
-            KeyCode::End | KeyCode::Char('G') => {
-                self.scroll_offset = self.total_lines.saturating_sub(1);
-                true
-            }
-            _ => false,
-        }
+    fn handle_key(&mut self, _key: KeyEvent) -> ComponentAction {
+        // Navigation and actions are handled by KeyMap → App::execute_key_action().
+        // Inspector has no free-form text input, so nothing to handle here.
+        ComponentAction::Ignored
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect, _focused: bool) {
+    fn render(&self, frame: &mut Frame, area: Rect, _focused: bool, theme: &Theme) {
         let content = match &self.content {
             Some(c) => c,
             None => return,
@@ -124,11 +124,8 @@ impl Component for Inspector {
 
         // Header: column name and type
         let header = format!("{} ({})", self.column_name, self.data_type);
-        let header_style = Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD);
         frame.render_widget(
-            Paragraph::new(header).style(header_style),
+            Paragraph::new(header).style(theme.inspector_header),
             Rect::new(area.x, area.y, area.width, 1),
         );
 
@@ -145,9 +142,8 @@ impl Component for Inspector {
                 let line = lines[line_idx];
                 let width = content_area.width as usize;
                 let display: String = line.chars().take(width).collect();
-                let style = Style::default().fg(Color::White);
                 frame.render_widget(
-                    Paragraph::new(display).style(style),
+                    Paragraph::new(display).style(theme.inspector_text),
                     Rect::new(content_area.x, y, content_area.width, 1),
                 );
             }
@@ -202,7 +198,7 @@ mod tests {
     }
 
     #[test]
-    fn test_scroll() {
+    fn test_scroll_boundaries() {
         let mut inspector = Inspector::new();
         let content = (0..50)
             .map(|i| format!("line {}", i))
@@ -210,8 +206,51 @@ mod tests {
             .join("\n");
         inspector.show(content, "col".to_string(), "text".to_string());
         assert_eq!(inspector.scroll_offset, 0);
+        assert_eq!(inspector.total_lines, 50);
 
-        inspector.scroll_offset = 10;
-        assert_eq!(inspector.scroll_offset, 10);
+        // scroll_up at top stays at 0
+        inspector.scroll_up();
+        assert_eq!(inspector.scroll_offset, 0);
+
+        // scroll_down increments
+        inspector.scroll_down();
+        assert_eq!(inspector.scroll_offset, 1);
+
+        // scroll_to_bottom goes to last line
+        inspector.scroll_to_bottom();
+        assert_eq!(inspector.scroll_offset, 49);
+
+        // scroll_down at bottom stays at bottom
+        inspector.scroll_down();
+        assert_eq!(inspector.scroll_offset, 49);
+
+        // scroll_to_top resets
+        inspector.scroll_to_top();
+        assert_eq!(inspector.scroll_offset, 0);
+
+        // page_down from 0 goes to 20
+        inspector.page_down();
+        assert_eq!(inspector.scroll_offset, 20);
+
+        // page_up from 20 goes to 0
+        inspector.page_up();
+        assert_eq!(inspector.scroll_offset, 0);
+
+        // page_up at top stays at 0
+        inspector.page_up();
+        assert_eq!(inspector.scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_scroll_no_content() {
+        let mut inspector = Inspector::new();
+        // Should not panic on empty inspector
+        inspector.scroll_up();
+        inspector.scroll_down();
+        inspector.page_up();
+        inspector.page_down();
+        inspector.scroll_to_top();
+        inspector.scroll_to_bottom();
+        assert_eq!(inspector.scroll_offset, 0);
     }
 }
