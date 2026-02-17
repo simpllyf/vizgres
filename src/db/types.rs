@@ -25,27 +25,9 @@ pub struct ColumnDef {
     pub name: String,
     /// Data type
     pub data_type: DataType,
-    /// Whether column can contain NULL
+    /// Whether column can contain NULL (reserved for future use)
+    #[allow(dead_code)]
     pub nullable: bool,
-}
-
-/// Column metadata (more detailed than ColumnDef)
-#[derive(Debug, Clone)]
-pub struct ColumnInfo {
-    /// Column name
-    pub name: String,
-    /// Data type
-    pub data_type: DataType,
-    /// Whether column is nullable
-    pub nullable: bool,
-    /// Default value expression
-    pub default: Option<String>,
-    /// Is this a primary key column?
-    pub is_primary_key: bool,
-    /// Is this column part of a unique constraint?
-    pub is_unique: bool,
-    /// Column ordinal position
-    pub ordinal_position: i32,
 }
 
 /// Database data types
@@ -86,7 +68,8 @@ pub enum DataType {
     // UUID
     Uuid,
 
-    // Array type
+    // Array type (reserved for future array support)
+    #[allow(dead_code)]
     Array(Box<DataType>),
 
     // Other/unknown types
@@ -130,7 +113,8 @@ pub enum CellValue {
     /// UUID value
     Uuid(String),
 
-    /// Array value
+    /// Array value (reserved for future array support)
+    #[allow(dead_code)]
     Array(Vec<CellValue>),
 }
 

@@ -4,7 +4,7 @@
 
 use crate::commands::{Command, parse_command};
 use crate::config::ConnectionConfig;
-use crate::db::{PostgresProvider, QueryResults, SchemaTree};
+use crate::db::{PostgresProvider, QueryResults};
 use crate::error::Result;
 use crate::ui::Component;
 use crate::ui::command_bar::CommandBar;
@@ -70,14 +70,14 @@ pub enum StatusLevel {
 
 /// Application events from the event loop
 pub enum AppEvent {
+    /// Keyboard input event
     Key(KeyEvent),
-    Resize(u16, u16),
-    ConnectionEstablished(String),
-    ConnectionFailed(String),
+    /// Terminal resize event
+    Resize,
+    /// Query execution completed successfully
     QueryCompleted(QueryResults),
+    /// Query execution failed
     QueryFailed(String),
-    SchemaLoaded(SchemaTree),
-    SchemaLoadFailed(String),
 }
 
 /// Actions returned by event handlers for the main loop to execute
@@ -111,16 +111,7 @@ impl App {
     pub fn handle_event(&mut self, event: AppEvent) -> Result<Action> {
         match event {
             AppEvent::Key(key) => Ok(self.handle_key(key)),
-            AppEvent::Resize(_, _) => Ok(Action::None),
-            AppEvent::ConnectionEstablished(name) => {
-                self.connection_name = Some(name.clone());
-                self.set_status(format!("Connected to {}", name), StatusLevel::Success);
-                Ok(Action::LoadSchema)
-            }
-            AppEvent::ConnectionFailed(err) => {
-                self.set_status(format!("Connection failed: {}", err), StatusLevel::Error);
-                Ok(Action::None)
-            }
+            AppEvent::Resize => Ok(Action::None),
             AppEvent::QueryCompleted(results) => {
                 let count = results.row_count;
                 let time = results.execution_time;
@@ -134,15 +125,6 @@ impl App {
             }
             AppEvent::QueryFailed(err) => {
                 self.set_status(format!("Query failed: {}", err), StatusLevel::Error);
-                Ok(Action::None)
-            }
-            AppEvent::SchemaLoaded(schema) => {
-                self.tree_browser.set_schema(schema);
-                self.set_status("Schema loaded".to_string(), StatusLevel::Info);
-                Ok(Action::None)
-            }
-            AppEvent::SchemaLoadFailed(err) => {
-                self.set_status(format!("Schema load failed: {}", err), StatusLevel::Error);
                 Ok(Action::None)
             }
         }

@@ -1,11 +1,13 @@
 //! UI theme and styling
 //!
 //! Defines colors, styles, and visual appearance for all UI components.
+//! Many fields are reserved for future theming features like syntax highlighting.
 
 use ratatui::style::{Color, Modifier, Style};
 
-/// Application theme
+/// Application theme (many fields reserved for future use)
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct Theme {
     // Panel borders
     pub border_focused: Style,

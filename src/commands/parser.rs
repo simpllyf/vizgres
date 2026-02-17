@@ -49,15 +49,6 @@ pub fn parse_command(input: &str) -> CommandResult<Command> {
     }
 }
 
-/// Command autocomplete helper
-pub struct CommandCompleter;
-
-impl CommandCompleter {
-    pub fn complete(_input: &str) -> Vec<String> {
-        Vec::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

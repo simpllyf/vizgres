@@ -58,10 +58,10 @@ impl TreeBrowser {
         self.selected = 0;
         self.scroll_offset = 0;
         // Auto-expand first schema
-        if let Some(ref tree) = self.schema {
-            if let Some(first) = tree.schemas.first() {
-                self.expanded.insert(first.name.clone());
-            }
+        if let Some(ref tree) = self.schema
+            && let Some(first) = tree.schemas.first()
+        {
+            self.expanded.insert(first.name.clone());
         }
         self.rebuild_items();
     }
@@ -126,26 +126,27 @@ impl TreeBrowser {
     }
 
     fn toggle_expand(&mut self) {
-        if let Some(item) = self.items.get(self.selected) {
-            if item.expandable {
-                let path = item.path.clone();
-                if self.expanded.contains(&path) {
-                    self.expanded.remove(&path);
-                } else {
-                    self.expanded.insert(path);
-                }
-                self.rebuild_items();
+        if let Some(item) = self.items.get(self.selected)
+            && item.expandable
+        {
+            let path = item.path.clone();
+            if self.expanded.contains(&path) {
+                self.expanded.remove(&path);
+            } else {
+                self.expanded.insert(path);
             }
+            self.rebuild_items();
         }
     }
 
     fn expand_current(&mut self) {
-        if let Some(item) = self.items.get(self.selected) {
-            if item.expandable && !self.expanded.contains(&item.path) {
-                let path = item.path.clone();
-                self.expanded.insert(path);
-                self.rebuild_items();
-            }
+        if let Some(item) = self.items.get(self.selected)
+            && item.expandable
+            && !self.expanded.contains(&item.path)
+        {
+            let path = item.path.clone();
+            self.expanded.insert(path);
+            self.rebuild_items();
         }
     }
 
@@ -165,17 +166,6 @@ impl TreeBrowser {
                     }
                 }
             }
-        }
-    }
-
-    fn ensure_visible(&mut self, visible_height: usize) {
-        if visible_height == 0 {
-            return;
-        }
-        if self.selected < self.scroll_offset {
-            self.scroll_offset = self.selected;
-        } else if self.selected >= self.scroll_offset + visible_height {
-            self.scroll_offset = self.selected - visible_height + 1;
         }
     }
 }
@@ -310,32 +300,17 @@ mod tests {
                 name: "public".to_string(),
                 tables: vec![Table {
                     name: "users".to_string(),
-                    schema: "public".to_string(),
                     columns: vec![
                         Column {
                             name: "id".to_string(),
                             data_type: DataType::Integer,
-                            nullable: false,
-                            default: None,
-                            is_primary_key: true,
-                            ordinal_position: 1,
                         },
                         Column {
                             name: "name".to_string(),
                             data_type: DataType::Text,
-                            nullable: true,
-                            default: None,
-                            is_primary_key: false,
-                            ordinal_position: 2,
                         },
                     ],
-                    indexes: vec![],
-                    constraints: vec![],
-                    row_estimate: 100,
                 }],
-                views: vec![],
-                functions: vec![],
-                sequences: vec![],
             }],
         }
     }
