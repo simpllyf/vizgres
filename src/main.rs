@@ -112,11 +112,6 @@ async fn run_app(
             ui::render::render(frame, &app);
         })?;
 
-        // Clear status after timeout
-        if app.should_clear_status() {
-            app.status_message = None;
-        }
-
         // Poll for events
         let action = tokio::select! {
             // Async events from spawned tasks

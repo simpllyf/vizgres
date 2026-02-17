@@ -148,29 +148,34 @@ fn render_inspector_popup(frame: &mut Frame, theme: &Theme, app: &App) {
 }
 
 /// Render the status bar with partitioned layout:
-/// Left: connection info + help hint (always visible)
-/// Right: toast notification (ephemeral, color-coded)
+/// Left: toast notification (ephemeral, dismissed on next keypress)
+/// Right: connection info (ambient context, always visible)
 fn render_status_bar(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     if app.command_bar.is_active() {
         app.command_bar.render(frame, area, true);
         return;
     }
 
-    // Left side: connection info
+    // Right side: connection info (always visible)
     let conn_info = if let Some(ref name) = app.connection_name {
         format!("[{}]", name)
     } else {
         "[disconnected]".to_string()
     };
-    let left_text = format!("{} | :help | Ctrl+Q", conn_info);
-    let left_len = left_text.len() as u16;
+    let right_len = conn_info.len() as u16;
+    let right_x = area.x + area.width.saturating_sub(right_len);
 
     frame.render_widget(
-        Paragraph::new(left_text).style(Style::default().fg(Color::DarkGray)),
-        Rect::new(area.x, area.y, left_len.min(area.width), 1),
+        Paragraph::new(conn_info).style(Style::default().fg(Color::DarkGray)),
+        Rect::new(right_x, area.y, right_len.min(area.width), 1),
     );
 
-    // Right side: toast message (if any)
+    // Left side: toast message or default help hint
+    let max_left_width = area.width.saturating_sub(right_len + 2);
+    if max_left_width < 4 {
+        return;
+    }
+
     if let Some(ref status) = app.status_message {
         let style = match status.level {
             StatusLevel::Info => theme.status_info,
@@ -179,21 +184,22 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             StatusLevel::Error => theme.status_error,
         };
 
-        let max_toast_width = area.width.saturating_sub(left_len + 2);
-        if max_toast_width > 4 {
-            let msg = &status.message;
-            let display = if msg.len() > max_toast_width as usize {
-                format!("{}...", &msg[..max_toast_width as usize - 3])
-            } else {
-                msg.clone()
-            };
-            let toast_len = display.len() as u16;
-            let toast_x = area.x + area.width - toast_len;
+        let msg = &status.message;
+        let display = if msg.len() > max_left_width as usize {
+            format!("{}...", &msg[..max_left_width as usize - 3])
+        } else {
+            msg.clone()
+        };
 
-            frame.render_widget(
-                Paragraph::new(display).style(style),
-                Rect::new(toast_x, area.y, toast_len, 1),
-            );
-        }
+        frame.render_widget(
+            Paragraph::new(display).style(style),
+            Rect::new(area.x, area.y, max_left_width, 1),
+        );
+    } else {
+        frame.render_widget(
+            Paragraph::new(":help | F5=run | Ctrl+Q=quit")
+                .style(Style::default().fg(Color::DarkGray)),
+            Rect::new(area.x, area.y, max_left_width, 1),
+        );
     }
 }

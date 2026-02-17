@@ -12,7 +12,6 @@ use crate::ui::inspector::Inspector;
 use crate::ui::results::ResultsViewer;
 use crate::ui::tree::TreeBrowser;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use std::time::Duration;
 
 /// Main application state
 pub struct App {
@@ -59,7 +58,6 @@ pub enum PanelFocus {
 pub struct StatusMessage {
     pub message: String,
     pub level: StatusLevel,
-    pub timestamp: std::time::Instant,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,6 +132,9 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Action {
+        // Clear toast on any user action
+        self.status_message = None;
+
         // Global keybindings (always active)
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('q') {
             return Action::Quit;
@@ -340,24 +341,7 @@ impl App {
     }
 
     pub fn set_status(&mut self, message: String, level: StatusLevel) {
-        self.status_message = Some(StatusMessage {
-            message,
-            level,
-            timestamp: std::time::Instant::now(),
-        });
-    }
-
-    pub fn should_clear_status(&self) -> bool {
-        if let Some(msg) = &self.status_message {
-            let timeout = match msg.level {
-                StatusLevel::Error => Duration::from_secs(8),
-                StatusLevel::Warning => Duration::from_secs(5),
-                _ => Duration::from_secs(3),
-            };
-            msg.timestamp.elapsed() > timeout
-        } else {
-            false
-        }
+        self.status_message = Some(StatusMessage { message, level });
     }
 
     fn copy_to_clipboard(&mut self, text: &str) {
@@ -405,8 +389,12 @@ mod tests {
     }
 
     #[test]
-    fn test_status_message_timeout() {
-        let app = App::new();
-        assert!(!app.should_clear_status());
+    fn test_status_cleared_on_set() {
+        let mut app = App::new();
+        assert!(app.status_message.is_none());
+
+        app.set_status("test".to_string(), StatusLevel::Info);
+        assert!(app.status_message.is_some());
+        assert_eq!(app.status_message.as_ref().unwrap().message, "test");
     }
 }
