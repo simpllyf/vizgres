@@ -125,7 +125,9 @@ impl App {
                 Ok(Action::None)
             }
             AppEvent::QueryFailed(err) => {
-                self.set_status(format!("Query failed: {}", err), StatusLevel::Error);
+                self.results_viewer.set_error(err.clone());
+                self.set_status("Query failed".to_string(), StatusLevel::Error);
+                self.focus = PanelFocus::ResultsViewer;
                 Ok(Action::None)
             }
         }
@@ -347,7 +349,12 @@ impl App {
 
     pub fn should_clear_status(&self) -> bool {
         if let Some(msg) = &self.status_message {
-            msg.timestamp.elapsed() > Duration::from_secs(10)
+            let timeout = match msg.level {
+                StatusLevel::Error => Duration::from_secs(8),
+                StatusLevel::Warning => Duration::from_secs(5),
+                _ => Duration::from_secs(3),
+            };
+            msg.timestamp.elapsed() > timeout
         } else {
             false
         }
