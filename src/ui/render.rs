@@ -23,7 +23,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         app.focus == PanelFocus::TreeBrowser,
         |f, inner| {
             app.tree_browser
-                .render(f, inner, app.focus == PanelFocus::TreeBrowser);
+                .render(f, inner, app.focus == PanelFocus::TreeBrowser, &theme);
         },
     );
 
@@ -36,7 +36,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         app.focus == PanelFocus::QueryEditor,
         |f, inner| {
             app.editor
-                .render(f, inner, app.focus == PanelFocus::QueryEditor);
+                .render(f, inner, app.focus == PanelFocus::QueryEditor, &theme);
         },
     );
 
@@ -49,7 +49,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         app.focus == PanelFocus::ResultsViewer,
         |f, inner| {
             app.results_viewer
-                .render(f, inner, app.focus == PanelFocus::ResultsViewer);
+                .render(f, inner, app.focus == PanelFocus::ResultsViewer, &theme);
         },
     );
 
@@ -154,7 +154,7 @@ fn render_inspector_popup(frame: &mut Frame, theme: &Theme, app: &App) {
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
     app.inspector
-        .render(frame, inner, app.focus == PanelFocus::Inspector);
+        .render(frame, inner, app.focus == PanelFocus::Inspector, theme);
 }
 
 /// Render the status bar with partitioned layout:
@@ -162,7 +162,7 @@ fn render_inspector_popup(frame: &mut Frame, theme: &Theme, app: &App) {
 /// Right: connection info (ambient context, always visible)
 fn render_status_bar(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     if app.command_bar.is_active() {
-        app.command_bar.render(frame, area, true);
+        app.command_bar.render(frame, area, true, theme);
         return;
     }
 

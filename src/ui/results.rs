@@ -4,6 +4,7 @@
 
 use crate::db::types::{CellValue, QueryResults};
 use crate::ui::Component;
+use crate::ui::theme::Theme;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
@@ -182,7 +183,7 @@ impl Component for ResultsViewer {
         }
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect, focused: bool) {
+    fn render(&self, frame: &mut Frame, area: Rect, focused: bool, _theme: &Theme) {
         // Show error if present
         if let Some(ref error) = self.error {
             let lines: Vec<Line> = vec![

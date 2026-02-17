@@ -14,11 +14,13 @@ pub mod tree;
 use crossterm::event::KeyEvent;
 use ratatui::{Frame, layout::Rect};
 
+use crate::ui::theme::Theme;
+
 /// Trait for UI components
 pub trait Component {
     /// Handle a key event, return true if consumed
     fn handle_key(&mut self, key: KeyEvent) -> bool;
 
     /// Render the component to the frame
-    fn render(&self, frame: &mut Frame, area: Rect, focused: bool);
+    fn render(&self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme);
 }

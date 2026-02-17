@@ -4,6 +4,7 @@
 //! JSON values are pretty-printed. Scrollable for large content.
 
 use crate::ui::Component;
+use crate::ui::theme::Theme;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
@@ -112,7 +113,7 @@ impl Component for Inspector {
         }
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect, _focused: bool) {
+    fn render(&self, frame: &mut Frame, area: Rect, _focused: bool, _theme: &Theme) {
         let content = match &self.content {
             Some(c) => c,
             None => return,

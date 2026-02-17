@@ -3,6 +3,7 @@
 //! Multi-line SQL editor with line numbers and cursor.
 
 use crate::ui::Component;
+use crate::ui::theme::Theme;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
@@ -206,7 +207,7 @@ impl Component for QueryEditor {
         }
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect, focused: bool) {
+    fn render(&self, frame: &mut Frame, area: Rect, focused: bool, _theme: &Theme) {
         if area.width < 2 || area.height == 0 {
             return;
         }

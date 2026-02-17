@@ -4,6 +4,7 @@
 
 use crate::db::schema::SchemaTree;
 use crate::ui::Component;
+use crate::ui::theme::Theme;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
@@ -212,7 +213,7 @@ impl Component for TreeBrowser {
         }
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect, focused: bool) {
+    fn render(&self, frame: &mut Frame, area: Rect, focused: bool, _theme: &Theme) {
         if self.items.is_empty() {
             let msg = if self.schema.is_some() {
                 "No schemas found"

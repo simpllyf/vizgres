@@ -3,6 +3,7 @@
 //! Input bar for entering commands (starting with /)
 
 use crate::ui::Component;
+use crate::ui::theme::Theme;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
@@ -89,7 +90,7 @@ impl Component for CommandBar {
         }
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect, _focused: bool) {
+    fn render(&self, frame: &mut Frame, area: Rect, _focused: bool, _theme: &Theme) {
         if !self.active {
             return;
         }
