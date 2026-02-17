@@ -2,8 +2,8 @@
 #
 # Copy this file to ~/.vizgres/connections.toml and customize for your databases.
 #
-# SECURITY NOTE: Passwords should NOT be stored in this file in production.
-# Use a keychain/credential manager instead (Phase 8 feature).
+# SECURITY NOTE: Avoid storing passwords in this file. Use environment variables
+# or pass credentials via connection URL instead.
 
 [[connections]]
 name = "local"

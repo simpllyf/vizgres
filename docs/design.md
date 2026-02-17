@@ -92,9 +92,7 @@ The MVP provides: connect to a database, browse schema, write and execute querie
 | Arrows | Editor | Cursor movement |
 | Home/End | Editor | Start/end of line |
 
-## MVP Limitations
-
-Things the MVP intentionally does not handle:
+## Current Limitations
 
 - No syntax highlighting in the editor
 - No SQL autocomplete
@@ -104,51 +102,3 @@ Things the MVP intentionally does not handle:
 - No resizable panels
 - No mouse support
 - Queries block the UI while running (no async cancellation)
-
-## Post-MVP Roadmap
-
-Roughly in priority order. Each item is independent and can be tackled standalone.
-
-### Tier 1: Daily-driver essentials
-
-| Feature | What | Key files |
-|---------|------|-----------|
-| **SQL syntax highlighting** | Keyword/string/number coloring in editor | `ui/editor.rs` — tokenize lines, apply styles per token |
-| **Query history** | Up/Down in editor recalls previous queries | `app.rs` — `Vec<String>` history, `ui/editor.rs` — recall keybinds |
-| **Async query execution** | Non-blocking queries with cancel (Ctrl+C) | `main.rs` — spawn query in tokio task, add `Action::CancelQuery` |
-| **Connection profiles** | Save/load connections from `~/.vizgres/connections.toml` | `config/connections.rs` — already has `load_connections()`, wire into `:connect <name>` |
-| **Error location in editor** | Highlight the line/column where a SQL error occurred | `app.rs` — parse pg error position, `ui/editor.rs` — error gutter |
-
-### Tier 2: Productivity features
-
-| Feature | What | Key files |
-|---------|------|-----------|
-| **Schema autocomplete** | Tab-complete table/column names in editor | New `sql/completer.rs` — build from SchemaTree, `ui/editor.rs` — popup widget |
-| **EXPLAIN plan viewer** | Visual query plan display | New `ui/explain.rs`, `db/postgres.rs` — `EXPLAIN (FORMAT JSON)` |
-| **Export results** | CSV, JSON, SQL INSERT export | New `export.rs`, `commands/parser.rs` — `:export csv filename` |
-| **Multiple result tabs** | Keep results from previous queries | `app.rs` — `Vec<QueryResults>`, tab switching keybinds |
-| **Table data preview** | Enter on table in tree → `SELECT * FROM table LIMIT 100` | `app.rs` — wire tree Enter to auto-query |
-| **Find/replace in editor** | `/pattern` search, `Ctrl+H` replace | `ui/editor.rs` — search state, highlight matches |
-| **Resizable panels** | Drag panel borders or `Ctrl+Arrow` to resize | `ui/layout.rs` — store user-adjusted widths/heights |
-
-### Tier 3: Power features
-
-| Feature | What |
-|---------|------|
-| **Transaction support** | `:begin`, `:commit`, `:rollback` commands, transaction indicator in status bar |
-| **Multi-database** | Multiple simultaneous connections, switch with `:use <name>` |
-| **Vim mode** | Full vim keybindings in editor (normal/insert/visual modes) |
-| **SQL formatter** | `sqlformat` crate already in deps — wire to `:format` command |
-| **Saved queries** | `:save <name>`, `:load <name>` for frequently-used queries |
-| **Column stats** | `Ctrl+I` on column in results → count, distinct, min, max, nulls |
-| **Mouse support** | Click to focus panel, click cell to select, scroll wheel |
-
-### Architecture notes for future work
-
-**Adding a new UI panel**: Create `src/ui/foo.rs` implementing `Component` trait → add field to `App` → add `PanelFocus::Foo` variant → wire key routing in `app.rs` → render in `ui/render.rs`.
-
-**Adding a new command**: Add variant to `Command` enum in `commands/parser.rs` → match in `parse_command()` → handle in `App::execute_command()`.
-
-**Making queries async**: The main loop currently awaits queries inline. To make them non-blocking: spawn the query as a tokio task, send `AppEvent::QueryCompleted` on the channel when done, add `AppEvent::QueryCancelled` and wire Ctrl+C to drop the task handle.
-
-**Trait abstraction**: If a second database backend is ever needed, extract `PostgresProvider`'s public methods into a `DatabaseProvider` trait. Until then, the concrete struct is simpler.
