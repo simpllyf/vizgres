@@ -39,6 +39,9 @@ pub struct App {
     /// Status message to display
     pub status_message: Option<StatusMessage>,
 
+    /// Persistent clipboard handle (kept alive to avoid Linux clipboard drop race)
+    clipboard: Option<arboard::Clipboard>,
+
     /// Whether the application is running
     pub running: bool,
 }
@@ -103,6 +106,7 @@ impl App {
             command_bar: CommandBar::new(),
             inspector: Inspector::new(),
             status_message: None,
+            clipboard: arboard::Clipboard::new().ok(),
             running: true,
         }
     }
@@ -386,14 +390,15 @@ impl App {
     }
 
     fn copy_to_clipboard(&mut self, text: &str) {
-        match arboard::Clipboard::new() {
-            Ok(mut clipboard) => match clipboard.set_text(text) {
+        if let Some(clipboard) = self.clipboard.as_mut() {
+            match clipboard.set_text(text) {
                 Ok(()) => self.set_status("Copied to clipboard".to_string(), StatusLevel::Success),
-                Err(e) => self.set_status(format!("Clipboard error: {}", e), StatusLevel::Warning),
-            },
-            Err(_) => {
-                self.set_status("Clipboard unavailable".to_string(), StatusLevel::Warning);
+                Err(e) => {
+                    self.set_status(format!("Clipboard error: {}", e), StatusLevel::Warning);
+                }
             }
+        } else {
+            self.set_status("Clipboard unavailable".to_string(), StatusLevel::Warning);
         }
     }
 }
