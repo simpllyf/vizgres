@@ -120,10 +120,9 @@ Before committing:
 - `Ctrl+Q` — Quit
 - `Ctrl+P` — Open command bar (works from any panel)
 - `Tab` / `Shift+Tab` — Cycle panel focus
-- `/` — Open command bar (from tree/results, or empty editor)
 
 ### Query Editor
-- `F5` / `Ctrl+J` / `Ctrl+Enter` — Execute query
+- `F5` / `Ctrl+Enter` — Execute query
 - `Ctrl+L` — Clear editor
 - `Delete` — Forward delete
 

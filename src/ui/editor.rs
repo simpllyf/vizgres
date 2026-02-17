@@ -33,10 +33,6 @@ impl QueryEditor {
         self.lines.join("\n")
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.lines.len() == 1 && self.lines[0].is_empty()
-    }
-
     /// Clear all editor content
     pub fn clear(&mut self) {
         self.lines = vec![String::new()];
@@ -271,7 +267,6 @@ mod tests {
     #[test]
     fn test_editor_new() {
         let editor = QueryEditor::new();
-        assert!(editor.is_empty());
         assert_eq!(editor.get_content(), "");
     }
 
@@ -338,9 +333,7 @@ mod tests {
     fn test_clear() {
         let mut editor = QueryEditor::new();
         editor.set_content("SELECT * FROM users".to_string());
-        assert!(!editor.is_empty());
         editor.clear();
-        assert!(editor.is_empty());
         assert_eq!(editor.get_content(), "");
     }
 }

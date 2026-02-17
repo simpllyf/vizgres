@@ -207,7 +207,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         );
     } else {
         frame.render_widget(
-            Paragraph::new("/help | F5=run | Ctrl+Q=quit")
+            Paragraph::new("Ctrl+P=commands | F5=run | Ctrl+Q=quit")
                 .style(Style::default().fg(Color::DarkGray)),
             Rect::new(area.x, area.y, max_left_width, 1),
         );

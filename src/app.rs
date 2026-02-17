@@ -177,10 +177,9 @@ impl App {
     }
 
     fn handle_editor_key(&mut self, key: KeyEvent) -> Action {
-        // Execute query: Ctrl+Enter, Ctrl+J, or F5
+        // Execute query: Ctrl+Enter or F5
         let is_execute = key.code == KeyCode::F(5)
-            || (key.modifiers.contains(KeyModifiers::CONTROL)
-                && (key.code == KeyCode::Enter || key.code == KeyCode::Char('j')));
+            || (key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Enter);
         if is_execute {
             let sql = self.editor.get_content();
             if !sql.trim().is_empty() {
@@ -196,23 +195,11 @@ impl App {
             return Action::None;
         }
 
-        // `/` when editor is empty opens command bar
-        if key.code == KeyCode::Char('/') && self.editor.is_empty() {
-            self.open_command_bar();
-            return Action::None;
-        }
-
         self.editor.handle_key(key);
         Action::None
     }
 
     fn handle_results_key(&mut self, key: KeyEvent) -> Action {
-        // `/` opens command bar
-        if key.code == KeyCode::Char('/') {
-            self.open_command_bar();
-            return Action::None;
-        }
-
         // Enter opens inspector
         if key.code == KeyCode::Enter {
             if let Some((value, col_name, data_type)) = self.results_viewer.selected_cell_info() {
@@ -242,12 +229,6 @@ impl App {
     }
 
     fn handle_tree_key(&mut self, key: KeyEvent) -> Action {
-        // `/` opens command bar
-        if key.code == KeyCode::Char('/') {
-            self.open_command_bar();
-            return Action::None;
-        }
-
         self.tree_browser.handle_key(key);
         Action::None
     }

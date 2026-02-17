@@ -196,7 +196,7 @@ impl Component for TreeBrowser {
                 }
                 true
             }
-            KeyCode::Enter | KeyCode::Char('l') => {
+            KeyCode::Enter => {
                 self.expand_current();
                 true
             }
