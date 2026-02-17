@@ -31,6 +31,28 @@ struct Cli {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    // Get connection URL: from CLI arg or prompt interactively
+    let url = match cli.url {
+        Some(u) => u,
+        None => prompt_for_url()?,
+    };
+
+    // Parse and validate the URL before entering TUI
+    let conn_config = config::ConnectionConfig::from_url(&url)
+        .map_err(|e| anyhow::anyhow!("Invalid connection URL: {}", e))?;
+
+    // Connect to the database before entering TUI
+    eprintln!("Connecting to {}...", conn_config.name);
+    let mut provider = db::PostgresProvider::connect(&conn_config)
+        .await
+        .map_err(|e| anyhow::anyhow!("Connection failed: {}", e))?;
+
+    // Load schema
+    let schema = provider
+        .get_schema()
+        .await
+        .map_err(|e| anyhow::anyhow!("Schema load failed: {}", e))?;
+
     // Set up panic hook to restore terminal before panic message
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
@@ -47,7 +69,7 @@ async fn main() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     // Run the app (separated so we can always clean up)
-    let result = run_app(&mut terminal, cli).await;
+    let result = run_app(&mut terminal, provider, conn_config.name, schema).await;
 
     // Restore terminal
     disable_raw_mode()?;
@@ -57,60 +79,31 @@ async fn main() -> Result<()> {
     result
 }
 
+/// Prompt the user for a connection URL on stdin (before TUI starts)
+fn prompt_for_url() -> Result<String> {
+    eprint!("PostgreSQL URL: ");
+    let mut url = String::new();
+    std::io::stdin().read_line(&mut url)?;
+    let url = url.trim().to_string();
+    if url.is_empty() {
+        anyhow::bail!("No connection URL provided. Usage: vizgres <postgres://...>");
+    }
+    Ok(url)
+}
+
 async fn run_app(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
-    cli: Cli,
+    provider: db::PostgresProvider,
+    connection_name: String,
+    schema: db::schema::SchemaTree,
 ) -> Result<()> {
     let mut app = App::new();
+    app.connection = Some(provider);
+    app.connection_name = Some(connection_name);
+    app.tree_browser.set_schema(schema);
 
     // Channel for async events (db results, etc.)
-    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<AppEvent>();
-
-    // If a URL was provided on the command line, connect immediately
-    if let Some(ref url) = cli.url {
-        match config::ConnectionConfig::from_url(url) {
-            Ok(config) => {
-                let name = config.name.clone();
-                app.set_status(format!("Connecting to {}...", name), app::StatusLevel::Info);
-
-                match db::PostgresProvider::connect(&config).await {
-                    Ok(provider) => {
-                        app.connection = Some(provider);
-                        app.connection_name = Some(name.clone());
-                        app.set_status(format!("Connected to {}", name), app::StatusLevel::Success);
-
-                        // Load schema immediately
-                        if let Some(ref mut conn) = app.connection {
-                            match conn.get_schema().await {
-                                Ok(schema) => {
-                                    app.tree_browser.set_schema(schema);
-                                    app.set_status(
-                                        "Schema loaded".to_string(),
-                                        app::StatusLevel::Info,
-                                    );
-                                }
-                                Err(e) => {
-                                    app.set_status(
-                                        format!("Schema load failed: {}", e),
-                                        app::StatusLevel::Error,
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        app.set_status(
-                            format!("Connection failed: {}", e),
-                            app::StatusLevel::Error,
-                        );
-                    }
-                }
-            }
-            Err(e) => {
-                app.set_status(format!("Invalid URL: {}", e), app::StatusLevel::Error);
-            }
-        }
-    }
+    let (_event_tx, mut event_rx) = mpsc::unbounded_channel::<AppEvent>();
 
     // Main event loop
     loop {
@@ -141,7 +134,6 @@ async fn run_app(
             }) => {
                 match result {
                     Ok(Some(Some(Event::Key(key)))) => {
-                        // Only handle key press events (not release/repeat)
                         if key.kind == KeyEventKind::Press {
                             app.handle_event(AppEvent::Key(key))?
                         } else {
@@ -164,60 +156,15 @@ async fn run_app(
             }
             Action::ExecuteQuery(sql) => {
                 if let Some(ref conn) = app.connection {
-                    let tx = event_tx.clone();
                     match conn.execute_query(&sql).await {
                         Ok(results) => {
-                            let _ = tx.send(AppEvent::QueryCompleted(results));
+                            app.handle_event(AppEvent::QueryCompleted(results))?;
                         }
                         Err(e) => {
-                            let _ = tx.send(AppEvent::QueryFailed(e.to_string()));
+                            app.handle_event(AppEvent::QueryFailed(e.to_string()))?;
                         }
                     }
-                } else {
-                    app.set_status(
-                        "Not connected to a database".to_string(),
-                        app::StatusLevel::Error,
-                    );
                 }
-            }
-            Action::Connect(config) => {
-                let name = config.name.clone();
-                match db::PostgresProvider::connect(&config).await {
-                    Ok(provider) => {
-                        app.connection = Some(provider);
-                        app.connection_name = Some(name.clone());
-                        app.set_status(format!("Connected to {}", name), app::StatusLevel::Success);
-
-                        // Auto-load schema
-                        if let Some(ref mut conn) = app.connection {
-                            match conn.get_schema().await {
-                                Ok(schema) => {
-                                    app.tree_browser.set_schema(schema);
-                                    app.set_status(
-                                        "Schema loaded".to_string(),
-                                        app::StatusLevel::Info,
-                                    );
-                                }
-                                Err(e) => {
-                                    app.set_status(
-                                        format!("Schema load failed: {}", e),
-                                        app::StatusLevel::Error,
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        app.set_status(
-                            format!("Connection failed: {}", e),
-                            app::StatusLevel::Error,
-                        );
-                    }
-                }
-            }
-            Action::Disconnect => {
-                app.connection = None;
-                app.connection_name = None;
             }
             Action::LoadSchema => {
                 if let Some(ref mut conn) = app.connection {
@@ -225,11 +172,11 @@ async fn run_app(
                     match conn.get_schema().await {
                         Ok(schema) => {
                             app.tree_browser.set_schema(schema);
-                            app.set_status("Schema loaded".to_string(), app::StatusLevel::Info);
+                            app.set_status("Schema refreshed".to_string(), app::StatusLevel::Info);
                         }
                         Err(e) => {
                             app.set_status(
-                                format!("Schema load failed: {}", e),
+                                format!("Schema refresh failed: {}", e),
                                 app::StatusLevel::Error,
                             );
                         }

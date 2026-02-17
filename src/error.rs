@@ -97,6 +97,7 @@ pub enum CommandError {
     Unknown(String),
 
     /// Missing required argument
+    #[allow(dead_code)]
     #[error("Missing required argument for command")]
     MissingArgument,
 

@@ -3,7 +3,6 @@
 //! Central state machine: events come in, state updates, actions go out.
 
 use crate::commands::{Command, parse_command};
-use crate::config::ConnectionConfig;
 use crate::db::{PostgresProvider, QueryResults};
 use crate::error::Result;
 use crate::ui::Component;
@@ -86,8 +85,6 @@ pub enum AppEvent {
 /// Actions returned by event handlers for the main loop to execute
 pub enum Action {
     ExecuteQuery(String),
-    Connect(ConnectionConfig),
-    Disconnect,
     LoadSchema,
     Quit,
     None,
@@ -181,9 +178,13 @@ impl App {
             return Action::None;
         }
 
-        // `:` when at start of empty editor opens command bar
-        // But we don't intercept `:` in the editor - it's a valid SQL character
-        // Instead, only intercept `:` when editor has no content
+        // Ctrl+L = clear editor
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('l') {
+            self.editor.clear();
+            return Action::None;
+        }
+
+        // `:` when editor is empty opens command bar
         if key.code == KeyCode::Char(':') && self.editor.is_empty() {
             self.previous_focus = self.focus;
             self.focus = PanelFocus::CommandBar;
@@ -298,54 +299,17 @@ impl App {
 
     fn execute_command(&mut self, command: Command) -> Action {
         match command {
-            Command::Connect(target) => {
-                // Try as URL first, then as profile name
-                let config =
-                    if target.starts_with("postgres://") || target.starts_with("postgresql://") {
-                        match ConnectionConfig::from_url(&target) {
-                            Ok(c) => c,
-                            Err(e) => {
-                                self.set_status(format!("Invalid URL: {}", e), StatusLevel::Error);
-                                return Action::None;
-                            }
-                        }
-                    } else {
-                        match crate::config::find_connection(&target) {
-                            Ok(c) => c,
-                            Err(e) => {
-                                self.set_status(
-                                    format!("Profile not found: {}", e),
-                                    StatusLevel::Error,
-                                );
-                                return Action::None;
-                            }
-                        }
-                    };
-                self.set_status(
-                    format!("Connecting to {}...", config.name),
-                    StatusLevel::Info,
-                );
-                Action::Connect(config)
-            }
-            Command::Disconnect => {
-                self.connection = None;
-                self.connection_name = None;
-                self.tree_browser.clear();
-                self.set_status("Disconnected".to_string(), StatusLevel::Info);
-                Action::Disconnect
-            }
             Command::Refresh => {
-                if self.connection.is_some() {
-                    self.set_status("Refreshing schema...".to_string(), StatusLevel::Info);
-                    Action::LoadSchema
-                } else {
-                    self.set_status("Not connected".to_string(), StatusLevel::Warning);
-                    Action::None
-                }
+                self.set_status("Refreshing schema...".to_string(), StatusLevel::Info);
+                Action::LoadSchema
+            }
+            Command::Clear => {
+                self.editor.clear();
+                Action::None
             }
             Command::Help => {
                 self.set_status(
-                    "Tab=cycle | Ctrl+Q=quit | F5/Ctrl+J=execute | :q=quit | :help"
+                    "Tab=cycle | Ctrl+Q=quit | F5/Ctrl+J=run | :clear | :refresh | :q=quit"
                         .to_string(),
                     StatusLevel::Info,
                 );

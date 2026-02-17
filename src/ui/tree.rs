@@ -66,6 +66,7 @@ impl TreeBrowser {
         self.rebuild_items();
     }
 
+    #[allow(dead_code)]
     pub fn clear(&mut self) {
         self.schema = None;
         self.items.clear();

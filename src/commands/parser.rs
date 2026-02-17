@@ -7,14 +7,11 @@ use crate::error::{CommandError, CommandResult};
 /// Commands that can be executed from the command bar
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
-    /// Connect to a saved connection profile or URL
-    Connect(String),
-
-    /// Disconnect from current database
-    Disconnect,
-
     /// Refresh database schema
     Refresh,
+
+    /// Clear the query editor
+    Clear,
 
     /// Show help
     Help,
@@ -34,15 +31,8 @@ pub fn parse_command(input: &str) -> CommandResult<Command> {
     }
 
     match parts[0] {
-        "connect" | "c" => {
-            let name = parts
-                .get(1)
-                .ok_or(CommandError::MissingArgument)?
-                .to_string();
-            Ok(Command::Connect(name))
-        }
-        "disconnect" | "dc" => Ok(Command::Disconnect),
         "refresh" | "r" => Ok(Command::Refresh),
+        "clear" | "cl" => Ok(Command::Clear),
         "help" | "h" | "?" => Ok(Command::Help),
         "quit" | "q" | "exit" => Ok(Command::Quit),
         unknown => Err(CommandError::Unknown(unknown.to_string())),
@@ -54,21 +44,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_connect_command() {
-        let cmd = parse_command(":connect prod").unwrap();
-        assert_eq!(cmd, Command::Connect("prod".to_string()));
+    fn test_parse_refresh() {
+        assert_eq!(parse_command(":refresh").unwrap(), Command::Refresh);
+        assert_eq!(parse_command(":r").unwrap(), Command::Refresh);
     }
 
     #[test]
-    fn test_parse_connect_short() {
-        let cmd = parse_command(":c mydb").unwrap();
-        assert_eq!(cmd, Command::Connect("mydb".to_string()));
-    }
-
-    #[test]
-    fn test_parse_disconnect() {
-        let cmd = parse_command(":disconnect").unwrap();
-        assert_eq!(cmd, Command::Disconnect);
+    fn test_parse_clear() {
+        assert_eq!(parse_command(":clear").unwrap(), Command::Clear);
+        assert_eq!(parse_command(":cl").unwrap(), Command::Clear);
     }
 
     #[test]
@@ -79,9 +63,10 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_missing_argument() {
-        let result = parse_command(":connect");
-        assert!(matches!(result, Err(CommandError::MissingArgument)));
+    fn test_parse_help() {
+        assert_eq!(parse_command(":help").unwrap(), Command::Help);
+        assert_eq!(parse_command(":h").unwrap(), Command::Help);
+        assert_eq!(parse_command(":?").unwrap(), Command::Help);
     }
 
     #[test]

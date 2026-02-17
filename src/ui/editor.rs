@@ -37,6 +37,13 @@ impl QueryEditor {
         self.lines.len() == 1 && self.lines[0].is_empty()
     }
 
+    /// Clear all editor content
+    pub fn clear(&mut self) {
+        self.lines = vec![String::new()];
+        self.cursor = (0, 0);
+        self.scroll_offset = 0;
+    }
+
     /// Set the editor content (used for testing and future features like query history)
     #[allow(dead_code)]
     pub fn set_content(&mut self, content: String) {
@@ -325,5 +332,15 @@ mod tests {
         editor.set_content("SELECT *\nFROM users".to_string());
         assert_eq!(editor.get_content(), "SELECT *\nFROM users");
         assert_eq!(editor.lines.len(), 2);
+    }
+
+    #[test]
+    fn test_clear() {
+        let mut editor = QueryEditor::new();
+        editor.set_content("SELECT * FROM users".to_string());
+        assert!(!editor.is_empty());
+        editor.clear();
+        assert!(editor.is_empty());
+        assert_eq!(editor.get_content(), "");
     }
 }
