@@ -40,6 +40,10 @@ impl CommandBar {
     pub fn is_active(&self) -> bool {
         self.active
     }
+
+    pub fn input_text(&self) -> &str {
+        &self.input
+    }
 }
 
 impl Default for CommandBar {
@@ -50,12 +54,9 @@ impl Default for CommandBar {
 
 impl Component for CommandBar {
     fn handle_key(&mut self, key: KeyEvent) -> ComponentAction {
+        // Submit (Enter) and Dismiss (Esc) are handled by KeyMap.
+        // Only free-form text input is handled here.
         match key.code {
-            KeyCode::Enter => {
-                let input = self.input.clone();
-                ComponentAction::ExecuteCommand(input)
-            }
-            KeyCode::Esc => ComponentAction::DismissCommandBar,
             KeyCode::Char(c) => {
                 self.input.insert(self.cursor, c);
                 self.cursor += 1;

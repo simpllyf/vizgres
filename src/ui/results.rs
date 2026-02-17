@@ -6,7 +6,7 @@ use crate::db::types::{CellValue, QueryResults};
 use crate::ui::Component;
 use crate::ui::ComponentAction;
 use crate::ui::theme::Theme;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::KeyEvent;
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
@@ -96,6 +96,59 @@ impl ResultsViewer {
         Some(parts.join("\t"))
     }
 
+    pub fn move_up(&mut self) {
+        if self.selected_row > 0 {
+            self.selected_row -= 1;
+        }
+    }
+
+    pub fn move_down(&mut self) {
+        let count = self.row_count();
+        if count > 0 && self.selected_row < count - 1 {
+            self.selected_row += 1;
+        }
+    }
+
+    pub fn move_left(&mut self) {
+        if self.selected_col > 0 {
+            self.selected_col -= 1;
+        }
+    }
+
+    pub fn move_right(&mut self) {
+        let count = self.col_count();
+        if self.selected_col < count.saturating_sub(1) {
+            self.selected_col += 1;
+        }
+    }
+
+    pub fn page_up(&mut self) {
+        self.selected_row = self.selected_row.saturating_sub(20);
+    }
+
+    pub fn page_down(&mut self) {
+        let count = self.row_count();
+        self.selected_row = (self.selected_row + 20).min(count.saturating_sub(1));
+    }
+
+    pub fn go_to_top(&mut self) {
+        self.selected_row = 0;
+    }
+
+    pub fn go_to_bottom(&mut self) {
+        let count = self.row_count();
+        self.selected_row = count.saturating_sub(1);
+    }
+
+    pub fn go_to_home(&mut self) {
+        self.selected_col = 0;
+    }
+
+    pub fn go_to_end(&mut self) {
+        let count = self.col_count();
+        self.selected_col = count.saturating_sub(1);
+    }
+
     fn row_count(&self) -> usize {
         self.results.as_ref().map_or(0, |r| r.rows.len())
     }
@@ -124,85 +177,10 @@ impl Default for ResultsViewer {
 }
 
 impl Component for ResultsViewer {
-    fn handle_key(&mut self, key: KeyEvent) -> ComponentAction {
-        let row_count = self.row_count();
-        let col_count = self.col_count();
-        if row_count == 0 {
-            return ComponentAction::Ignored;
-        }
-
-        match key.code {
-            KeyCode::Enter => {
-                if let Some((value, col_name, data_type)) = self.selected_cell_info() {
-                    ComponentAction::OpenInspector(value, col_name, data_type)
-                } else {
-                    ComponentAction::Consumed
-                }
-            }
-            KeyCode::Char('y') if !key.modifiers.contains(KeyModifiers::SHIFT) => {
-                if let Some(text) = self.selected_cell_text() {
-                    ComponentAction::CopyToClipboard(text)
-                } else {
-                    ComponentAction::Consumed
-                }
-            }
-            KeyCode::Char('Y') => {
-                if let Some(text) = self.selected_row_text() {
-                    ComponentAction::CopyToClipboard(text)
-                } else {
-                    ComponentAction::Consumed
-                }
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if self.selected_row < row_count - 1 {
-                    self.selected_row += 1;
-                }
-                ComponentAction::Consumed
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                if self.selected_row > 0 {
-                    self.selected_row -= 1;
-                }
-                ComponentAction::Consumed
-            }
-            KeyCode::Right | KeyCode::Char('l') => {
-                if self.selected_col < col_count.saturating_sub(1) {
-                    self.selected_col += 1;
-                }
-                ComponentAction::Consumed
-            }
-            KeyCode::Left | KeyCode::Char('h') => {
-                if self.selected_col > 0 {
-                    self.selected_col -= 1;
-                }
-                ComponentAction::Consumed
-            }
-            KeyCode::Home => {
-                self.selected_col = 0;
-                ComponentAction::Consumed
-            }
-            KeyCode::End => {
-                self.selected_col = col_count.saturating_sub(1);
-                ComponentAction::Consumed
-            }
-            KeyCode::PageDown => {
-                self.selected_row = (self.selected_row + 20).min(row_count.saturating_sub(1));
-                ComponentAction::Consumed
-            }
-            KeyCode::PageUp => {
-                self.selected_row = self.selected_row.saturating_sub(20);
-                ComponentAction::Consumed
-            }
-            KeyCode::Char('g') => {
-                self.selected_row = 0;
-                ComponentAction::Consumed
-            }
-            KeyCode::Char('G') => {
-                self.selected_row = row_count.saturating_sub(1);
-                ComponentAction::Consumed
-            }
-            _ => ComponentAction::Ignored,
-        }
+    fn handle_key(&mut self, _key: KeyEvent) -> ComponentAction {
+        // Navigation and actions are handled by KeyMap → App::execute_key_action().
+        // ResultsViewer has no free-form text input, so nothing to handle here.
+        ComponentAction::Ignored
     }
 
     fn render(&self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {

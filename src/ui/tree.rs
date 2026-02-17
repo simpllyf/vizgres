@@ -6,7 +6,7 @@ use crate::db::schema::SchemaTree;
 use crate::ui::Component;
 use crate::ui::ComponentAction;
 use crate::ui::theme::Theme;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::KeyEvent;
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 use std::collections::HashSet;
@@ -128,7 +128,7 @@ impl TreeBrowser {
         }
     }
 
-    fn toggle_expand(&mut self) {
+    pub fn toggle_expand(&mut self) {
         if let Some(item) = self.items.get(self.selected)
             && item.expandable
         {
@@ -142,7 +142,7 @@ impl TreeBrowser {
         }
     }
 
-    fn expand_current(&mut self) {
+    pub fn expand_current(&mut self) {
         if let Some(item) = self.items.get(self.selected)
             && item.expandable
             && !self.expanded.contains(&item.path)
@@ -153,7 +153,19 @@ impl TreeBrowser {
         }
     }
 
-    fn collapse_current(&mut self) {
+    pub fn move_up(&mut self) {
+        if !self.items.is_empty() && self.selected > 0 {
+            self.selected -= 1;
+        }
+    }
+
+    pub fn move_down(&mut self) {
+        if !self.items.is_empty() && self.selected < self.items.len() - 1 {
+            self.selected += 1;
+        }
+    }
+
+    pub fn collapse_current(&mut self) {
         if let Some(item) = self.items.get(self.selected) {
             let path = item.path.clone();
             if self.expanded.contains(&path) {
@@ -180,38 +192,10 @@ impl Default for TreeBrowser {
 }
 
 impl Component for TreeBrowser {
-    fn handle_key(&mut self, key: KeyEvent) -> ComponentAction {
-        if self.items.is_empty() {
-            return ComponentAction::Ignored;
-        }
-
-        match key.code {
-            KeyCode::Down | KeyCode::Char('j') => {
-                if self.selected < self.items.len() - 1 {
-                    self.selected += 1;
-                }
-                ComponentAction::Consumed
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                if self.selected > 0 {
-                    self.selected -= 1;
-                }
-                ComponentAction::Consumed
-            }
-            KeyCode::Enter => {
-                self.expand_current();
-                ComponentAction::Consumed
-            }
-            KeyCode::Char('h') => {
-                self.collapse_current();
-                ComponentAction::Consumed
-            }
-            KeyCode::Char(' ') => {
-                self.toggle_expand();
-                ComponentAction::Consumed
-            }
-            _ => ComponentAction::Ignored,
-        }
+    fn handle_key(&mut self, _key: KeyEvent) -> ComponentAction {
+        // Navigation is handled by KeyMap → App::execute_key_action().
+        // TreeBrowser has no free-form text input, so nothing to handle here.
+        ComponentAction::Ignored
     }
 
     fn render(&self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {

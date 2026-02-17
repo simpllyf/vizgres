@@ -6,7 +6,7 @@
 use crate::ui::Component;
 use crate::ui::ComponentAction;
 use crate::ui::theme::Theme;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::KeyEvent;
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
@@ -61,6 +61,34 @@ impl Inspector {
     /// Measure content dimensions (width, height) for variable-size popup.
     /// Width is the longest line, height is the line count.
     /// Returns (0, 0) if no content.
+    pub fn scroll_up(&mut self) {
+        if self.scroll_offset > 0 {
+            self.scroll_offset -= 1;
+        }
+    }
+
+    pub fn scroll_down(&mut self) {
+        if self.scroll_offset + 1 < self.total_lines {
+            self.scroll_offset += 1;
+        }
+    }
+
+    pub fn page_up(&mut self) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(20);
+    }
+
+    pub fn page_down(&mut self) {
+        self.scroll_offset = (self.scroll_offset + 20).min(self.total_lines.saturating_sub(1));
+    }
+
+    pub fn scroll_to_top(&mut self) {
+        self.scroll_offset = 0;
+    }
+
+    pub fn scroll_to_bottom(&mut self) {
+        self.scroll_offset = self.total_lines.saturating_sub(1);
+    }
+
     pub fn content_size(&self) -> (u16, u16) {
         match &self.content {
             Some(text) => {
@@ -79,47 +107,10 @@ impl Default for Inspector {
 }
 
 impl Component for Inspector {
-    fn handle_key(&mut self, key: KeyEvent) -> ComponentAction {
-        match key.code {
-            KeyCode::Esc => ComponentAction::CloseInspector,
-            KeyCode::Char('y') => {
-                if let Some(text) = self.content_text() {
-                    ComponentAction::CopyToClipboard(text)
-                } else {
-                    ComponentAction::Consumed
-                }
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if self.scroll_offset + 1 < self.total_lines {
-                    self.scroll_offset += 1;
-                }
-                ComponentAction::Consumed
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                if self.scroll_offset > 0 {
-                    self.scroll_offset -= 1;
-                }
-                ComponentAction::Consumed
-            }
-            KeyCode::PageDown => {
-                self.scroll_offset =
-                    (self.scroll_offset + 20).min(self.total_lines.saturating_sub(1));
-                ComponentAction::Consumed
-            }
-            KeyCode::PageUp => {
-                self.scroll_offset = self.scroll_offset.saturating_sub(20);
-                ComponentAction::Consumed
-            }
-            KeyCode::Home | KeyCode::Char('g') => {
-                self.scroll_offset = 0;
-                ComponentAction::Consumed
-            }
-            KeyCode::End | KeyCode::Char('G') => {
-                self.scroll_offset = self.total_lines.saturating_sub(1);
-                ComponentAction::Consumed
-            }
-            _ => ComponentAction::Ignored,
-        }
+    fn handle_key(&mut self, _key: KeyEvent) -> ComponentAction {
+        // Navigation and actions are handled by KeyMap → App::execute_key_action().
+        // Inspector has no free-form text input, so nothing to handle here.
+        ComponentAction::Ignored
     }
 
     fn render(&self, frame: &mut Frame, area: Rect, _focused: bool, theme: &Theme) {
