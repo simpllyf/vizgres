@@ -17,6 +17,10 @@ use tokio_postgres::types::Type;
 pub struct PostgresProvider {
     /// The tokio-postgres client
     client: Client,
+    /// Token for cancelling in-flight queries
+    cancel_token: tokio_postgres::CancelToken,
+    /// SSL mode (needed to cancel over the right transport)
+    ssl_mode: SslMode,
 }
 
 impl PostgresProvider {
@@ -58,7 +62,29 @@ impl PostgresProvider {
             }
         };
 
-        Ok((Self { client }, conn_err_rx))
+        let cancel_token = client.cancel_token();
+        let ssl_mode = config.ssl_mode;
+
+        Ok((
+            Self {
+                client,
+                cancel_token,
+                ssl_mode,
+            },
+            conn_err_rx,
+        ))
+    }
+
+    /// Send a cancel request for the currently running query.
+    pub async fn cancel_query(&self) -> DbResult<()> {
+        match self.ssl_mode {
+            SslMode::Disable => self.cancel_token.cancel_query(tokio_postgres::NoTls).await,
+            SslMode::Prefer | SslMode::Require => {
+                let tls = tokio_postgres_rustls::MakeRustlsConnect::new(make_tls_config());
+                self.cancel_token.cancel_query(tls).await
+            }
+        }
+        .map_err(|e| crate::error::DbError::QueryFailed(format!("Cancel failed: {}", e)))
     }
 }
 

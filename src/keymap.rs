@@ -53,6 +53,9 @@ pub enum KeyAction {
     HistoryBack,
     HistoryForward,
 
+    // Query cancellation (works from editor, results, tree)
+    CancelQuery,
+
     // Results-specific
     OpenInspector,
     CopyCell,
@@ -169,6 +172,13 @@ impl Default for KeyMap {
             },
             KeyAction::HistoryForward,
         );
+        editor.insert(
+            KeyBind {
+                code: KeyCode::Esc,
+                modifiers: KeyModifiers::NONE,
+            },
+            KeyAction::CancelQuery,
+        );
         panels.insert(PanelFocus::QueryEditor, editor);
 
         // ── Results ──────────────────────────────────────────────
@@ -194,6 +204,13 @@ impl Default for KeyMap {
                 modifiers: KeyModifiers::SHIFT,
             },
             KeyAction::CopyRow,
+        );
+        results.insert(
+            KeyBind {
+                code: KeyCode::Esc,
+                modifiers: KeyModifiers::NONE,
+            },
+            KeyAction::CancelQuery,
         );
         panels.insert(PanelFocus::ResultsViewer, results);
 
@@ -247,6 +264,13 @@ impl Default for KeyMap {
                 modifiers: KeyModifiers::NONE,
             },
             KeyAction::ToggleExpand,
+        );
+        tree.insert(
+            KeyBind {
+                code: KeyCode::Esc,
+                modifiers: KeyModifiers::NONE,
+            },
+            KeyAction::CancelQuery,
         );
         panels.insert(PanelFocus::TreeBrowser, tree);
 
@@ -418,6 +442,34 @@ fn insert_scroll_nav(map: &mut HashMap<KeyBind, KeyAction>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_cancel_query_binding() {
+        let km = KeyMap::default();
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        // Escape should resolve to CancelQuery in editor, results, tree
+        assert_eq!(
+            km.resolve(PanelFocus::QueryEditor, esc),
+            Some(KeyAction::CancelQuery)
+        );
+        assert_eq!(
+            km.resolve(PanelFocus::ResultsViewer, esc),
+            Some(KeyAction::CancelQuery)
+        );
+        assert_eq!(
+            km.resolve(PanelFocus::TreeBrowser, esc),
+            Some(KeyAction::CancelQuery)
+        );
+        // In modals, Escape is still Dismiss
+        assert_eq!(
+            km.resolve(PanelFocus::Inspector, esc),
+            Some(KeyAction::Dismiss)
+        );
+        assert_eq!(
+            km.resolve(PanelFocus::CommandBar, esc),
+            Some(KeyAction::Dismiss)
+        );
+    }
 
     #[test]
     fn test_global_quit() {
