@@ -1,9 +1,10 @@
 //! PostgreSQL database provider
 //!
-//! Concrete implementation using tokio-postgres. No trait abstraction needed yet.
+//! Concrete implementation using tokio-postgres.
 
 use crate::config::ConnectionConfig;
 use crate::config::connections::SslMode;
+use crate::db::Database;
 use crate::db::schema::{Column, Schema, SchemaTree, Table};
 use crate::db::types::{CellValue, ColumnDef, DataType, QueryResults, Row};
 use crate::error::DbResult;
@@ -15,9 +16,6 @@ use tokio_postgres::types::Type;
 pub struct PostgresProvider {
     /// The tokio-postgres client
     client: Client,
-
-    /// Cached schema tree (invalidated on refresh)
-    schema_cache: Option<SchemaTree>,
 }
 
 impl PostgresProvider {
@@ -53,14 +51,12 @@ impl PostgresProvider {
             }
         };
 
-        Ok(Self {
-            client,
-            schema_cache: None,
-        })
+        Ok(Self { client })
     }
+}
 
-    /// Execute a SQL query and return results
-    pub async fn execute_query(&self, sql: &str) -> DbResult<QueryResults> {
+impl Database for PostgresProvider {
+    async fn execute_query(&self, sql: &str) -> DbResult<QueryResults> {
         let start = std::time::Instant::now();
 
         let stmt = self
@@ -105,23 +101,7 @@ impl PostgresProvider {
         })
     }
 
-    /// Get the complete database schema tree
-    pub async fn get_schema(&mut self) -> DbResult<SchemaTree> {
-        if let Some(ref cached) = self.schema_cache {
-            return Ok(cached.clone());
-        }
-
-        let tree = self.fetch_schema_from_db().await?;
-        self.schema_cache = Some(tree.clone());
-        Ok(tree)
-    }
-
-    /// Invalidate the schema cache
-    pub fn invalidate_cache(&mut self) {
-        self.schema_cache = None;
-    }
-
-    async fn fetch_schema_from_db(&self) -> DbResult<SchemaTree> {
+    async fn get_schema(&self) -> DbResult<SchemaTree> {
         // Get schemas (exclude pg_ internal schemas)
         let schema_rows = self
             .client

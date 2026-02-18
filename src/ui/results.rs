@@ -142,6 +142,7 @@ impl ResultsViewer {
 
     pub fn go_to_home(&mut self) {
         self.selected_col = 0;
+        self.h_scroll_offset = 0;
     }
 
     pub fn go_to_end(&mut self) {
@@ -226,13 +227,51 @@ impl Component for ResultsViewer {
             viewer.scroll_offset
         };
 
-        // Determine which columns to show based on horizontal scroll
         let col_widths = &self.col_widths;
+
+        // Auto-adjust h_scroll to keep selected_col visible
+        let h_scroll = {
+            let mut hs = viewer.h_scroll_offset;
+            // If selected column is before the scroll offset, snap left
+            if viewer.selected_col < hs {
+                hs = viewer.selected_col;
+            } else {
+                // Check if selected_col fits in viewport from current offset
+                let mut x: u16 = 0;
+                let mut visible = false;
+                for ci in hs..col_widths.len() {
+                    let w = col_widths.get(ci).copied().unwrap_or(10);
+                    if ci == viewer.selected_col {
+                        visible = x + w <= area.width;
+                        break;
+                    }
+                    x += w + 1;
+                    if x >= area.width {
+                        break;
+                    }
+                }
+                if !visible {
+                    // Scroll right: find min offset that shows selected_col
+                    let mut new_hs = viewer.selected_col;
+                    let mut total: u16 = col_widths.get(viewer.selected_col).copied().unwrap_or(10);
+                    while new_hs > 0 {
+                        let prev_w = col_widths.get(new_hs - 1).copied().unwrap_or(10);
+                        if total + prev_w + 1 > area.width {
+                            break;
+                        }
+                        total += prev_w + 1;
+                        new_hs -= 1;
+                    }
+                    hs = new_hs;
+                }
+            }
+            hs
+        };
 
         // Render header row
         let header_y = area.y;
         let mut x = area.x;
-        for (col_idx, col_def) in results.columns.iter().enumerate() {
+        for (col_idx, col_def) in results.columns.iter().enumerate().skip(h_scroll) {
             if x >= area.x + area.width {
                 break;
             }
@@ -276,7 +315,7 @@ impl Component for ResultsViewer {
             };
 
             let mut x = area.x;
-            for (col_idx, cell) in row.values.iter().enumerate() {
+            for (col_idx, cell) in row.values.iter().enumerate().skip(h_scroll) {
                 if x >= area.x + area.width {
                     break;
                 }
@@ -506,5 +545,24 @@ mod tests {
         assert_eq!(viewer.selected_col, 1); // last col (index 1 of 2)
         viewer.go_to_home();
         assert_eq!(viewer.selected_col, 0);
+    }
+
+    #[test]
+    fn test_h_scroll_resets_on_set_results() {
+        let mut viewer = ResultsViewer::new();
+        viewer.h_scroll_offset = 5;
+        viewer.set_results(sample_results());
+        assert_eq!(viewer.h_scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_go_to_home_resets_h_scroll() {
+        let mut viewer = ResultsViewer::new();
+        viewer.set_results(sample_results());
+        viewer.h_scroll_offset = 3;
+        viewer.selected_col = 1;
+        viewer.go_to_home();
+        assert_eq!(viewer.selected_col, 0);
+        assert_eq!(viewer.h_scroll_offset, 0);
     }
 }

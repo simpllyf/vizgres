@@ -3,7 +3,8 @@
 //! Central state machine: events come in, state updates, actions go out.
 
 use crate::commands::{Command, parse_command};
-use crate::db::{PostgresProvider, QueryResults};
+use crate::db::QueryResults;
+use crate::db::schema::SchemaTree;
 use crate::error::Result;
 use crate::keymap::{KeyAction, KeyMap};
 use crate::ui::Component;
@@ -18,9 +19,6 @@ use crossterm::event::KeyEvent;
 
 /// Main application state
 pub struct App {
-    /// Current database connection
-    pub connection: Option<PostgresProvider>,
-
     /// Name of current connection profile
     pub connection_name: Option<String>,
 
@@ -87,6 +85,10 @@ pub enum AppEvent {
     QueryCompleted(QueryResults),
     /// Query execution failed
     QueryFailed(String),
+    /// Schema loaded successfully
+    SchemaLoaded(SchemaTree),
+    /// Schema loading failed
+    SchemaFailed(String),
 }
 
 /// Actions returned by event handlers for the main loop to execute
@@ -100,7 +102,6 @@ pub enum Action {
 impl App {
     pub fn new() -> Self {
         Self {
-            connection: None,
             connection_name: None,
             focus: PanelFocus::QueryEditor,
             previous_focus: PanelFocus::QueryEditor,
@@ -115,6 +116,14 @@ impl App {
             clipboard: arboard::Clipboard::new().ok(),
             running: true,
         }
+    }
+
+    /// Create an app pre-loaded with a connection name and schema
+    pub fn with_connection(name: String, schema: SchemaTree) -> Self {
+        let mut app = Self::new();
+        app.connection_name = Some(name);
+        app.tree_browser.set_schema(schema);
+        app
     }
 
     /// Handle an application event and return resulting action
@@ -137,6 +146,18 @@ impl App {
                 self.results_viewer.set_error(err.clone());
                 self.set_status("Query failed".to_string(), StatusLevel::Error);
                 self.focus = PanelFocus::ResultsViewer;
+                Ok(Action::None)
+            }
+            AppEvent::SchemaLoaded(schema) => {
+                self.tree_browser.set_schema(schema);
+                self.set_status("Schema refreshed".to_string(), StatusLevel::Info);
+                Ok(Action::None)
+            }
+            AppEvent::SchemaFailed(err) => {
+                self.set_status(
+                    format!("Schema refresh failed: {}", err),
+                    StatusLevel::Error,
+                );
                 Ok(Action::None)
             }
         }
@@ -449,9 +470,54 @@ mod tests {
     #[test]
     fn test_app_new_has_correct_defaults() {
         let app = App::new();
-        assert!(app.connection.is_none());
+        assert!(app.connection_name.is_none());
         assert_eq!(app.focus, PanelFocus::QueryEditor);
         assert!(app.running);
+    }
+
+    #[test]
+    fn test_with_connection_constructor() {
+        use crate::db::schema::{Schema, SchemaTree, Table};
+        let schema = SchemaTree {
+            schemas: vec![Schema {
+                name: "public".to_string(),
+                tables: vec![Table {
+                    name: "users".to_string(),
+                    columns: vec![],
+                }],
+            }],
+        };
+        let app = App::with_connection("test-db".to_string(), schema);
+        assert_eq!(app.connection_name.as_deref(), Some("test-db"));
+    }
+
+    #[test]
+    fn test_schema_loaded_event() {
+        use crate::db::schema::SchemaTree;
+        let mut app = App::new();
+        let schema = SchemaTree::new();
+        let action = app.handle_event(AppEvent::SchemaLoaded(schema)).unwrap();
+        assert!(matches!(action, Action::None));
+        assert_eq!(
+            app.status_message.as_ref().unwrap().message,
+            "Schema refreshed"
+        );
+    }
+
+    #[test]
+    fn test_schema_failed_event() {
+        let mut app = App::new();
+        let action = app
+            .handle_event(AppEvent::SchemaFailed("connection lost".to_string()))
+            .unwrap();
+        assert!(matches!(action, Action::None));
+        assert!(
+            app.status_message
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("Schema refresh failed")
+        );
     }
 
     #[test]
