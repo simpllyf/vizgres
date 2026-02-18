@@ -3,8 +3,17 @@
 //! Ring buffer of executed queries, navigable with Ctrl+Up/Down.
 //! Saves the current editor content as a "draft" when entering browse mode,
 //! and restores it when navigating past the newest entry.
+//!
+//! History is persisted to `~/.vizgres/history` using null-byte separators
+//! (multi-line SQL is preserved). Persistence is best-effort: failures
+//! are silently ignored so the app never crashes over history I/O.
 
 use std::collections::VecDeque;
+use std::path::PathBuf;
+
+/// Separator between history entries on disk. Null bytes never appear in SQL,
+/// so this cleanly handles multi-line queries without escaping.
+const ENTRY_SEPARATOR: char = '\0';
 
 pub struct QueryHistory {
     entries: VecDeque<String>,
@@ -13,9 +22,13 @@ pub struct QueryHistory {
     position: Option<usize>,
     /// Editor content saved when entering browse mode
     draft: Option<String>,
+    /// File path for persistence (`None` = in-memory only)
+    path: Option<PathBuf>,
 }
 
 impl QueryHistory {
+    /// Create an in-memory-only history (no persistence).
+    #[cfg(test)]
     pub fn new(capacity: usize) -> Self {
         assert!(capacity > 0, "QueryHistory capacity must be > 0");
         Self {
@@ -23,7 +36,58 @@ impl QueryHistory {
             capacity,
             position: None,
             draft: None,
+            path: None,
         }
+    }
+
+    /// Load history from `~/.vizgres/history`, creating an empty history
+    /// if the file doesn't exist or can't be read.
+    pub fn load(capacity: usize) -> Self {
+        let path = dirs::home_dir().map(|h| h.join(".vizgres").join("history"));
+        Self::load_from(path, capacity)
+    }
+
+    fn load_from(path: Option<PathBuf>, capacity: usize) -> Self {
+        assert!(capacity > 0, "QueryHistory capacity must be > 0");
+        let mut entries: VecDeque<String> = path
+            .as_ref()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .map(|content| {
+                content
+                    .split(ENTRY_SEPARATOR)
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // Trim to capacity (keep newest)
+        while entries.len() > capacity {
+            entries.pop_front();
+        }
+
+        Self {
+            entries,
+            capacity,
+            position: None,
+            draft: None,
+            path,
+        }
+    }
+
+    /// Write all entries to disk. Best-effort: errors are silently ignored.
+    fn save(&self) {
+        let Some(path) = &self.path else { return };
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let content: String = self
+            .entries
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join(&ENTRY_SEPARATOR.to_string());
+        let _ = std::fs::write(path, content);
     }
 
     /// Record an executed query. Trims whitespace, skips empty,
@@ -43,6 +107,7 @@ impl QueryHistory {
         }
         self.entries.push_back(trimmed);
         self.reset_position();
+        self.save();
     }
 
     /// Navigate to an older entry. On first call, saves `current_content` as draft.
@@ -272,5 +337,108 @@ mod tests {
     #[should_panic(expected = "capacity must be > 0")]
     fn test_zero_capacity_panics() {
         QueryHistory::new(0);
+    }
+
+    // ── Persistence tests ───────────────────────────────────
+
+    fn temp_history_path(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("vizgres-test-{}-{}", std::process::id(), name));
+        let _ = std::fs::create_dir_all(&dir);
+        dir.join("history")
+    }
+
+    fn cleanup(path: &std::path::Path) {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    #[test]
+    fn test_load_missing_file_returns_empty() {
+        let path = temp_history_path("missing");
+        cleanup(&path);
+        let h = QueryHistory::load_from(Some(path.clone()), 100);
+        assert!(h.is_empty());
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_save_and_load_round_trip() {
+        let path = temp_history_path("round-trip");
+        cleanup(&path);
+        {
+            let mut h = QueryHistory::load_from(Some(path.clone()), 100);
+            h.push("SELECT 1");
+            h.push("SELECT 2");
+            h.push("SELECT 3");
+        }
+        let h = QueryHistory::load_from(Some(path.clone()), 100);
+        assert_eq!(h.len(), 3);
+        assert_eq!(h.entries[0], "SELECT 1");
+        assert_eq!(h.entries[1], "SELECT 2");
+        assert_eq!(h.entries[2], "SELECT 3");
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_multiline_queries_survive_round_trip() {
+        let path = temp_history_path("multiline");
+        cleanup(&path);
+        {
+            let mut h = QueryHistory::load_from(Some(path.clone()), 100);
+            h.push("SELECT *\nFROM users\nWHERE id = 1");
+            h.push("INSERT INTO t\nVALUES (1, 'hello')");
+        }
+        let h = QueryHistory::load_from(Some(path.clone()), 100);
+        assert_eq!(h.len(), 2);
+        assert_eq!(h.entries[0], "SELECT *\nFROM users\nWHERE id = 1");
+        assert_eq!(h.entries[1], "INSERT INTO t\nVALUES (1, 'hello')");
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_load_trims_to_capacity() {
+        let path = temp_history_path("trim-capacity");
+        cleanup(&path);
+        {
+            let mut h = QueryHistory::load_from(Some(path.clone()), 100);
+            for i in 0..10 {
+                h.push(&format!("SELECT {}", i));
+            }
+        }
+        // Reload with smaller capacity — keeps newest
+        let h = QueryHistory::load_from(Some(path.clone()), 3);
+        assert_eq!(h.len(), 3);
+        assert_eq!(h.entries[0], "SELECT 7");
+        assert_eq!(h.entries[1], "SELECT 8");
+        assert_eq!(h.entries[2], "SELECT 9");
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_no_path_skips_persistence() {
+        let mut h = QueryHistory::load_from(None, 100);
+        h.push("SELECT 1");
+        assert_eq!(h.len(), 1);
+    }
+
+    #[test]
+    fn test_push_persists_incrementally() {
+        let path = temp_history_path("incremental");
+        cleanup(&path);
+        let mut h = QueryHistory::load_from(Some(path.clone()), 100);
+        h.push("first");
+
+        // Load a second instance — should see the entry
+        let h2 = QueryHistory::load_from(Some(path.clone()), 100);
+        assert_eq!(h2.len(), 1);
+        assert_eq!(h2.entries[0], "first");
+
+        // Push more and verify
+        h.push("second");
+        let h3 = QueryHistory::load_from(Some(path.clone()), 100);
+        assert_eq!(h3.len(), 2);
+        cleanup(&path);
     }
 }
