@@ -48,7 +48,7 @@ async fn test_connect_to_database() {
 async fn test_execute_simple_query() {
     let config = test_config();
     let provider = match PostgresProvider::connect(&config).await {
-        Ok(p) => p,
+        Ok((p, _)) => p,
         Err(_) => {
             eprintln!("Skipping test: Database not available");
             return;
@@ -83,7 +83,7 @@ async fn test_execute_simple_query() {
 async fn test_query_users_table() {
     let config = test_config();
     let provider = match PostgresProvider::connect(&config).await {
-        Ok(p) => p,
+        Ok((p, _)) => p,
         Err(_) => {
             eprintln!("Skipping test: Database not available");
             return;
@@ -115,7 +115,7 @@ async fn test_query_users_table() {
 async fn test_query_json_data() {
     let config = test_config();
     let provider = match PostgresProvider::connect(&config).await {
-        Ok(p) => p,
+        Ok((p, _)) => p,
         Err(_) => {
             eprintln!("Skipping test: Database not available");
             return;
@@ -144,7 +144,7 @@ async fn test_query_json_data() {
 async fn test_query_null_values() {
     let config = test_config();
     let provider = match PostgresProvider::connect(&config).await {
-        Ok(p) => p,
+        Ok((p, _)) => p,
         Err(_) => {
             eprintln!("Skipping test: Database not available");
             return;
@@ -170,7 +170,7 @@ async fn test_query_null_values() {
 async fn test_query_numeric_types() {
     let config = test_config();
     let provider = match PostgresProvider::connect(&config).await {
-        Ok(p) => p,
+        Ok((p, _)) => p,
         Err(_) => {
             eprintln!("Skipping test: Database not available");
             return;
@@ -207,7 +207,7 @@ async fn test_query_numeric_types() {
 async fn test_query_timestamps() {
     let config = test_config();
     let provider = match PostgresProvider::connect(&config).await {
-        Ok(p) => p,
+        Ok((p, _)) => p,
         Err(_) => {
             eprintln!("Skipping test: Database not available");
             return;
@@ -233,7 +233,7 @@ async fn test_query_timestamps() {
 async fn test_get_schema() {
     let config = test_config();
     let provider = match PostgresProvider::connect(&config).await {
-        Ok(p) => p,
+        Ok((p, _)) => p,
         Err(_) => {
             eprintln!("Skipping test: Database not available");
             return;
@@ -291,7 +291,7 @@ async fn test_get_schema() {
 async fn test_invalid_query() {
     let config = test_config();
     let provider = match PostgresProvider::connect(&config).await {
-        Ok(p) => p,
+        Ok((p, _)) => p,
         Err(_) => {
             eprintln!("Skipping test: Database not available");
             return;
@@ -318,7 +318,7 @@ async fn test_connection_failure() {
 async fn test_multiple_schemas() {
     let config = test_config();
     let provider = match PostgresProvider::connect(&config).await {
-        Ok(p) => p,
+        Ok((p, _)) => p,
         Err(_) => {
             eprintln!("Skipping test: Database not available");
             return;
@@ -353,7 +353,7 @@ async fn test_multiple_schemas() {
 async fn test_query_array_types() {
     let config = test_config();
     let provider = match PostgresProvider::connect(&config).await {
-        Ok(p) => p,
+        Ok((p, _)) => p,
         Err(_) => {
             eprintln!("Skipping test: Database not available");
             return;
@@ -383,7 +383,7 @@ async fn test_query_array_types() {
 async fn test_query_aggregation_numeric() {
     let config = test_config();
     let provider = match PostgresProvider::connect(&config).await {
-        Ok(p) => p,
+        Ok((p, _)) => p,
         Err(_) => {
             eprintln!("Skipping test: Database not available");
             return;

@@ -51,6 +51,9 @@ pub struct App {
     /// Persistent clipboard handle (kept alive to avoid Linux clipboard drop race)
     clipboard: Option<arboard::Clipboard>,
 
+    /// Error from clipboard initialization (preserved for diagnostics)
+    clipboard_error: Option<String>,
+
     /// Whether the application is running
     pub running: bool,
 }
@@ -93,6 +96,8 @@ pub enum AppEvent {
     SchemaLoaded(SchemaTree),
     /// Schema loading failed
     SchemaFailed(String),
+    /// Background database connection lost
+    ConnectionLost(String),
 }
 
 /// Actions returned by event handlers for the main loop to execute
@@ -105,6 +110,10 @@ pub enum Action {
 
 impl App {
     pub fn new() -> Self {
+        let (clipboard, clipboard_error) = match arboard::Clipboard::new() {
+            Ok(c) => (Some(c), None),
+            Err(e) => (None, Some(e.to_string())),
+        };
         Self {
             connection_name: None,
             focus: PanelFocus::QueryEditor,
@@ -118,7 +127,8 @@ impl App {
             keymap: KeyMap::default(),
             theme: Theme::default(),
             status_message: None,
-            clipboard: arboard::Clipboard::new().ok(),
+            clipboard,
+            clipboard_error,
             running: true,
         }
     }
@@ -163,6 +173,10 @@ impl App {
                     format!("Schema refresh failed: {}", err),
                     StatusLevel::Error,
                 );
+                Ok(Action::None)
+            }
+            AppEvent::ConnectionLost(msg) => {
+                self.set_status(msg, StatusLevel::Error);
                 Ok(Action::None)
             }
         }
@@ -471,7 +485,11 @@ impl App {
                 }
             }
         } else {
-            self.set_status("Clipboard unavailable".to_string(), StatusLevel::Warning);
+            let reason = self.clipboard_error.as_deref().unwrap_or("unknown reason");
+            self.set_status(
+                format!("Clipboard unavailable: {}", reason),
+                StatusLevel::Warning,
+            );
         }
     }
 }
@@ -537,6 +555,20 @@ mod tests {
                 .message
                 .contains("Schema refresh failed")
         );
+    }
+
+    #[test]
+    fn test_connection_lost_event() {
+        let mut app = App::new();
+        let action = app
+            .handle_event(AppEvent::ConnectionLost(
+                "Connection lost: server closed".to_string(),
+            ))
+            .unwrap();
+        assert!(matches!(action, Action::None));
+        let msg = &app.status_message.as_ref().unwrap();
+        assert!(msg.message.contains("Connection lost"));
+        assert_eq!(msg.level, StatusLevel::Error);
     }
 
     #[test]

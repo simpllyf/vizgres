@@ -9,6 +9,7 @@ use crate::db::schema::{Column, Schema, SchemaTree, Table};
 use crate::db::types::{CellValue, ColumnDef, DataType, QueryResults, Row};
 use crate::error::DbResult;
 use rust_decimal::Decimal;
+use tokio::sync::mpsc;
 use tokio_postgres::Client;
 use tokio_postgres::types::Type;
 
@@ -19,9 +20,15 @@ pub struct PostgresProvider {
 }
 
 impl PostgresProvider {
-    /// Connect to a PostgreSQL database
-    pub async fn connect(config: &ConnectionConfig) -> DbResult<Self> {
+    /// Connect to a PostgreSQL database.
+    ///
+    /// Returns the provider and a receiver that fires if the background
+    /// connection is lost (e.g. server restart, idle timeout).
+    pub async fn connect(
+        config: &ConnectionConfig,
+    ) -> DbResult<(Self, mpsc::UnboundedReceiver<String>)> {
         let conn_string = config.connection_string_with_password();
+        let (conn_err_tx, conn_err_rx) = mpsc::unbounded_channel();
 
         let client = match config.ssl_mode {
             SslMode::Disable => {
@@ -31,7 +38,7 @@ impl PostgresProvider {
                         .map_err(|e| crate::error::DbError::ConnectionFailed(e.to_string()))?;
                 tokio::spawn(async move {
                     if let Err(e) = connection.await {
-                        eprintln!("Database connection error: {}", e);
+                        let _ = conn_err_tx.send(format!("Connection lost: {}", e));
                     }
                 });
                 client
@@ -44,14 +51,14 @@ impl PostgresProvider {
                     .map_err(|e| crate::error::DbError::ConnectionFailed(e.to_string()))?;
                 tokio::spawn(async move {
                     if let Err(e) = connection.await {
-                        eprintln!("Database connection error: {}", e);
+                        let _ = conn_err_tx.send(format!("Connection lost: {}", e));
                     }
                 });
                 client
             }
         };
 
-        Ok(Self { client })
+        Ok((Self { client }, conn_err_rx))
     }
 }
 
@@ -93,12 +100,7 @@ impl Database for PostgresProvider {
             rows.push(Row { values });
         }
 
-        Ok(QueryResults {
-            columns,
-            rows,
-            execution_time: start.elapsed(),
-            row_count,
-        })
+        Ok(QueryResults::new(columns, rows, start.elapsed(), row_count))
     }
 
     async fn get_schema(&self) -> DbResult<SchemaTree> {
@@ -437,11 +439,20 @@ fn extract_array_value(row: &tokio_postgres::Row, idx: usize, inner: &DataType) 
     }
 }
 
-/// Try to extract a value as a string (fallback for type mismatches)
+/// Try to extract a value as a string (fallback for type mismatches).
+///
+/// When even the string fallback fails, includes the postgres type name
+/// in the message so the user knows what type couldn't be displayed.
 fn try_as_string(row: &tokio_postgres::Row, idx: usize) -> CellValue {
     match row.try_get::<_, Option<String>>(idx) {
         Ok(Some(v)) => CellValue::Text(v),
         Ok(None) => CellValue::Null,
-        Err(_) => CellValue::Text("<unable to display>".to_string()),
+        Err(_) => {
+            let type_name = row
+                .columns()
+                .get(idx)
+                .map_or("unknown", |c| c.type_().name());
+            CellValue::Text(format!("<unable to display: {}>", type_name))
+        }
     }
 }

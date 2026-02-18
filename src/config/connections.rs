@@ -84,7 +84,7 @@ impl ConnectionConfig {
 
         // Split database name from query params and parse sslmode
         let (database, ssl_mode) = if let Some((db, query)) = database.split_once('?') {
-            let ssl = parse_sslmode_param(query);
+            let ssl = parse_sslmode_param(query)?;
             (db.to_string(), ssl)
         } else {
             (database.to_string(), SslMode::Prefer)
@@ -151,18 +151,29 @@ impl ConnectionConfig {
     }
 }
 
-/// Parse the `sslmode` value from a URL query string
-fn parse_sslmode_param(query: &str) -> SslMode {
+/// Parse the `sslmode` value from a URL query string.
+///
+/// Rejects unknown or unsupported values instead of silently falling back,
+/// so that security-sensitive modes like `verify-full` aren't quietly downgraded.
+fn parse_sslmode_param(query: &str) -> ConfigResult<SslMode> {
     for param in query.split('&') {
         if let Some(value) = param.strip_prefix("sslmode=") {
             return match value {
-                "disable" => SslMode::Disable,
-                "require" => SslMode::Require,
-                _ => SslMode::Prefer,
+                "disable" => Ok(SslMode::Disable),
+                "prefer" => Ok(SslMode::Prefer),
+                "require" => Ok(SslMode::Require),
+                "allow" | "verify-ca" | "verify-full" => Err(ConfigError::Invalid(format!(
+                    "sslmode '{}' is not yet supported (use disable, prefer, or require)",
+                    value
+                ))),
+                other => Err(ConfigError::Invalid(format!(
+                    "unknown sslmode: '{}'",
+                    other
+                ))),
             };
         }
     }
-    SslMode::Prefer
+    Ok(SslMode::Prefer)
 }
 
 /// Load all connection profiles from config file
@@ -240,6 +251,29 @@ mod tests {
         let config =
             ConnectionConfig::from_url("postgres://user:pass@host/db?sslmode=disable").unwrap();
         assert_eq!(config.ssl_mode, SslMode::Disable);
+    }
+
+    #[test]
+    fn test_from_url_sslmode_prefer_explicit() {
+        let config =
+            ConnectionConfig::from_url("postgres://user:pass@host/db?sslmode=prefer").unwrap();
+        assert_eq!(config.ssl_mode, SslMode::Prefer);
+    }
+
+    #[test]
+    fn test_from_url_sslmode_unknown_rejected() {
+        let result = ConnectionConfig::from_url("postgres://user:pass@host/db?sslmode=bogus");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("unknown sslmode"), "got: {}", err);
+    }
+
+    #[test]
+    fn test_from_url_sslmode_unsupported_rejected() {
+        let result = ConnectionConfig::from_url("postgres://user:pass@host/db?sslmode=verify-full");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("not yet supported"), "got: {}", err);
     }
 
     #[test]
