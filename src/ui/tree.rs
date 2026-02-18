@@ -1,6 +1,7 @@
 //! Database tree browser widget
 //!
-//! Displays database schemas, tables, and columns in a hierarchical tree.
+//! Displays database schemas, tables, views, functions, indexes, and columns
+//! in a hierarchical tree grouped by category.
 
 use crate::db::schema::SchemaTree;
 use crate::ui::Component;
@@ -13,8 +14,12 @@ use std::collections::HashSet;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NodeKind {
     Schema,
+    Category,
     Table,
+    View,
     Column,
+    Function,
+    Index,
 }
 
 /// A single item in the flattened tree view
@@ -57,11 +62,14 @@ impl TreeBrowser {
         self.schema = Some(schema);
         self.selected = 0;
         self.scroll_offset = 0;
-        // Auto-expand first schema
+        // Auto-expand first schema and its "Tables" category
         if let Some(ref tree) = self.schema
             && let Some(first) = tree.schemas.first()
         {
             self.expanded.insert(first.name.clone());
+            if !first.tables.is_empty() {
+                self.expanded.insert(format!("{}.Tables", first.name));
+            }
         }
         self.rebuild_items();
     }
@@ -84,37 +92,131 @@ impl TreeBrowser {
 
         for schema in &schema_tree.schemas {
             let schema_path = schema.name.clone();
+            let has_children = !schema.tables.is_empty()
+                || !schema.views.is_empty()
+                || !schema.functions.is_empty()
+                || !schema.indexes.is_empty();
+
             self.items.push(TreeItem {
                 label: schema.name.clone(),
                 kind: NodeKind::Schema,
                 depth: 0,
                 path: schema_path.clone(),
-                expandable: !schema.tables.is_empty(),
+                expandable: has_children,
             });
 
-            if self.expanded.contains(&schema_path) {
-                for table in &schema.tables {
-                    let table_path = format!("{}.{}", schema.name, table.name);
-                    self.items.push(TreeItem {
-                        label: table.name.clone(),
-                        kind: NodeKind::Table,
-                        depth: 1,
-                        path: table_path.clone(),
-                        expandable: !table.columns.is_empty(),
-                    });
+            if !self.expanded.contains(&schema_path) {
+                continue;
+            }
 
-                    if self.expanded.contains(&table_path) {
-                        for col in &table.columns {
-                            let col_label =
-                                format!("{} ({})", col.name, col.data_type.display_name());
-                            self.items.push(TreeItem {
-                                label: col_label,
-                                kind: NodeKind::Column,
-                                depth: 2,
-                                path: format!("{}.{}", table_path, col.name),
-                                expandable: false,
-                            });
+            // ── Tables category ──
+            if !schema.tables.is_empty() {
+                let cat_path = format!("{}.Tables", schema.name);
+                self.items.push(TreeItem {
+                    label: "Tables".to_string(),
+                    kind: NodeKind::Category,
+                    depth: 1,
+                    path: cat_path.clone(),
+                    expandable: true,
+                });
+
+                if self.expanded.contains(&cat_path) {
+                    for table in &schema.tables {
+                        let table_path = format!("{}.{}", cat_path, table.name);
+                        self.items.push(TreeItem {
+                            label: table.name.clone(),
+                            kind: NodeKind::Table,
+                            depth: 2,
+                            path: table_path.clone(),
+                            expandable: !table.columns.is_empty(),
+                        });
+
+                        if self.expanded.contains(&table_path) {
+                            push_columns(&mut self.items, &table.columns, &table_path, 3);
                         }
+                    }
+                }
+            }
+
+            // ── Views category ──
+            if !schema.views.is_empty() {
+                let cat_path = format!("{}.Views", schema.name);
+                self.items.push(TreeItem {
+                    label: "Views".to_string(),
+                    kind: NodeKind::Category,
+                    depth: 1,
+                    path: cat_path.clone(),
+                    expandable: true,
+                });
+
+                if self.expanded.contains(&cat_path) {
+                    for view in &schema.views {
+                        let view_path = format!("{}.{}", cat_path, view.name);
+                        self.items.push(TreeItem {
+                            label: view.name.clone(),
+                            kind: NodeKind::View,
+                            depth: 2,
+                            path: view_path.clone(),
+                            expandable: !view.columns.is_empty(),
+                        });
+
+                        if self.expanded.contains(&view_path) {
+                            push_columns(&mut self.items, &view.columns, &view_path, 3);
+                        }
+                    }
+                }
+            }
+
+            // ── Functions category ──
+            if !schema.functions.is_empty() {
+                let cat_path = format!("{}.Functions", schema.name);
+                self.items.push(TreeItem {
+                    label: "Functions".to_string(),
+                    kind: NodeKind::Category,
+                    depth: 1,
+                    path: cat_path.clone(),
+                    expandable: true,
+                });
+
+                if self.expanded.contains(&cat_path) {
+                    for func in &schema.functions {
+                        let label = if func.return_type.is_empty() {
+                            format!("{}({})", func.name, func.args)
+                        } else {
+                            format!("{}({}) → {}", func.name, func.args, func.return_type)
+                        };
+                        self.items.push(TreeItem {
+                            label,
+                            kind: NodeKind::Function,
+                            depth: 2,
+                            path: format!("{}.{}", cat_path, func.name),
+                            expandable: false,
+                        });
+                    }
+                }
+            }
+
+            // ── Indexes category ──
+            if !schema.indexes.is_empty() {
+                let cat_path = format!("{}.Indexes", schema.name);
+                self.items.push(TreeItem {
+                    label: "Indexes".to_string(),
+                    kind: NodeKind::Category,
+                    depth: 1,
+                    path: cat_path.clone(),
+                    expandable: true,
+                });
+
+                if self.expanded.contains(&cat_path) {
+                    for idx in &schema.indexes {
+                        let label = format!("{} ({})", idx.name, idx.columns.join(", "));
+                        self.items.push(TreeItem {
+                            label,
+                            kind: NodeKind::Index,
+                            depth: 2,
+                            path: format!("{}.{}", cat_path, idx.name),
+                            expandable: false,
+                        });
                     }
                 }
             }
@@ -183,6 +285,42 @@ impl TreeBrowser {
     }
 }
 
+/// Push column items into the flat item list
+fn push_columns(
+    items: &mut Vec<TreeItem>,
+    columns: &[crate::db::schema::Column],
+    parent_path: &str,
+    depth: usize,
+) {
+    for col in columns {
+        let col_label = format_column_label(col);
+        items.push(TreeItem {
+            label: col_label,
+            kind: NodeKind::Column,
+            depth,
+            path: format!("{}.{}", parent_path, col.name),
+            expandable: false,
+        });
+    }
+}
+
+/// Format a column label with PK/FK annotations
+fn format_column_label(col: &crate::db::schema::Column) -> String {
+    let prefix = if col.is_primary_key { "* " } else { "" };
+    let suffix = if let Some(ref fk) = col.foreign_key {
+        format!(" → {}.{}", fk.target_table, fk.target_column)
+    } else {
+        String::new()
+    };
+    format!(
+        "{}{} ({}){}",
+        prefix,
+        col.name,
+        col.data_type.display_name(),
+        suffix
+    )
+}
+
 impl Default for TreeBrowser {
     fn default() -> Self {
         Self::new()
@@ -249,8 +387,12 @@ impl Component for TreeBrowser {
             } else {
                 match item.kind {
                     NodeKind::Schema => theme.tree_schema,
+                    NodeKind::Category => theme.tree_category,
                     NodeKind::Table => theme.tree_table,
+                    NodeKind::View => theme.tree_view,
                     NodeKind::Column => theme.tree_column,
+                    NodeKind::Function => theme.tree_function,
+                    NodeKind::Index => theme.tree_index,
                 }
             };
 
@@ -265,25 +407,72 @@ impl Component for TreeBrowser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::schema::{Column, Schema, Table};
+    use crate::db::schema::{Column, ForeignKey, Function, Index, Schema, Table};
     use crate::db::types::DataType;
 
     fn sample_schema() -> SchemaTree {
         SchemaTree {
             schemas: vec![Schema {
                 name: "public".to_string(),
-                tables: vec![Table {
-                    name: "users".to_string(),
-                    columns: vec![
-                        Column {
-                            name: "id".to_string(),
-                            data_type: DataType::Integer,
-                        },
-                        Column {
-                            name: "name".to_string(),
-                            data_type: DataType::Text,
-                        },
-                    ],
+                tables: vec![
+                    Table {
+                        name: "users".to_string(),
+                        columns: vec![
+                            Column {
+                                name: "id".to_string(),
+                                data_type: DataType::Integer,
+                                is_primary_key: true,
+                                foreign_key: None,
+                            },
+                            Column {
+                                name: "name".to_string(),
+                                data_type: DataType::Text,
+                                is_primary_key: false,
+                                foreign_key: None,
+                            },
+                        ],
+                    },
+                    Table {
+                        name: "orders".to_string(),
+                        columns: vec![
+                            Column {
+                                name: "id".to_string(),
+                                data_type: DataType::Integer,
+                                is_primary_key: true,
+                                foreign_key: None,
+                            },
+                            Column {
+                                name: "user_id".to_string(),
+                                data_type: DataType::Integer,
+                                is_primary_key: false,
+                                foreign_key: Some(ForeignKey {
+                                    target_table: "users".to_string(),
+                                    target_column: "id".to_string(),
+                                }),
+                            },
+                        ],
+                    },
+                ],
+                views: vec![Table {
+                    name: "active_users".to_string(),
+                    columns: vec![Column {
+                        name: "id".to_string(),
+                        data_type: DataType::Integer,
+                        is_primary_key: false,
+                        foreign_key: None,
+                    }],
+                }],
+                indexes: vec![Index {
+                    name: "users_pkey".to_string(),
+                    columns: vec!["id".to_string()],
+                    is_unique: true,
+                    is_primary: true,
+                    table_name: "users".to_string(),
+                }],
+                functions: vec![Function {
+                    name: "get_user".to_string(),
+                    args: "integer".to_string(),
+                    return_type: "users".to_string(),
                 }],
             }],
         }
@@ -297,22 +486,127 @@ mod tests {
     }
 
     #[test]
-    fn test_set_schema_auto_expands_first() {
+    fn test_set_schema_auto_expands_first_and_tables() {
         let mut tree = TreeBrowser::new();
         tree.set_schema(sample_schema());
         assert!(tree.expanded.contains("public"));
-        // Should show schema + table (auto-expanded)
-        assert!(tree.items.len() >= 2);
+        assert!(tree.expanded.contains("public.Tables"));
+        // Schema + Tables category + 2 tables (auto-expanded) + Views/Functions/Indexes categories
+        assert!(tree.items.len() >= 5);
     }
 
     #[test]
-    fn test_expand_collapse() {
+    fn test_category_nodes_appear() {
         let mut tree = TreeBrowser::new();
         tree.set_schema(sample_schema());
-        // First item is "public" (expanded), second is "users"
-        tree.selected = 1; // select "users"
+        let labels: Vec<&str> = tree.items.iter().map(|i| i.label.as_str()).collect();
+        assert!(labels.contains(&"Tables"));
+        assert!(labels.contains(&"Views"));
+        assert!(labels.contains(&"Functions"));
+        assert!(labels.contains(&"Indexes"));
+    }
+
+    #[test]
+    fn test_expand_table_shows_columns() {
+        let mut tree = TreeBrowser::new();
+        tree.set_schema(sample_schema());
+        // Find "users" table and expand it
+        let users_idx = tree.items.iter().position(|i| i.label == "users").unwrap();
+        tree.selected = users_idx;
         tree.toggle_expand();
-        // Should now show columns
-        assert!(tree.items.len() >= 4); // schema + table + 2 columns
+        // Should show columns under users
+        let labels: Vec<&str> = tree.items.iter().map(|i| i.label.as_str()).collect();
+        assert!(labels.iter().any(|l| l.starts_with("* id")));
+        assert!(labels.iter().any(|l| l.starts_with("name")));
+    }
+
+    #[test]
+    fn test_pk_column_label() {
+        let col = Column {
+            name: "id".to_string(),
+            data_type: DataType::Integer,
+            is_primary_key: true,
+            foreign_key: None,
+        };
+        assert_eq!(format_column_label(&col), "* id (integer)");
+    }
+
+    #[test]
+    fn test_fk_column_label() {
+        let col = Column {
+            name: "user_id".to_string(),
+            data_type: DataType::Integer,
+            is_primary_key: false,
+            foreign_key: Some(ForeignKey {
+                target_table: "users".to_string(),
+                target_column: "id".to_string(),
+            }),
+        };
+        assert_eq!(format_column_label(&col), "user_id (integer) → users.id");
+    }
+
+    #[test]
+    fn test_expand_views_category() {
+        let mut tree = TreeBrowser::new();
+        tree.set_schema(sample_schema());
+        let views_idx = tree.items.iter().position(|i| i.label == "Views").unwrap();
+        tree.selected = views_idx;
+        tree.toggle_expand();
+        let labels: Vec<&str> = tree.items.iter().map(|i| i.label.as_str()).collect();
+        assert!(labels.contains(&"active_users"));
+    }
+
+    #[test]
+    fn test_expand_functions_category() {
+        let mut tree = TreeBrowser::new();
+        tree.set_schema(sample_schema());
+        let func_idx = tree
+            .items
+            .iter()
+            .position(|i| i.label == "Functions")
+            .unwrap();
+        tree.selected = func_idx;
+        tree.toggle_expand();
+        let labels: Vec<&str> = tree.items.iter().map(|i| i.label.as_str()).collect();
+        assert!(labels.iter().any(|l| l.contains("get_user")));
+        assert!(labels.iter().any(|l| l.contains("→ users")));
+    }
+
+    #[test]
+    fn test_expand_indexes_category() {
+        let mut tree = TreeBrowser::new();
+        tree.set_schema(sample_schema());
+        let idx_idx = tree
+            .items
+            .iter()
+            .position(|i| i.label == "Indexes")
+            .unwrap();
+        tree.selected = idx_idx;
+        tree.toggle_expand();
+        let labels: Vec<&str> = tree.items.iter().map(|i| i.label.as_str()).collect();
+        assert!(labels.iter().any(|l| l.contains("users_pkey")));
+    }
+
+    #[test]
+    fn test_empty_categories_hidden() {
+        let schema = SchemaTree {
+            schemas: vec![Schema {
+                name: "empty".to_string(),
+                tables: vec![Table {
+                    name: "t".to_string(),
+                    columns: vec![],
+                }],
+                views: vec![],
+                indexes: vec![],
+                functions: vec![],
+            }],
+        };
+        let mut tree = TreeBrowser::new();
+        tree.set_schema(schema);
+        let labels: Vec<&str> = tree.items.iter().map(|i| i.label.as_str()).collect();
+        assert!(labels.contains(&"Tables"));
+        assert!(!labels.contains(&"Views"));
+        assert!(!labels.contains(&"Functions"));
+        assert!(!labels.contains(&"Indexes"));
     }
 }

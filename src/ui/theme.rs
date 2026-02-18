@@ -24,8 +24,12 @@ pub struct Theme {
 
     // Tree browser
     pub tree_schema: Style,
+    pub tree_category: Style,
     pub tree_table: Style,
+    pub tree_view: Style,
     pub tree_column: Style,
+    pub tree_function: Style,
+    pub tree_index: Style,
     pub tree_selected: Style,
     pub tree_empty: Style,
 
@@ -100,8 +104,14 @@ impl Default for Theme {
             tree_schema: Style::default()
                 .fg(Color::Blue)
                 .add_modifier(Modifier::BOLD),
+            tree_category: Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
             tree_table: Style::default().fg(Color::Green),
+            tree_view: Style::default().fg(Color::Magenta),
             tree_column: Style::default().fg(Color::Gray),
+            tree_function: Style::default().fg(Color::Cyan),
+            tree_index: Style::default().fg(Color::DarkGray),
             tree_selected: Style::default()
                 .fg(Color::Black)
                 .bg(Color::Cyan)

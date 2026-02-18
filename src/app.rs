@@ -560,6 +560,9 @@ mod tests {
                     name: "users".to_string(),
                     columns: vec![],
                 }],
+                views: vec![],
+                indexes: vec![],
+                functions: vec![],
             }],
         };
         let app = App::with_connection("test-db".to_string(), schema);
