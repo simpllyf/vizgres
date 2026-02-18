@@ -48,6 +48,7 @@ pub enum KeyAction {
 
     // Editor-specific
     ExecuteQuery,
+    ExplainQuery,
     ClearEditor,
     HistoryBack,
     HistoryForward,
@@ -139,6 +140,13 @@ impl Default for KeyMap {
                 modifiers: KeyModifiers::CONTROL,
             },
             KeyAction::ExecuteQuery,
+        );
+        editor.insert(
+            KeyBind {
+                code: KeyCode::Char('e'),
+                modifiers: KeyModifiers::CONTROL,
+            },
+            KeyAction::ExplainQuery,
         );
         editor.insert(
             KeyBind {
@@ -567,6 +575,18 @@ mod tests {
             km.resolve(PanelFocus::Inspector, end),
             Some(KeyAction::GoToBottom)
         );
+    }
+
+    #[test]
+    fn test_explain_keybinding_resolves() {
+        let km = KeyMap::default();
+        let ctrl_e = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL);
+        assert_eq!(
+            km.resolve(PanelFocus::QueryEditor, ctrl_e),
+            Some(KeyAction::ExplainQuery)
+        );
+        // Should not resolve in other panels
+        assert_eq!(km.resolve(PanelFocus::ResultsViewer, ctrl_e), None);
     }
 
     #[test]

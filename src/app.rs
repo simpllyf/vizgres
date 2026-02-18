@@ -317,6 +317,17 @@ impl App {
                     Action::None
                 }
             }
+            KeyAction::ExplainQuery => {
+                let sql = self.editor.get_content();
+                if !sql.trim().is_empty() {
+                    let explain = format!("EXPLAIN ANALYZE {}", sql.trim());
+                    self.history.push(&sql);
+                    self.set_status("Running EXPLAIN ANALYZE...".to_string(), StatusLevel::Info);
+                    Action::ExecuteQuery(explain)
+                } else {
+                    Action::None
+                }
+            }
             KeyAction::ClearEditor => {
                 self.editor.clear();
                 Action::None
@@ -646,6 +657,39 @@ mod tests {
         // F5 with empty editor should return None
         let f5 = KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE);
         let action = app.handle_key(f5);
+        assert!(matches!(action, Action::None));
+    }
+
+    #[test]
+    fn test_explain_query_prefixes_sql() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+        app.editor.set_content("SELECT * FROM users".to_string());
+
+        let ctrl_e = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL);
+        let action = app.handle_key(ctrl_e);
+        match action {
+            Action::ExecuteQuery(sql) => {
+                assert_eq!(sql, "EXPLAIN ANALYZE SELECT * FROM users");
+            }
+            other => panic!(
+                "Expected ExecuteQuery, got {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+    }
+
+    #[test]
+    fn test_explain_ignores_empty_editor() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+
+        let ctrl_e = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL);
+        let action = app.handle_key(ctrl_e);
         assert!(matches!(action, Action::None));
     }
 
