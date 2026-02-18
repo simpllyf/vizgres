@@ -28,8 +28,14 @@ pub enum ComponentAction {
 
 /// Trait for UI components
 pub trait Component {
-    /// Handle a key event, returning an action for the parent to process
-    fn handle_key(&mut self, key: KeyEvent) -> ComponentAction;
+    /// Handle a key event, returning an action for the parent to process.
+    ///
+    /// Defaults to `Ignored` — only override in components with free-form
+    /// text input (editor, command bar). Navigation-only components can
+    /// rely on the default since `KeyMap` handles their bindings.
+    fn handle_key(&mut self, _key: KeyEvent) -> ComponentAction {
+        ComponentAction::Ignored
+    }
 
     /// Render the component to the frame
     fn render(&self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme);

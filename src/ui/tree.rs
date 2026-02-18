@@ -4,9 +4,7 @@
 
 use crate::db::schema::SchemaTree;
 use crate::ui::Component;
-use crate::ui::ComponentAction;
 use crate::ui::theme::Theme;
-use crossterm::event::KeyEvent;
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 use std::collections::HashSet;
@@ -192,12 +190,6 @@ impl Default for TreeBrowser {
 }
 
 impl Component for TreeBrowser {
-    fn handle_key(&mut self, _key: KeyEvent) -> ComponentAction {
-        // Navigation is handled by KeyMap → App::execute_key_action().
-        // TreeBrowser has no free-form text input, so nothing to handle here.
-        ComponentAction::Ignored
-    }
-
     fn render(&self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
         if self.items.is_empty() {
             let msg = if self.schema.is_some() {

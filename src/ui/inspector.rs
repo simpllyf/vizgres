@@ -4,9 +4,7 @@
 //! JSON values are pretty-printed. Scrollable for large content.
 
 use crate::ui::Component;
-use crate::ui::ComponentAction;
 use crate::ui::theme::Theme;
-use crossterm::event::KeyEvent;
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
@@ -106,12 +104,6 @@ impl Default for Inspector {
 }
 
 impl Component for Inspector {
-    fn handle_key(&mut self, _key: KeyEvent) -> ComponentAction {
-        // Navigation and actions are handled by KeyMap → App::execute_key_action().
-        // Inspector has no free-form text input, so nothing to handle here.
-        ComponentAction::Ignored
-    }
-
     fn render(&self, frame: &mut Frame, area: Rect, _focused: bool, theme: &Theme) {
         let content = match &self.content {
             Some(c) => c,

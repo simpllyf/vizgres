@@ -17,6 +17,7 @@ pub struct QueryHistory {
 
 impl QueryHistory {
     pub fn new(capacity: usize) -> Self {
+        assert!(capacity > 0, "QueryHistory capacity must be > 0");
         Self {
             entries: VecDeque::with_capacity(capacity),
             capacity,
@@ -265,5 +266,11 @@ mod tests {
         assert_eq!(h.back("draft2"), Some("SELECT 1"));
         assert_eq!(h.forward(), Some("draft2"));
         assert!(!h.is_browsing());
+    }
+
+    #[test]
+    #[should_panic(expected = "capacity must be > 0")]
+    fn test_zero_capacity_panics() {
+        QueryHistory::new(0);
     }
 }

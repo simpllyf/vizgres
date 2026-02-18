@@ -48,7 +48,7 @@ async fn main() -> Result<()> {
 
     // Connect to the database before entering TUI
     eprintln!("Connecting to {}...", conn_config.name);
-    let provider = db::PostgresProvider::connect(&conn_config)
+    let (provider, conn_err_rx) = db::PostgresProvider::connect(&conn_config)
         .await
         .map_err(|e| anyhow::anyhow!("Connection failed: {}", e))?;
     let provider = Arc::new(provider);
@@ -75,7 +75,14 @@ async fn main() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     // Run the app (separated so we can always clean up)
-    let result = run_app(&mut terminal, provider, conn_config.name, schema).await;
+    let result = run_app(
+        &mut terminal,
+        provider,
+        conn_config.name,
+        schema,
+        conn_err_rx,
+    )
+    .await;
 
     // Restore terminal
     disable_raw_mode()?;
@@ -104,6 +111,7 @@ async fn run_app(
     provider: Arc<db::PostgresProvider>,
     connection_name: String,
     schema: db::schema::SchemaTree,
+    mut conn_err_rx: mpsc::UnboundedReceiver<String>,
 ) -> Result<()> {
     let mut app = App::with_connection(connection_name, schema);
 
@@ -122,6 +130,11 @@ async fn run_app(
             // Async events from spawned tasks
             Some(event) = event_rx.recv() => {
                 app.handle_event(event)?
+            }
+
+            // Background connection died (server restart, idle timeout, etc.)
+            Some(msg) = conn_err_rx.recv() => {
+                app.handle_event(AppEvent::ConnectionLost(msg))?
             }
 
             // Check for terminal input using a small timeout

@@ -4,9 +4,7 @@
 
 use crate::db::types::{CellValue, QueryResults};
 use crate::ui::Component;
-use crate::ui::ComponentAction;
 use crate::ui::theme::Theme;
-use crossterm::event::KeyEvent;
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
@@ -178,12 +176,6 @@ impl Default for ResultsViewer {
 }
 
 impl Component for ResultsViewer {
-    fn handle_key(&mut self, _key: KeyEvent) -> ComponentAction {
-        // Navigation and actions are handled by KeyMap → App::execute_key_action().
-        // ResultsViewer has no free-form text input, so nothing to handle here.
-        ComponentAction::Ignored
-    }
-
     fn render(&self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
         // Show error if present
         if let Some(ref error) = self.error {
@@ -401,8 +393,8 @@ mod tests {
     use std::time::Duration;
 
     fn sample_results() -> QueryResults {
-        QueryResults {
-            columns: vec![
+        QueryResults::new(
+            vec![
                 ColumnDef {
                     name: "id".to_string(),
                     data_type: DataType::Integer,
@@ -414,7 +406,7 @@ mod tests {
                     nullable: true,
                 },
             ],
-            rows: vec![
+            vec![
                 Row {
                     values: vec![CellValue::Integer(1), CellValue::Text("Alice".to_string())],
                 },
@@ -422,9 +414,9 @@ mod tests {
                     values: vec![CellValue::Integer(2), CellValue::Text("Bob".to_string())],
                 },
             ],
-            execution_time: Duration::from_millis(42),
-            row_count: 2,
-        }
+            Duration::from_millis(42),
+            2,
+        )
     }
 
     #[test]

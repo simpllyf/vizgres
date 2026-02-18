@@ -18,6 +18,28 @@ pub struct QueryResults {
     pub row_count: usize,
 }
 
+impl QueryResults {
+    /// Create a new QueryResults, validating column-row alignment in debug builds.
+    pub fn new(
+        columns: Vec<ColumnDef>,
+        rows: Vec<Row>,
+        execution_time: Duration,
+        row_count: usize,
+    ) -> Self {
+        debug_assert!(
+            rows.iter().all(|r| r.values.len() == columns.len()),
+            "every row must have exactly as many values as there are columns ({} columns)",
+            columns.len(),
+        );
+        Self {
+            columns,
+            rows,
+            execution_time,
+            row_count,
+        }
+    }
+}
+
 /// Column definition in query results
 #[derive(Debug, Clone)]
 pub struct ColumnDef {
@@ -223,5 +245,48 @@ mod tests {
         ]);
         let display = arr.display_string(10);
         assert!(display.len() <= 13); // some overshoot from joining is ok
+    }
+
+    #[test]
+    fn test_query_results_new_valid() {
+        let results = QueryResults::new(
+            vec![ColumnDef {
+                name: "x".to_string(),
+                data_type: DataType::Integer,
+                nullable: false,
+            }],
+            vec![Row {
+                values: vec![CellValue::Integer(1)],
+            }],
+            Duration::from_millis(1),
+            1,
+        );
+        assert_eq!(results.columns.len(), 1);
+        assert_eq!(results.rows.len(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "every row must have exactly as many values")]
+    #[cfg(debug_assertions)]
+    fn test_query_results_new_misaligned_panics() {
+        QueryResults::new(
+            vec![
+                ColumnDef {
+                    name: "a".to_string(),
+                    data_type: DataType::Integer,
+                    nullable: false,
+                },
+                ColumnDef {
+                    name: "b".to_string(),
+                    data_type: DataType::Text,
+                    nullable: false,
+                },
+            ],
+            vec![Row {
+                values: vec![CellValue::Integer(1)], // only 1 value for 2 columns
+            }],
+            Duration::from_millis(1),
+            1,
+        );
     }
 }

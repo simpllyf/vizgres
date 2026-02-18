@@ -34,7 +34,7 @@
 //! let config = ConnectionConfig::from_url("postgres://user:pass@localhost/mydb")?;
 //!
 //! // Connect to database
-//! let provider = PostgresProvider::connect(&config).await?;
+//! let (provider, _conn_err_rx) = PostgresProvider::connect(&config).await?;
 //!
 //! // Execute a query
 //! let results = provider.execute_query("SELECT * FROM users").await?;
