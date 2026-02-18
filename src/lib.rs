@@ -26,6 +26,7 @@
 //!
 //! ```no_run
 //! use vizgres::config::ConnectionConfig;
+//! use vizgres::db::Database;
 //! use vizgres::db::postgres::PostgresProvider;
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -33,7 +34,7 @@
 //! let config = ConnectionConfig::from_url("postgres://user:pass@localhost/mydb")?;
 //!
 //! // Connect to database
-//! let mut provider = PostgresProvider::connect(&config).await?;
+//! let provider = PostgresProvider::connect(&config).await?;
 //!
 //! // Execute a query
 //! let results = provider.execute_query("SELECT * FROM users").await?;

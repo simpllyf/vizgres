@@ -5,6 +5,7 @@
 
 use vizgres::config::ConnectionConfig;
 use vizgres::config::connections::SslMode;
+use vizgres::db::Database;
 use vizgres::db::postgres::PostgresProvider;
 use vizgres::db::types::CellValue;
 
@@ -231,7 +232,7 @@ async fn test_query_timestamps() {
 #[tokio::test]
 async fn test_get_schema() {
     let config = test_config();
-    let mut provider = match PostgresProvider::connect(&config).await {
+    let provider = match PostgresProvider::connect(&config).await {
         Ok(p) => p,
         Err(_) => {
             eprintln!("Skipping test: Database not available");
@@ -287,33 +288,6 @@ async fn test_get_schema() {
 }
 
 #[tokio::test]
-async fn test_schema_caching() {
-    let config = test_config();
-    let mut provider = match PostgresProvider::connect(&config).await {
-        Ok(p) => p,
-        Err(_) => {
-            eprintln!("Skipping test: Database not available");
-            return;
-        }
-    };
-
-    // First call loads from database
-    let schema1 = provider.get_schema().await;
-    assert!(schema1.is_ok());
-
-    // Second call should return cached version
-    let schema2 = provider.get_schema().await;
-    assert!(schema2.is_ok());
-
-    // Invalidate cache
-    provider.invalidate_cache();
-
-    // Third call should reload from database
-    let schema3 = provider.get_schema().await;
-    assert!(schema3.is_ok());
-}
-
-#[tokio::test]
 async fn test_invalid_query() {
     let config = test_config();
     let provider = match PostgresProvider::connect(&config).await {
@@ -343,7 +317,7 @@ async fn test_connection_failure() {
 #[tokio::test]
 async fn test_multiple_schemas() {
     let config = test_config();
-    let mut provider = match PostgresProvider::connect(&config).await {
+    let provider = match PostgresProvider::connect(&config).await {
         Ok(p) => p,
         Err(_) => {
             eprintln!("Skipping test: Database not available");

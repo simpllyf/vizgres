@@ -1,5 +1,7 @@
 //! vizgres - A fast, keyboard-driven PostgreSQL client for the terminal
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use clap::Parser;
 use crossterm::{
@@ -19,6 +21,7 @@ mod keymap;
 mod ui;
 
 use app::{Action, App, AppEvent};
+use db::Database;
 
 /// A fast, keyboard-driven PostgreSQL client for the terminal
 #[derive(Parser)]
@@ -44,9 +47,10 @@ async fn main() -> Result<()> {
 
     // Connect to the database before entering TUI
     eprintln!("Connecting to {}...", conn_config.name);
-    let mut provider = db::PostgresProvider::connect(&conn_config)
+    let provider = db::PostgresProvider::connect(&conn_config)
         .await
         .map_err(|e| anyhow::anyhow!("Connection failed: {}", e))?;
+    let provider = Arc::new(provider);
 
     // Load schema
     let schema = provider
@@ -96,17 +100,14 @@ fn prompt_for_url() -> Result<String> {
 
 async fn run_app(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
-    provider: db::PostgresProvider,
+    provider: Arc<db::PostgresProvider>,
     connection_name: String,
     schema: db::schema::SchemaTree,
 ) -> Result<()> {
-    let mut app = App::new();
-    app.connection = Some(provider);
-    app.connection_name = Some(connection_name);
-    app.tree_browser.set_schema(schema);
+    let mut app = App::with_connection(connection_name, schema);
 
     // Channel for async events (db results, etc.)
-    let (_event_tx, mut event_rx) = mpsc::unbounded_channel::<AppEvent>();
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<AppEvent>();
 
     // Main event loop
     loop {
@@ -153,38 +154,32 @@ async fn run_app(
                 break;
             }
             Action::ExecuteQuery(sql) => {
-                if let Some(ref conn) = app.connection {
-                    match conn.execute_query(&sql).await {
+                let db = Arc::clone(&provider);
+                let tx = event_tx.clone();
+                tokio::spawn(async move {
+                    match db.execute_query(&sql).await {
                         Ok(results) => {
-                            app.handle_event(AppEvent::QueryCompleted(results))?;
+                            let _ = tx.send(AppEvent::QueryCompleted(results));
                         }
                         Err(e) => {
-                            app.handle_event(AppEvent::QueryFailed(e.to_string()))?;
+                            let _ = tx.send(AppEvent::QueryFailed(e.to_string()));
                         }
                     }
-                } else {
-                    app.set_status(
-                        "Not connected to a database".to_string(),
-                        app::StatusLevel::Error,
-                    );
-                }
+                });
             }
             Action::LoadSchema => {
-                if let Some(ref mut conn) = app.connection {
-                    conn.invalidate_cache();
-                    match conn.get_schema().await {
+                let db = Arc::clone(&provider);
+                let tx = event_tx.clone();
+                tokio::spawn(async move {
+                    match db.get_schema().await {
                         Ok(schema) => {
-                            app.tree_browser.set_schema(schema);
-                            app.set_status("Schema refreshed".to_string(), app::StatusLevel::Info);
+                            let _ = tx.send(AppEvent::SchemaLoaded(schema));
                         }
                         Err(e) => {
-                            app.set_status(
-                                format!("Schema refresh failed: {}", e),
-                                app::StatusLevel::Error,
-                            );
+                            let _ = tx.send(AppEvent::SchemaFailed(e.to_string()));
                         }
                     }
-                }
+                });
             }
             Action::None => {}
         }
