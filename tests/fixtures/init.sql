@@ -75,11 +75,12 @@ INSERT INTO test_schema.settings (key, value) VALUES
     ('version', '0.1.0'),
     ('debug_mode', 'false');
 
--- Create an index for testing
+-- Create indexes for testing
 CREATE INDEX idx_users_email ON users(email);
 CREATE INDEX idx_orders_user_id ON orders(user_id);
+CREATE INDEX idx_orders_status_date ON orders(status, order_date);
 
--- Add a view for testing (if needed later)
+-- View for testing
 CREATE VIEW user_order_summary AS
 SELECT
     u.id,
@@ -89,3 +90,44 @@ SELECT
 FROM users u
 LEFT JOIN orders o ON u.id = o.user_id
 GROUP BY u.id, u.name;
+
+-- Materialized view for testing (shows up alongside views)
+CREATE MATERIALIZED VIEW active_user_stats AS
+SELECT
+    u.id,
+    u.name,
+    u.email,
+    COUNT(o.id) as order_count
+FROM users u
+LEFT JOIN orders o ON u.id = o.user_id
+WHERE u.active = true
+GROUP BY u.id, u.name, u.email;
+
+-- Functions for testing
+CREATE FUNCTION get_user_by_id(user_id integer)
+RETURNS SETOF users
+LANGUAGE sql STABLE
+AS $$
+    SELECT * FROM users WHERE id = user_id;
+$$;
+
+CREATE FUNCTION calculate_order_total(p_user_id integer)
+RETURNS numeric
+LANGUAGE sql STABLE
+AS $$
+    SELECT COALESCE(SUM(amount), 0) FROM orders WHERE user_id = p_user_id;
+$$;
+
+CREATE FUNCTION format_user_name(first_name text, last_name text)
+RETURNS text
+LANGUAGE sql IMMUTABLE
+AS $$
+    SELECT first_name || ' ' || last_name;
+$$;
+
+-- Procedure for testing (PostgreSQL 11+)
+CREATE PROCEDURE archive_old_orders(cutoff_date date)
+LANGUAGE sql
+AS $$
+    UPDATE orders SET status = 'archived' WHERE order_date < cutoff_date AND status = 'completed';
+$$;

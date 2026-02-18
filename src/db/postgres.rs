@@ -5,10 +5,11 @@
 use crate::config::ConnectionConfig;
 use crate::config::connections::SslMode;
 use crate::db::Database;
-use crate::db::schema::{Column, Schema, SchemaTree, Table};
+use crate::db::schema::{Column, ForeignKey, Function, Index, Schema, SchemaTree, Table};
 use crate::db::types::{CellValue, ColumnDef, DataType, QueryResults, Row};
 use crate::error::DbResult;
 use rust_decimal::Decimal;
+use std::collections::{HashMap, HashSet};
 use tokio::sync::mpsc;
 use tokio_postgres::Client;
 use tokio_postgres::types::Type;
@@ -130,76 +131,241 @@ impl Database for PostgresProvider {
     }
 
     async fn get_schema(&self) -> DbResult<SchemaTree> {
-        // Get schemas (exclude pg_ internal schemas)
+        let map_err =
+            |e: tokio_postgres::Error| crate::error::DbError::SchemaLoadFailed(e.to_string());
+
+        // Query 1: Schemas (exclude pg_ internal and information_schema)
         let schema_rows = self
             .client
             .query(
-                "SELECT schema_name FROM information_schema.schemata \
-                 WHERE schema_name NOT LIKE 'pg_%' \
-                 AND schema_name != 'information_schema' \
-                 ORDER BY schema_name",
+                "SELECT nspname FROM pg_namespace \
+                 WHERE nspname NOT LIKE 'pg_%' \
+                 AND nspname != 'information_schema' \
+                 ORDER BY nspname",
                 &[],
             )
             .await
-            .map_err(|e| crate::error::DbError::SchemaLoadFailed(e.to_string()))?;
+            .map_err(&map_err)?;
 
+        let schema_names: Vec<String> = schema_rows.iter().map(|r| r.get(0)).collect();
+
+        // Query 2: Tables + views + columns (relkind: r=table, v=view, m=materialized view)
+        let rel_rows = self
+            .client
+            .query(
+                "SELECT n.nspname, c.relname, c.relkind::text, \
+                        a.attname, format_type(a.atttypid, a.atttypmod), a.attnum \
+                 FROM pg_class c \
+                 JOIN pg_namespace n ON n.oid = c.relnamespace \
+                 JOIN pg_attribute a ON a.attrelid = c.oid \
+                 WHERE c.relkind IN ('r','v','m') \
+                   AND n.nspname NOT LIKE 'pg_%' \
+                   AND n.nspname != 'information_schema' \
+                   AND a.attnum > 0 AND NOT a.attisdropped \
+                 ORDER BY n.nspname, c.relname, a.attnum",
+                &[],
+            )
+            .await
+            .map_err(&map_err)?;
+
+        // Query 3: PK + FK constraints
+        let constraint_rows = self
+            .client
+            .query(
+                "SELECT n.nspname, c.relname, con.contype::text, \
+                        a.attname, \
+                        fn.nspname AS fk_schema, fc.relname AS fk_table, fa.attname AS fk_col \
+                 FROM pg_constraint con \
+                 JOIN pg_class c ON c.oid = con.conrelid \
+                 JOIN pg_namespace n ON n.oid = c.relnamespace \
+                 JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS u(attnum, ord) ON true \
+                 JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = u.attnum \
+                 LEFT JOIN pg_class fc ON fc.oid = con.confrelid \
+                 LEFT JOIN pg_namespace fn ON fn.oid = fc.relnamespace \
+                 LEFT JOIN LATERAL unnest(con.confkey) WITH ORDINALITY AS fu(attnum, ord) ON fu.ord = u.ord \
+                 LEFT JOIN pg_attribute fa ON fa.attrelid = fc.oid AND fa.attnum = fu.attnum \
+                 WHERE con.contype IN ('p', 'f') \
+                   AND n.nspname NOT LIKE 'pg_%' \
+                   AND n.nspname != 'information_schema' \
+                 ORDER BY n.nspname, c.relname, con.contype, u.ord",
+                &[],
+            )
+            .await
+            .map_err(&map_err)?;
+
+        // Query 4: Indexes (exclude primary key indexes — those show via constraints)
+        let index_rows = self
+            .client
+            .query(
+                "SELECT n.nspname, ct.relname AS table_name, ci.relname AS index_name, \
+                        ix.indisunique, ix.indisprimary, \
+                        array_agg(a.attname ORDER BY k.ord) AS columns \
+                 FROM pg_index ix \
+                 JOIN pg_class ci ON ci.oid = ix.indexrelid \
+                 JOIN pg_class ct ON ct.oid = ix.indrelid \
+                 JOIN pg_namespace n ON n.oid = ct.relnamespace \
+                 JOIN LATERAL unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ord) ON true \
+                 JOIN pg_attribute a ON a.attrelid = ct.oid AND a.attnum = k.attnum \
+                 WHERE n.nspname NOT LIKE 'pg_%' \
+                   AND n.nspname != 'information_schema' \
+                   AND a.attnum > 0 \
+                 GROUP BY n.nspname, ct.relname, ci.relname, ix.indisunique, ix.indisprimary \
+                 ORDER BY n.nspname, ci.relname",
+                &[],
+            )
+            .await
+            .map_err(&map_err)?;
+
+        // Query 5: Functions + procedures (exclude aggregates, window fns, internal)
+        let func_rows = self
+            .client
+            .query(
+                "SELECT n.nspname, p.proname, \
+                        pg_get_function_identity_arguments(p.oid) AS args, \
+                        pg_get_function_result(p.oid) AS return_type \
+                 FROM pg_proc p \
+                 JOIN pg_namespace n ON n.oid = p.pronamespace \
+                 WHERE n.nspname NOT LIKE 'pg_%' \
+                   AND n.nspname != 'information_schema' \
+                   AND p.prokind IN ('f', 'p') \
+                 ORDER BY n.nspname, p.proname",
+                &[],
+            )
+            .await
+            .map_err(&map_err)?;
+
+        // ── Assembly ────────────────────────────────────────────
+
+        // Build PK set: (schema, table, column) → true
+        let mut pk_set: HashSet<(String, String, String)> = HashSet::new();
+        // Build FK map: (schema, table, column) → ForeignKey
+        let mut fk_map: HashMap<(String, String, String), ForeignKey> = HashMap::new();
+
+        for row in &constraint_rows {
+            let schema: String = row.get(0);
+            let table: String = row.get(1);
+            let contype: String = row.get(2);
+            let col: String = row.get(3);
+
+            if contype == "p" {
+                pk_set.insert((schema, table, col));
+            } else if contype == "f" {
+                let fk_schema: String = row.get(4);
+                let fk_table: String = row.get(5);
+                let fk_col: String = row.get(6);
+                let target_table = if fk_schema == schema {
+                    fk_table
+                } else {
+                    format!("{}.{}", fk_schema, fk_table)
+                };
+                fk_map.insert(
+                    (schema, table, col),
+                    ForeignKey {
+                        target_table,
+                        target_column: fk_col,
+                    },
+                );
+            }
+        }
+
+        // Build indexes per schema
+        let mut index_map: HashMap<String, Vec<Index>> = HashMap::new();
+        for row in &index_rows {
+            let schema: String = row.get(0);
+            let table_name: String = row.get(1);
+            let index_name: String = row.get(2);
+            let is_unique: bool = row.get(3);
+            let is_primary: bool = row.get(4);
+            let columns: Vec<String> = row.get(5);
+
+            index_map.entry(schema).or_default().push(Index {
+                name: index_name,
+                columns,
+                is_unique,
+                is_primary,
+                table_name,
+            });
+        }
+
+        // Build functions per schema
+        let mut func_map: HashMap<String, Vec<Function>> = HashMap::new();
+        for row in &func_rows {
+            let schema: String = row.get(0);
+            let name: String = row.get(1);
+            let args: String = row.get(2);
+            // pg_get_function_result() returns NULL for procedures
+            let return_type: Option<String> = row.get(3);
+
+            func_map.entry(schema).or_default().push(Function {
+                name,
+                args,
+                return_type: return_type.unwrap_or_default(),
+            });
+        }
+
+        // Build tables and views per schema from rel_rows
+        // Key: (schema, relname) → (relkind, Vec<Column>)
+        let mut rel_map: HashMap<(String, String), (String, Vec<Column>)> = HashMap::new();
+        // Track insertion order per schema
+        let mut rel_order: HashMap<String, Vec<String>> = HashMap::new();
+
+        for row in &rel_rows {
+            let schema: String = row.get(0);
+            let relname: String = row.get(1);
+            let relkind: String = row.get(2);
+            let col_name: String = row.get(3);
+            let type_name: String = row.get(4);
+
+            let key = (schema.clone(), relname.clone());
+            let entry = rel_map.entry(key).or_insert_with(|| {
+                rel_order
+                    .entry(schema.clone())
+                    .or_default()
+                    .push(relname.clone());
+                (relkind.clone(), Vec::new())
+            });
+
+            let is_pk = pk_set.contains(&(schema.clone(), relname.clone(), col_name.clone()));
+            let fk = fk_map.remove(&(schema, relname, col_name.clone()));
+
+            entry.1.push(Column {
+                name: col_name,
+                data_type: datatype_from_format_type(&type_name),
+                is_primary_key: is_pk,
+                foreign_key: fk,
+            });
+        }
+
+        // Assemble schemas
         let mut schemas = Vec::new();
-
-        for schema_row in &schema_rows {
-            let schema_name: String = schema_row.get(0);
-
-            // Get tables for this schema
-            let table_rows = self
-                .client
-                .query(
-                    "SELECT table_name FROM information_schema.tables \
-                     WHERE table_schema = $1 AND table_type = 'BASE TABLE' \
-                     ORDER BY table_name",
-                    &[&schema_name],
-                )
-                .await
-                .map_err(|e| crate::error::DbError::SchemaLoadFailed(e.to_string()))?;
-
+        for schema_name in &schema_names {
             let mut tables = Vec::new();
+            let mut views = Vec::new();
 
-            for table_row in &table_rows {
-                let table_name: String = table_row.get(0);
-
-                // Get columns for this table
-                let col_rows = self
-                    .client
-                    .query(
-                        "SELECT column_name, data_type \
-                         FROM information_schema.columns \
-                         WHERE table_schema = $1 AND table_name = $2 \
-                         ORDER BY ordinal_position",
-                        &[&schema_name, &table_name],
-                    )
-                    .await
-                    .map_err(|e| crate::error::DbError::SchemaLoadFailed(e.to_string()))?;
-
-                let columns: Vec<Column> = col_rows
-                    .iter()
-                    .map(|r| {
-                        let col_name: String = r.get(0);
-                        let type_name: String = r.get(1);
-
-                        Column {
-                            name: col_name,
-                            data_type: datatype_from_info_schema(&type_name),
+            if let Some(rel_names) = rel_order.get(schema_name) {
+                for relname in rel_names {
+                    if let Some((relkind, columns)) =
+                        rel_map.remove(&(schema_name.clone(), relname.clone()))
+                    {
+                        let table = Table {
+                            name: relname.clone(),
+                            columns,
+                        };
+                        match relkind.as_str() {
+                            "r" => tables.push(table),
+                            "v" | "m" => views.push(table),
+                            _ => {}
                         }
-                    })
-                    .collect();
-
-                tables.push(Table {
-                    name: table_name,
-                    columns,
-                });
+                    }
+                }
             }
 
             schemas.push(Schema {
-                name: schema_name,
+                name: schema_name.clone(),
                 tables,
+                views,
+                indexes: index_map.remove(schema_name).unwrap_or_default(),
+                functions: func_map.remove(schema_name).unwrap_or_default(),
             });
         }
 
@@ -247,18 +413,41 @@ fn pg_type_to_datatype(pg_type: &Type) -> DataType {
     }
 }
 
-/// Map information_schema type strings to our DataType enum
-fn datatype_from_info_schema(type_name: &str) -> DataType {
-    match type_name {
+/// Map `format_type()` output to our DataType enum.
+///
+/// `format_type()` returns strings like "integer", "character varying(255)",
+/// "numeric(10,2)", "timestamp with time zone", "text[]", etc.
+fn datatype_from_format_type(type_name: &str) -> DataType {
+    // Handle array types (e.g. "text[]", "integer[]")
+    if let Some(inner) = type_name.strip_suffix("[]") {
+        return DataType::Array(Box::new(datatype_from_format_type(inner)));
+    }
+
+    // Handle parameterized types: extract base name and optional params
+    let (base, params) = if let Some(paren_pos) = type_name.find('(') {
+        let base = type_name[..paren_pos].trim();
+        let params_str = &type_name[paren_pos + 1..type_name.len() - 1];
+        (base, Some(params_str))
+    } else {
+        (type_name.trim(), None)
+    };
+
+    match base {
         "smallint" => DataType::SmallInt,
         "integer" => DataType::Integer,
         "bigint" => DataType::BigInt,
         "real" => DataType::Real,
         "double precision" => DataType::Double,
         "numeric" => DataType::Numeric,
-        "text" => DataType::Text,
-        "character varying" => DataType::Varchar(None),
-        "character" => DataType::Char(None),
+        "text" | "name" => DataType::Text,
+        "character varying" => {
+            let len = params.and_then(|p| p.parse::<usize>().ok());
+            DataType::Varchar(len)
+        }
+        "character" => {
+            let len = params.and_then(|p| p.parse::<usize>().ok());
+            DataType::Char(len)
+        }
         "boolean" => DataType::Boolean,
         "date" => DataType::Date,
         "time without time zone" | "time with time zone" => DataType::Time,
