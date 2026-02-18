@@ -4,6 +4,7 @@
 
 pub mod command_bar;
 pub mod editor;
+pub mod help;
 pub mod inspector;
 pub mod layout;
 pub mod render;

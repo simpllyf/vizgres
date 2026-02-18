@@ -60,6 +60,11 @@ pub struct Theme {
     pub inspector_header: Style,
     pub inspector_text: Style,
 
+    // Help overlay
+    pub help_section: Style,
+    pub help_key: Style,
+    pub help_desc: Style,
+
     // Command bar
     #[allow(dead_code)] // reserved for styled prompt prefix
     pub command_prompt: Style,
@@ -151,6 +156,13 @@ impl Default for Theme {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
             inspector_text: Style::default().fg(Color::White),
+
+            // Help overlay
+            help_section: Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+            help_key: Style::default().fg(Color::Cyan),
+            help_desc: Style::default().fg(Color::White),
 
             // Command bar
             command_prompt: Style::default()
