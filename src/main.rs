@@ -17,6 +17,7 @@ mod commands;
 mod config;
 mod db;
 mod error;
+mod history;
 mod keymap;
 mod ui;
 

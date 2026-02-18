@@ -6,6 +6,7 @@ use crate::commands::{Command, parse_command};
 use crate::db::QueryResults;
 use crate::db::schema::SchemaTree;
 use crate::error::Result;
+use crate::history::QueryHistory;
 use crate::keymap::{KeyAction, KeyMap};
 use crate::ui::Component;
 use crate::ui::ComponentAction;
@@ -34,6 +35,9 @@ pub struct App {
     pub results_viewer: ResultsViewer,
     pub command_bar: CommandBar,
     pub inspector: Inspector,
+
+    /// Query history for Ctrl+Up/Down navigation
+    history: QueryHistory,
 
     /// Data-driven keybinding configuration
     keymap: KeyMap,
@@ -110,6 +114,7 @@ impl App {
             results_viewer: ResultsViewer::new(),
             command_bar: CommandBar::new(),
             inspector: Inspector::new(),
+            history: QueryHistory::new(100),
             keymap: KeyMap::default(),
             theme: Theme::default(),
             status_message: None,
@@ -291,6 +296,7 @@ impl App {
             KeyAction::ExecuteQuery => {
                 let sql = self.editor.get_content();
                 if !sql.trim().is_empty() {
+                    self.history.push(&sql);
                     self.set_status("Executing query...".to_string(), StatusLevel::Info);
                     Action::ExecuteQuery(sql)
                 } else {
@@ -299,6 +305,19 @@ impl App {
             }
             KeyAction::ClearEditor => {
                 self.editor.clear();
+                Action::None
+            }
+            KeyAction::HistoryBack => {
+                let current = self.editor.get_content();
+                if let Some(entry) = self.history.back(&current) {
+                    self.editor.set_content(entry.to_string());
+                }
+                Action::None
+            }
+            KeyAction::HistoryForward => {
+                if let Some(entry) = self.history.forward() {
+                    self.editor.set_content(entry.to_string());
+                }
                 Action::None
             }
 
@@ -596,5 +615,33 @@ mod tests {
         let f5 = KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE);
         let action = app.handle_key(f5);
         assert!(matches!(action, Action::None));
+    }
+
+    #[test]
+    fn test_history_back_populates_editor() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+
+        // Type and execute a query
+        app.editor.set_content("SELECT 1".to_string());
+        let f5 = KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE);
+        let action = app.handle_key(f5);
+        assert!(matches!(action, Action::ExecuteQuery(_)));
+
+        // Clear editor (simulating user clearing it)
+        app.editor.clear();
+        assert_eq!(app.editor.get_content(), "");
+
+        // Ctrl+Up should recall the query
+        let ctrl_up = KeyEvent::new(KeyCode::Up, KeyModifiers::CONTROL);
+        app.handle_key(ctrl_up);
+        assert_eq!(app.editor.get_content(), "SELECT 1");
+
+        // Ctrl+Down should restore the draft (empty)
+        let ctrl_down = KeyEvent::new(KeyCode::Down, KeyModifiers::CONTROL);
+        app.handle_key(ctrl_down);
+        assert_eq!(app.editor.get_content(), "");
     }
 }
