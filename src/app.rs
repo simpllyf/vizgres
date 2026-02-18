@@ -54,6 +54,9 @@ pub struct App {
     /// Error from clipboard initialization (preserved for diagnostics)
     clipboard_error: Option<String>,
 
+    /// Whether a query is currently in flight (for cancel support)
+    pub query_running: bool,
+
     /// Whether the application is running
     pub running: bool,
 }
@@ -103,6 +106,7 @@ pub enum AppEvent {
 /// Actions returned by event handlers for the main loop to execute
 pub enum Action {
     ExecuteQuery(String),
+    CancelQuery,
     LoadSchema,
     Quit,
     None,
@@ -129,6 +133,7 @@ impl App {
             status_message: None,
             clipboard,
             clipboard_error,
+            query_running: false,
             running: true,
         }
     }
@@ -147,6 +152,7 @@ impl App {
             AppEvent::Key(key) => Ok(self.handle_key(key)),
             AppEvent::Resize => Ok(Action::None),
             AppEvent::QueryCompleted(results) => {
+                self.query_running = false;
                 let count = results.row_count;
                 let time = results.execution_time;
                 self.results_viewer.set_results(results);
@@ -158,8 +164,21 @@ impl App {
                 Ok(Action::None)
             }
             AppEvent::QueryFailed(err) => {
-                self.results_viewer.set_error(err.clone());
-                self.set_status("Query failed".to_string(), StatusLevel::Error);
+                self.query_running = false;
+                let cancelled = err.contains("canceling statement due to user request");
+                self.results_viewer.set_error(err);
+                self.set_status(
+                    if cancelled {
+                        "Query cancelled".to_string()
+                    } else {
+                        "Query failed".to_string()
+                    },
+                    if cancelled {
+                        StatusLevel::Warning
+                    } else {
+                        StatusLevel::Error
+                    },
+                );
                 self.focus = PanelFocus::ResultsViewer;
                 Ok(Action::None)
             }
@@ -324,6 +343,14 @@ impl App {
                     self.history.push(&sql);
                     self.set_status("Running EXPLAIN ANALYZE...".to_string(), StatusLevel::Info);
                     Action::ExecuteQuery(explain)
+                } else {
+                    Action::None
+                }
+            }
+            KeyAction::CancelQuery => {
+                if self.query_running {
+                    self.set_status("Cancelling query...".to_string(), StatusLevel::Warning);
+                    Action::CancelQuery
                 } else {
                     Action::None
                 }
@@ -691,6 +718,68 @@ mod tests {
         let ctrl_e = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL);
         let action = app.handle_key(ctrl_e);
         assert!(matches!(action, Action::None));
+    }
+
+    #[test]
+    fn test_cancel_query_when_running() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+        app.query_running = true;
+
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        let action = app.handle_key(esc);
+        assert!(matches!(action, Action::CancelQuery));
+    }
+
+    #[test]
+    fn test_cancel_query_noop_when_idle() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+        // query_running is false by default
+
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        let action = app.handle_key(esc);
+        assert!(matches!(action, Action::None));
+    }
+
+    #[test]
+    fn test_query_completed_clears_running() {
+        let mut app = App::new();
+        app.query_running = true;
+
+        let results =
+            crate::db::QueryResults::new(vec![], vec![], std::time::Duration::from_millis(10), 0);
+        app.handle_event(AppEvent::QueryCompleted(results)).unwrap();
+        assert!(!app.query_running);
+    }
+
+    #[test]
+    fn test_query_failed_clears_running() {
+        let mut app = App::new();
+        app.query_running = true;
+
+        app.handle_event(AppEvent::QueryFailed("some error".to_string()))
+            .unwrap();
+        assert!(!app.query_running);
+    }
+
+    #[test]
+    fn test_query_cancelled_shows_warning() {
+        let mut app = App::new();
+        app.query_running = true;
+
+        app.handle_event(AppEvent::QueryFailed(
+            "ERROR: canceling statement due to user request".to_string(),
+        ))
+        .unwrap();
+        assert!(!app.query_running);
+        let msg = app.status_message.as_ref().unwrap();
+        assert_eq!(msg.message, "Query cancelled");
+        assert_eq!(msg.level, StatusLevel::Warning);
     }
 
     #[test]

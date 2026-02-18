@@ -168,6 +168,7 @@ async fn run_app(
                 break;
             }
             Action::ExecuteQuery(sql) => {
+                app.query_running = true;
                 let db = Arc::clone(&provider);
                 let tx = event_tx.clone();
                 tokio::spawn(async move {
@@ -179,6 +180,12 @@ async fn run_app(
                             let _ = tx.send(AppEvent::QueryFailed(e.to_string()));
                         }
                     }
+                });
+            }
+            Action::CancelQuery => {
+                let db = Arc::clone(&provider);
+                tokio::spawn(async move {
+                    let _ = db.cancel_query().await;
                 });
             }
             Action::LoadSchema => {
