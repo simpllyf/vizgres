@@ -45,6 +45,7 @@ clap = { version = "4", features = ["derive"] }
 
 # Clipboard
 arboard = "3"
+percent-encoding = "2.3.2"
 
 [dev-dependencies]
 tokio-test = "0.4"
