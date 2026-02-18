@@ -123,7 +123,7 @@ impl App {
             results_viewer: ResultsViewer::new(),
             command_bar: CommandBar::new(),
             inspector: Inspector::new(),
-            history: QueryHistory::new(100),
+            history: QueryHistory::load(500),
             keymap: KeyMap::default(),
             theme: Theme::default(),
             status_message: None,
