@@ -359,6 +359,14 @@ impl App {
                 self.editor.clear();
                 Action::None
             }
+            KeyAction::Undo => {
+                self.editor.undo();
+                Action::None
+            }
+            KeyAction::Redo => {
+                self.editor.redo();
+                Action::None
+            }
             KeyAction::HistoryBack => {
                 let current = self.editor.get_content();
                 if let Some(entry) = self.history.back(&current) {
