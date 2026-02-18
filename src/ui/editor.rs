@@ -9,6 +9,26 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
+/// Maximum number of undo snapshots to retain
+const UNDO_CAPACITY: usize = 100;
+
+/// Frozen editor state for undo/redo
+#[derive(Clone)]
+struct EditorSnapshot {
+    lines: Vec<String>,
+    cursor: (usize, usize),
+}
+
+/// Edit operation categories for coalescing
+#[derive(PartialEq)]
+enum EditOp {
+    Insert,
+    Backspace,
+    DeleteForward,
+    NewLine,
+    Clear,
+}
+
 /// Query editor component
 pub struct QueryEditor {
     /// Lines of text
@@ -19,6 +39,15 @@ pub struct QueryEditor {
 
     /// Scroll offset (first visible line)
     scroll_offset: usize,
+
+    /// Undo history (most recent at end)
+    undo_stack: Vec<EditorSnapshot>,
+
+    /// Redo history (most recent at end)
+    redo_stack: Vec<EditorSnapshot>,
+
+    /// Tracks current coalescing run
+    last_op: Option<EditOp>,
 }
 
 impl QueryEditor {
@@ -27,6 +56,9 @@ impl QueryEditor {
             lines: vec![String::new()],
             cursor: (0, 0),
             scroll_offset: 0,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            last_op: None,
         }
     }
 
@@ -35,14 +67,16 @@ impl QueryEditor {
         self.lines.join("\n")
     }
 
-    /// Clear all editor content
+    /// Clear all editor content (undoable)
     pub fn clear(&mut self) {
+        self.maybe_snapshot(EditOp::Clear);
         self.lines = vec![String::new()];
         self.cursor = (0, 0);
         self.scroll_offset = 0;
     }
 
-    /// Set the editor content (used by query history navigation)
+    /// Set the editor content (used by query history navigation).
+    /// Resets both undo/redo stacks — history nav is its own undo mechanism.
     pub fn set_content(&mut self, content: String) {
         self.lines = content.lines().map(String::from).collect();
         if self.lines.is_empty() {
@@ -50,9 +84,64 @@ impl QueryEditor {
         }
         self.cursor = (0, 0);
         self.scroll_offset = 0;
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.last_op = None;
+    }
+
+    /// Snapshot current state before a mutation, with coalescing.
+    ///
+    /// Consecutive same-type coalescable operations (Insert, Backspace,
+    /// DeleteForward) are grouped into a single undo step. NewLine and Clear
+    /// always create a new snapshot.
+    fn maybe_snapshot(&mut self, op: EditOp) {
+        let coalescable = matches!(
+            op,
+            EditOp::Insert | EditOp::Backspace | EditOp::DeleteForward
+        );
+        let coalesced = coalescable && self.last_op.as_ref() == Some(&op);
+
+        if !coalesced {
+            self.undo_stack.push(EditorSnapshot {
+                lines: self.lines.clone(),
+                cursor: self.cursor,
+            });
+            if self.undo_stack.len() > UNDO_CAPACITY {
+                self.undo_stack.remove(0);
+            }
+            self.redo_stack.clear();
+        }
+        self.last_op = Some(op);
+    }
+
+    /// Restore the previous editor state
+    pub fn undo(&mut self) {
+        if let Some(snapshot) = self.undo_stack.pop() {
+            self.redo_stack.push(EditorSnapshot {
+                lines: self.lines.clone(),
+                cursor: self.cursor,
+            });
+            self.lines = snapshot.lines;
+            self.cursor = snapshot.cursor;
+            self.last_op = None;
+        }
+    }
+
+    /// Re-apply a previously undone change
+    pub fn redo(&mut self) {
+        if let Some(snapshot) = self.redo_stack.pop() {
+            self.undo_stack.push(EditorSnapshot {
+                lines: self.lines.clone(),
+                cursor: self.cursor,
+            });
+            self.lines = snapshot.lines;
+            self.cursor = snapshot.cursor;
+            self.last_op = None;
+        }
     }
 
     fn insert_char(&mut self, c: char) {
+        self.maybe_snapshot(EditOp::Insert);
         let line = &mut self.lines[self.cursor.0];
         // Handle cursor beyond line length
         let col = self.cursor.1.min(line.len());
@@ -61,6 +150,7 @@ impl QueryEditor {
     }
 
     fn backspace(&mut self) {
+        self.maybe_snapshot(EditOp::Backspace);
         if self.cursor.1 > 0 {
             let col = self.cursor.1.min(self.lines[self.cursor.0].len());
             if col > 0 {
@@ -77,6 +167,7 @@ impl QueryEditor {
     }
 
     fn delete_forward(&mut self) {
+        self.maybe_snapshot(EditOp::DeleteForward);
         let line_len = self.lines[self.cursor.0].len();
         let col = self.cursor.1.min(line_len);
         if col < line_len {
@@ -89,6 +180,7 @@ impl QueryEditor {
     }
 
     fn new_line(&mut self) {
+        self.maybe_snapshot(EditOp::NewLine);
         let col = self.cursor.1.min(self.lines[self.cursor.0].len());
         let rest = self.lines[self.cursor.0][col..].to_string();
         self.lines[self.cursor.0].truncate(col);
@@ -102,6 +194,7 @@ impl QueryEditor {
             self.cursor.0 -= 1;
             self.cursor.1 = self.cursor.1.min(self.lines[self.cursor.0].len());
         }
+        self.last_op = None;
     }
 
     fn move_down(&mut self) {
@@ -109,6 +202,7 @@ impl QueryEditor {
             self.cursor.0 += 1;
             self.cursor.1 = self.cursor.1.min(self.lines[self.cursor.0].len());
         }
+        self.last_op = None;
     }
 
     fn move_left(&mut self) {
@@ -118,6 +212,7 @@ impl QueryEditor {
             self.cursor.0 -= 1;
             self.cursor.1 = self.lines[self.cursor.0].len();
         }
+        self.last_op = None;
     }
 
     fn move_right(&mut self) {
@@ -128,14 +223,17 @@ impl QueryEditor {
             self.cursor.0 += 1;
             self.cursor.1 = 0;
         }
+        self.last_op = None;
     }
 
     fn move_home(&mut self) {
         self.cursor.1 = 0;
+        self.last_op = None;
     }
 
     fn move_end(&mut self) {
         self.cursor.1 = self.lines[self.cursor.0].len();
+        self.last_op = None;
     }
 
     #[allow(dead_code)]
@@ -335,5 +433,125 @@ mod tests {
         editor.set_content("SELECT * FROM users".to_string());
         editor.clear();
         assert_eq!(editor.get_content(), "");
+    }
+
+    // ── Undo / redo tests ────────────────────────────────────
+
+    #[test]
+    fn test_undo_single_char() {
+        let mut editor = QueryEditor::new();
+        editor.insert_char('x');
+        assert_eq!(editor.get_content(), "x");
+        editor.undo();
+        assert_eq!(editor.get_content(), "");
+    }
+
+    #[test]
+    fn test_redo_after_undo() {
+        let mut editor = QueryEditor::new();
+        editor.insert_char('x');
+        editor.undo();
+        assert_eq!(editor.get_content(), "");
+        editor.redo();
+        assert_eq!(editor.get_content(), "x");
+    }
+
+    #[test]
+    fn test_undo_coalesces_inserts() {
+        let mut editor = QueryEditor::new();
+        editor.insert_char('a');
+        editor.insert_char('b');
+        editor.insert_char('c');
+        assert_eq!(editor.get_content(), "abc");
+        // Single undo should revert the entire coalesced group
+        editor.undo();
+        assert_eq!(editor.get_content(), "");
+    }
+
+    #[test]
+    fn test_cursor_move_breaks_coalescing() {
+        let mut editor = QueryEditor::new();
+        editor.insert_char('a');
+        editor.move_home(); // breaks coalescing
+        editor.move_end();
+        editor.insert_char('b');
+        assert_eq!(editor.get_content(), "ab");
+        // First undo reverts 'b'
+        editor.undo();
+        assert_eq!(editor.get_content(), "a");
+        // Second undo reverts 'a'
+        editor.undo();
+        assert_eq!(editor.get_content(), "");
+    }
+
+    #[test]
+    fn test_undo_new_line() {
+        let mut editor = QueryEditor::new();
+        editor.new_line();
+        editor.new_line();
+        assert_eq!(editor.lines.len(), 3);
+        // Each new_line is its own undo step (never coalesced)
+        editor.undo();
+        assert_eq!(editor.lines.len(), 2);
+        editor.undo();
+        assert_eq!(editor.lines.len(), 1);
+    }
+
+    #[test]
+    fn test_undo_clear() {
+        let mut editor = QueryEditor::new();
+        editor.insert_char('a');
+        editor.insert_char('b');
+        editor.insert_char('c');
+        assert_eq!(editor.get_content(), "abc");
+        editor.clear();
+        assert_eq!(editor.get_content(), "");
+        // Undo should recover the cleared content
+        editor.undo();
+        assert_eq!(editor.get_content(), "abc");
+    }
+
+    #[test]
+    fn test_set_content_resets_undo() {
+        let mut editor = QueryEditor::new();
+        editor.insert_char('a');
+        editor.insert_char('b');
+        // set_content resets undo/redo stacks
+        editor.set_content("new content".to_string());
+        editor.undo();
+        // Should be no-op since stacks were cleared
+        assert_eq!(editor.get_content(), "new content");
+    }
+
+    #[test]
+    fn test_undo_backspace_coalesces() {
+        let mut editor = QueryEditor::new();
+        editor.insert_char('a');
+        editor.insert_char('b');
+        editor.insert_char('c');
+        // Break coalescing so backspaces form their own group
+        editor.move_end();
+        editor.backspace();
+        editor.backspace();
+        assert_eq!(editor.get_content(), "a");
+        // Single undo should revert both backspaces
+        editor.undo();
+        assert_eq!(editor.get_content(), "abc");
+    }
+
+    #[test]
+    fn test_redo_cleared_on_new_edit() {
+        let mut editor = QueryEditor::new();
+        editor.insert_char('a');
+        editor.move_end(); // break coalescing
+        editor.insert_char('b');
+        editor.undo(); // back to "a"
+        assert_eq!(editor.get_content(), "a");
+        // New edit should clear redo stack
+        editor.insert_char('c');
+        assert_eq!(editor.get_content(), "ac");
+        // Redo should be empty
+        editor.redo();
+        assert_eq!(editor.get_content(), "ac");
     }
 }

@@ -52,6 +52,8 @@ pub enum KeyAction {
     ClearEditor,
     HistoryBack,
     HistoryForward,
+    Undo,
+    Redo,
 
     // Query cancellation (works from editor, results, tree)
     CancelQuery,
@@ -171,6 +173,20 @@ impl Default for KeyMap {
                 modifiers: KeyModifiers::CONTROL,
             },
             KeyAction::HistoryForward,
+        );
+        editor.insert(
+            KeyBind {
+                code: KeyCode::Char('z'),
+                modifiers: KeyModifiers::CONTROL,
+            },
+            KeyAction::Undo,
+        );
+        editor.insert(
+            KeyBind {
+                code: KeyCode::Char('Z'),
+                modifiers: KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            },
+            KeyAction::Redo,
         );
         editor.insert(
             KeyBind {
