@@ -3,6 +3,7 @@
 //! Manages database connection profiles stored in ~/.vizgres/connections.toml
 
 use crate::error::{ConfigError, ConfigResult};
+use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -56,26 +57,34 @@ fn default_port() -> u16 {
 }
 
 impl ConnectionConfig {
-    /// Parse a postgres:// URL into a ConnectionConfig
+    /// Parse a postgres:// URL into a ConnectionConfig.
+    ///
+    /// Handles percent-encoded credentials (e.g. `p%40ss` → `p@ss`),
+    /// IPv6 hosts in brackets (`[::1]`), and special characters in
+    /// usernames and passwords.
     pub fn from_url(url: &str) -> ConfigResult<Self> {
-        // postgres://user:pass@host:port/dbname
+        // postgres://user:pass@host:port/dbname?sslmode=...
         let url = url.trim();
         let rest = url
             .strip_prefix("postgres://")
             .or_else(|| url.strip_prefix("postgresql://"))
             .ok_or_else(|| ConfigError::Invalid("URL must start with postgres://".into()))?;
 
-        // Split at @ to get credentials and host info
+        // Split at LAST @ — so that unencoded @ in passwords still works
         let (creds, host_part) = rest
-            .split_once('@')
+            .rsplit_once('@')
             .ok_or_else(|| ConfigError::Invalid("URL must contain @".into()))?;
 
-        // Parse credentials
+        // Parse credentials (split at first : only — rest is password)
         let (username, password) = if let Some((u, p)) = creds.split_once(':') {
-            (u.to_string(), Some(p.to_string()))
+            (decode_component(u)?, Some(decode_component(p)?))
         } else {
-            (creds.to_string(), None)
+            (decode_component(creds)?, None)
         };
+
+        if username.is_empty() {
+            return Err(ConfigError::Invalid("URL must contain a username".into()));
+        }
 
         // Split host:port/dbname
         let (host_port, database) = host_part
@@ -85,19 +94,17 @@ impl ConnectionConfig {
         // Split database name from query params and parse sslmode
         let (database, ssl_mode) = if let Some((db, query)) = database.split_once('?') {
             let ssl = parse_sslmode_param(query)?;
-            (db.to_string(), ssl)
+            (decode_component(db)?, ssl)
         } else {
-            (database.to_string(), SslMode::Prefer)
+            (decode_component(database)?, SslMode::Prefer)
         };
 
-        let (host, port) = if let Some((h, p)) = host_port.split_once(':') {
-            let port = p
-                .parse::<u16>()
-                .map_err(|_| ConfigError::Invalid(format!("Invalid port: {}", p)))?;
-            (h.to_string(), port)
-        } else {
-            (host_port.to_string(), 5432)
-        };
+        if database.is_empty() {
+            return Err(ConfigError::Invalid("URL must contain /dbname".into()));
+        }
+
+        // Parse host and port, handling IPv6 brackets: [::1]:5432
+        let (host, port) = parse_host_port(host_port)?;
 
         Ok(Self {
             name: format!("{}@{}", database, host),
@@ -118,7 +125,10 @@ impl ConnectionConfig {
         )
     }
 
-    /// Build a full connection string including password
+    /// Build a full connection string including password.
+    ///
+    /// Passwords are single-quoted per libpq conventions so that
+    /// special characters (spaces, quotes, backslashes) are handled correctly.
     pub fn connection_string_with_password(&self) -> String {
         let base = self.connection_string();
         let with_ssl = format!(
@@ -131,7 +141,9 @@ impl ConnectionConfig {
             }
         );
         if let Some(ref pw) = self.password {
-            format!("{} password={}", with_ssl, pw)
+            // Single-quote the password, escaping internal quotes and backslashes
+            let escaped = pw.replace('\\', "\\\\").replace('\'', "\\'");
+            format!("{} password='{}'", with_ssl, escaped)
         } else {
             with_ssl
         }
@@ -148,6 +160,41 @@ impl ConnectionConfig {
     #[allow(dead_code)]
     pub fn connections_file() -> ConfigResult<PathBuf> {
         Ok(Self::config_dir()?.join("connections.toml"))
+    }
+}
+
+/// Percent-decode a URL component, returning a ConfigError on invalid UTF-8.
+fn decode_component(s: &str) -> ConfigResult<String> {
+    percent_decode_str(s)
+        .decode_utf8()
+        .map(|s| s.into_owned())
+        .map_err(|_| ConfigError::Invalid("Invalid UTF-8 in URL".into()))
+}
+
+/// Parse host and port from `host:port`, handling IPv6 brackets.
+fn parse_host_port(s: &str) -> ConfigResult<(String, u16)> {
+    if let Some(rest) = s.strip_prefix('[') {
+        // IPv6: [::1]:5432 or [::1]
+        let (addr, after_bracket) = rest
+            .split_once(']')
+            .ok_or_else(|| ConfigError::Invalid("Unclosed '[' in IPv6 host".into()))?;
+        let port = if let Some(port_str) = after_bracket.strip_prefix(':') {
+            port_str
+                .parse::<u16>()
+                .map_err(|_| ConfigError::Invalid(format!("Invalid port: {}", port_str)))?
+        } else {
+            5432
+        };
+        Ok((addr.to_string(), port))
+    } else if let Some((h, p)) = s.rsplit_once(':') {
+        // Regular host:port — rsplit_once handles IPv6 without brackets
+        // (e.g. "::1" has no port, won't match since p wouldn't parse)
+        match p.parse::<u16>() {
+            Ok(port) => Ok((h.to_string(), port)),
+            Err(_) => Ok((s.to_string(), 5432)), // treat whole thing as host
+        }
+    } else {
+        Ok((s.to_string(), 5432))
     }
 }
 
@@ -289,7 +336,129 @@ mod tests {
         };
         assert_eq!(
             config.connection_string_with_password(),
-            "host=localhost port=5432 dbname=mydb user=user sslmode=disable password=secret"
+            "host=localhost port=5432 dbname=mydb user=user sslmode=disable password='secret'"
         );
+    }
+
+    #[test]
+    fn test_connection_string_password_with_special_chars() {
+        let config = ConnectionConfig {
+            name: "test".to_string(),
+            host: "localhost".to_string(),
+            port: 5432,
+            database: "mydb".to_string(),
+            username: "user".to_string(),
+            password: Some("it's a p@ss\\word".to_string()),
+            ssl_mode: SslMode::Disable,
+        };
+        assert_eq!(
+            config.connection_string_with_password(),
+            r"host=localhost port=5432 dbname=mydb user=user sslmode=disable password='it\'s a p@ss\\word'"
+        );
+    }
+
+    // ── URL parsing edge cases ──────────────────────────────────
+
+    #[test]
+    fn test_from_url_password_with_at_sign_encoded() {
+        let config = ConnectionConfig::from_url("postgres://user:p%40ss@localhost/mydb").unwrap();
+        assert_eq!(config.username, "user");
+        assert_eq!(config.password, Some("p@ss".to_string()));
+        assert_eq!(config.host, "localhost");
+    }
+
+    #[test]
+    fn test_from_url_password_with_at_sign_raw() {
+        // Raw @ in password — parser splits at LAST @, so this works
+        let config = ConnectionConfig::from_url("postgres://user:p@ss@localhost/mydb").unwrap();
+        assert_eq!(config.username, "user");
+        assert_eq!(config.password, Some("p@ss".to_string()));
+        assert_eq!(config.host, "localhost");
+    }
+
+    #[test]
+    fn test_from_url_password_with_colon() {
+        let config =
+            ConnectionConfig::from_url("postgres://user:pa:ss:word@localhost/mydb").unwrap();
+        assert_eq!(config.username, "user");
+        assert_eq!(config.password, Some("pa:ss:word".to_string()));
+    }
+
+    #[test]
+    fn test_from_url_percent_encoded_credentials() {
+        // Username and password with encoded special chars
+        let config =
+            ConnectionConfig::from_url("postgres://us%65r:p%40ss%3Aw%6Frd@localhost/mydb").unwrap();
+        assert_eq!(config.username, "user"); // %65 = 'e'
+        assert_eq!(config.password, Some("p@ss:word".to_string()));
+    }
+
+    #[test]
+    fn test_from_url_no_password() {
+        let config = ConnectionConfig::from_url("postgres://justuser@localhost/mydb").unwrap();
+        assert_eq!(config.username, "justuser");
+        assert!(config.password.is_none());
+    }
+
+    #[test]
+    fn test_from_url_ipv6_with_brackets() {
+        let config = ConnectionConfig::from_url("postgres://user:pass@[::1]:5432/mydb").unwrap();
+        assert_eq!(config.host, "::1");
+        assert_eq!(config.port, 5432);
+    }
+
+    #[test]
+    fn test_from_url_ipv6_brackets_default_port() {
+        let config = ConnectionConfig::from_url("postgres://user:pass@[::1]/mydb").unwrap();
+        assert_eq!(config.host, "::1");
+        assert_eq!(config.port, 5432);
+    }
+
+    #[test]
+    fn test_from_url_ipv6_full_address() {
+        let config =
+            ConnectionConfig::from_url("postgres://user:pass@[2001:db8::1]:5433/mydb").unwrap();
+        assert_eq!(config.host, "2001:db8::1");
+        assert_eq!(config.port, 5433);
+    }
+
+    #[test]
+    fn test_from_url_postgresql_prefix() {
+        let config = ConnectionConfig::from_url("postgresql://user:pass@localhost/mydb").unwrap();
+        assert_eq!(config.host, "localhost");
+    }
+
+    #[test]
+    fn test_from_url_encoded_database_name() {
+        let config = ConnectionConfig::from_url("postgres://user:pass@localhost/my%20db").unwrap();
+        assert_eq!(config.database, "my db");
+    }
+
+    #[test]
+    fn test_from_url_multiple_query_params() {
+        let config = ConnectionConfig::from_url(
+            "postgres://user:pass@localhost/db?sslmode=require&connect_timeout=10",
+        )
+        .unwrap();
+        assert_eq!(config.ssl_mode, SslMode::Require);
+        assert_eq!(config.database, "db");
+    }
+
+    #[test]
+    fn test_from_url_empty_database_rejected() {
+        let result = ConnectionConfig::from_url("postgres://user:pass@localhost/");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_from_url_missing_at_sign() {
+        let result = ConnectionConfig::from_url("postgres://localhost/mydb");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_from_url_bad_scheme() {
+        let result = ConnectionConfig::from_url("mysql://user:pass@localhost/mydb");
+        assert!(result.is_err());
     }
 }
