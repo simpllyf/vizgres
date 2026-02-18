@@ -71,6 +71,9 @@ pub enum KeyAction {
     Expand,
     Collapse,
 
+    // Help
+    ShowHelp,
+
     // Modal dismiss/submit
     Dismiss,
     Submit,
@@ -126,6 +129,13 @@ impl Default for KeyMap {
                 modifiers: KeyModifiers::SHIFT,
             },
             KeyAction::CycleFocusReverse,
+        );
+        global.insert(
+            KeyBind {
+                code: KeyCode::F(1),
+                modifiers: KeyModifiers::NONE,
+            },
+            KeyAction::ShowHelp,
         );
 
         let mut panels = HashMap::new();
@@ -228,6 +238,13 @@ impl Default for KeyMap {
             },
             KeyAction::CancelQuery,
         );
+        results.insert(
+            KeyBind {
+                code: KeyCode::Char('?'),
+                modifiers: KeyModifiers::NONE,
+            },
+            KeyAction::ShowHelp,
+        );
         panels.insert(PanelFocus::ResultsViewer, results);
 
         // ── Tree ─────────────────────────────────────────────────
@@ -288,6 +305,13 @@ impl Default for KeyMap {
             },
             KeyAction::CancelQuery,
         );
+        tree.insert(
+            KeyBind {
+                code: KeyCode::Char('?'),
+                modifiers: KeyModifiers::NONE,
+            },
+            KeyAction::ShowHelp,
+        );
         panels.insert(PanelFocus::TreeBrowser, tree);
 
         // ── Inspector ────────────────────────────────────────────
@@ -308,6 +332,18 @@ impl Default for KeyMap {
         );
         insert_scroll_nav(&mut inspector);
         panels.insert(PanelFocus::Inspector, inspector);
+
+        // ── Help overlay ─────────────────────────────────────────
+        let mut help = HashMap::new();
+        help.insert(
+            KeyBind {
+                code: KeyCode::Esc,
+                modifiers: KeyModifiers::NONE,
+            },
+            KeyAction::Dismiss,
+        );
+        insert_scroll_nav(&mut help);
+        panels.insert(PanelFocus::Help, help);
 
         // ── Command bar ──────────────────────────────────────────
         let mut command_bar = HashMap::new();
@@ -670,6 +706,61 @@ mod tests {
             km.resolve(PanelFocus::QueryEditor, ctrl_down),
             Some(KeyAction::HistoryForward)
         );
+    }
+
+    #[test]
+    fn test_help_keybinding_resolves() {
+        let km = KeyMap::default();
+        let f1 = KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE);
+        let question = KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE);
+
+        // F1 resolves to ShowHelp from every panel (global)
+        assert_eq!(
+            km.resolve(PanelFocus::QueryEditor, f1),
+            Some(KeyAction::ShowHelp)
+        );
+        assert_eq!(
+            km.resolve(PanelFocus::ResultsViewer, f1),
+            Some(KeyAction::ShowHelp)
+        );
+        assert_eq!(
+            km.resolve(PanelFocus::TreeBrowser, f1),
+            Some(KeyAction::ShowHelp)
+        );
+        assert_eq!(
+            km.resolve(PanelFocus::Inspector, f1),
+            Some(KeyAction::ShowHelp)
+        );
+        assert_eq!(
+            km.resolve(PanelFocus::CommandBar, f1),
+            Some(KeyAction::ShowHelp)
+        );
+
+        // ? resolves in results and tree (non-text-input panels)
+        assert_eq!(
+            km.resolve(PanelFocus::ResultsViewer, question),
+            Some(KeyAction::ShowHelp)
+        );
+        assert_eq!(
+            km.resolve(PanelFocus::TreeBrowser, question),
+            Some(KeyAction::ShowHelp)
+        );
+        // ? should NOT resolve in editor (it's a text character)
+        assert_eq!(km.resolve(PanelFocus::QueryEditor, question), None);
+    }
+
+    #[test]
+    fn test_help_panel_bindings() {
+        let km = KeyMap::default();
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        let j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
+        let k = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
+        let g = KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE);
+
+        assert_eq!(km.resolve(PanelFocus::Help, esc), Some(KeyAction::Dismiss));
+        assert_eq!(km.resolve(PanelFocus::Help, j), Some(KeyAction::MoveDown));
+        assert_eq!(km.resolve(PanelFocus::Help, k), Some(KeyAction::MoveUp));
+        assert_eq!(km.resolve(PanelFocus::Help, g), Some(KeyAction::GoToTop));
     }
 
     #[test]

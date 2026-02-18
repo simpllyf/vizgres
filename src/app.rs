@@ -12,6 +12,7 @@ use crate::ui::Component;
 use crate::ui::ComponentAction;
 use crate::ui::command_bar::CommandBar;
 use crate::ui::editor::QueryEditor;
+use crate::ui::help::HelpOverlay;
 use crate::ui::inspector::Inspector;
 use crate::ui::results::ResultsViewer;
 use crate::ui::theme::Theme;
@@ -35,6 +36,7 @@ pub struct App {
     pub results_viewer: ResultsViewer,
     pub command_bar: CommandBar,
     pub inspector: Inspector,
+    pub help: HelpOverlay,
 
     /// Query history for Ctrl+Up/Down navigation
     history: QueryHistory,
@@ -69,6 +71,7 @@ pub enum PanelFocus {
     ResultsViewer,
     CommandBar,
     Inspector,
+    Help,
 }
 
 /// Status message with severity level
@@ -127,6 +130,7 @@ impl App {
             results_viewer: ResultsViewer::new(),
             command_bar: CommandBar::new(),
             inspector: Inspector::new(),
+            help: HelpOverlay::new(),
             history: QueryHistory::load(500),
             keymap: KeyMap::default(),
             theme: Theme::default(),
@@ -215,8 +219,12 @@ impl App {
                 }
                 KeyAction::CycleFocus | KeyAction::CycleFocusReverse
                     if self.focus == PanelFocus::CommandBar
-                        || self.focus == PanelFocus::Inspector =>
+                        || self.focus == PanelFocus::Inspector
+                        || self.focus == PanelFocus::Help =>
                 {
+                    return Action::None;
+                }
+                KeyAction::ShowHelp if self.focus == PanelFocus::Help => {
                     return Action::None;
                 }
                 _ => return self.execute_key_action(key_action),
@@ -249,12 +257,20 @@ impl App {
                 Action::None
             }
 
+            KeyAction::ShowHelp => {
+                self.previous_focus = self.focus;
+                self.focus = PanelFocus::Help;
+                self.help.show();
+                Action::None
+            }
+
             // ── Navigation ───────────────────────────────────
             KeyAction::MoveUp => {
                 match self.focus {
                     PanelFocus::ResultsViewer => self.results_viewer.move_up(),
                     PanelFocus::TreeBrowser => self.tree_browser.move_up(),
                     PanelFocus::Inspector => self.inspector.scroll_up(),
+                    PanelFocus::Help => self.help.scroll_up(),
                     _ => {}
                 }
                 Action::None
@@ -264,6 +280,7 @@ impl App {
                     PanelFocus::ResultsViewer => self.results_viewer.move_down(),
                     PanelFocus::TreeBrowser => self.tree_browser.move_down(),
                     PanelFocus::Inspector => self.inspector.scroll_down(),
+                    PanelFocus::Help => self.help.scroll_down(),
                     _ => {}
                 }
                 Action::None
@@ -284,6 +301,7 @@ impl App {
                 match self.focus {
                     PanelFocus::ResultsViewer => self.results_viewer.page_up(),
                     PanelFocus::Inspector => self.inspector.page_up(),
+                    PanelFocus::Help => self.help.page_up(),
                     _ => {}
                 }
                 Action::None
@@ -292,6 +310,7 @@ impl App {
                 match self.focus {
                     PanelFocus::ResultsViewer => self.results_viewer.page_down(),
                     PanelFocus::Inspector => self.inspector.page_down(),
+                    PanelFocus::Help => self.help.page_down(),
                     _ => {}
                 }
                 Action::None
@@ -300,6 +319,7 @@ impl App {
                 match self.focus {
                     PanelFocus::ResultsViewer => self.results_viewer.go_to_top(),
                     PanelFocus::Inspector => self.inspector.scroll_to_top(),
+                    PanelFocus::Help => self.help.scroll_to_top(),
                     _ => {}
                 }
                 Action::None
@@ -308,6 +328,7 @@ impl App {
                 match self.focus {
                     PanelFocus::ResultsViewer => self.results_viewer.go_to_bottom(),
                     PanelFocus::Inspector => self.inspector.scroll_to_bottom(),
+                    PanelFocus::Help => self.help.scroll_to_bottom(),
                     _ => {}
                 }
                 Action::None
@@ -426,7 +447,7 @@ impl App {
                 Action::None
             }
 
-            // ── Modal (inspector, command bar) ───────────────
+            // ── Modal (inspector, command bar, help) ──────────
             KeyAction::Dismiss => {
                 match self.focus {
                     PanelFocus::Inspector => {
@@ -435,6 +456,10 @@ impl App {
                     }
                     PanelFocus::CommandBar => {
                         self.command_bar.deactivate();
+                        self.focus = self.previous_focus;
+                    }
+                    PanelFocus::Help => {
+                        self.help.hide();
                         self.focus = self.previous_focus;
                     }
                     _ => {}
@@ -484,10 +509,9 @@ impl App {
                 Action::None
             }
             Command::Help => {
-                self.set_status(
-                    "Tab=cycle | Ctrl+Q=quit | F5=run | Ctrl+P=commands | /help".to_string(),
-                    StatusLevel::Info,
-                );
+                self.previous_focus = self.focus;
+                self.focus = PanelFocus::Help;
+                self.help.show();
                 Action::None
             }
             Command::Quit => Action::Quit,

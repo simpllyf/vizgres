@@ -58,6 +58,11 @@ pub fn render(frame: &mut Frame, app: &App) {
         render_inspector_popup(frame, theme, app);
     }
 
+    // Help overlay (on top of everything including inspector)
+    if app.help.is_visible() {
+        render_help_popup(frame, theme, app);
+    }
+
     // Status bar
     render_status_bar(frame, layout.command_bar, app, theme);
 }
@@ -153,6 +158,50 @@ fn render_inspector_popup(frame: &mut Frame, theme: &Theme, app: &App) {
         .render(frame, inner, app.focus == PanelFocus::Inspector, theme);
 }
 
+/// Render the help overlay as a centered floating popup with shadow.
+fn render_help_popup(frame: &mut Frame, theme: &Theme, app: &App) {
+    let screen = frame.area();
+
+    let popup_w: u16 = 60.min(screen.width.saturating_sub(2));
+    let popup_h: u16 = 28.min(screen.height.saturating_sub(2));
+    let popup_x = (screen.width.saturating_sub(popup_w)) / 2;
+    let popup_y = (screen.height.saturating_sub(popup_h)) / 2;
+    let popup_area = Rect::new(popup_x, popup_y, popup_w, popup_h);
+
+    // Shadow (1 cell right and down)
+    let shadow_area = Rect::new(
+        (popup_x + 1).min(screen.width.saturating_sub(1)),
+        (popup_y + 1).min(screen.height.saturating_sub(1)),
+        popup_w.min(screen.width.saturating_sub(popup_x + 1)),
+        popup_h.min(screen.height.saturating_sub(popup_y + 1)),
+    );
+    let shadow_style = theme.shadow;
+    for y in shadow_area.y..shadow_area.y + shadow_area.height {
+        for x in shadow_area.x..shadow_area.x + shadow_area.width {
+            if x < screen.width && y < screen.height {
+                frame.render_widget(
+                    Paragraph::new(" ").style(shadow_style),
+                    Rect::new(x, y, 1, 1),
+                );
+            }
+        }
+    }
+
+    // Clear and draw border
+    frame.render_widget(Clear, popup_area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(Span::styled(
+            " Help \u{2014} Esc to close ",
+            theme.popup_title,
+        ))
+        .border_style(theme.popup_border);
+
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+    app.help.render(frame, inner, theme);
+}
+
 /// Render the status bar with partitioned layout:
 /// Left: toast notification (ephemeral, dismissed on next keypress)
 /// Right: connection info (ambient context, always visible)
@@ -203,7 +252,8 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         );
     } else {
         frame.render_widget(
-            Paragraph::new("Ctrl+P=commands | F5=run | Ctrl+Q=quit").style(theme.status_help_hint),
+            Paragraph::new("F1=help | Ctrl+P=commands | F5=run | Ctrl+Q=quit")
+                .style(theme.status_help_hint),
             Rect::new(area.x, area.y, max_left_width, 1),
         );
     }
