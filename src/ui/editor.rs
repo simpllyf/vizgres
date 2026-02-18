@@ -42,8 +42,7 @@ impl QueryEditor {
         self.scroll_offset = 0;
     }
 
-    /// Set the editor content (used for testing and future features like query history)
-    #[allow(dead_code)]
+    /// Set the editor content (used by query history navigation)
     pub fn set_content(&mut self, content: String) {
         self.lines = content.lines().map(String::from).collect();
         if self.lines.is_empty() {

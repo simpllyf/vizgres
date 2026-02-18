@@ -49,6 +49,8 @@ pub enum KeyAction {
     // Editor-specific
     ExecuteQuery,
     ClearEditor,
+    HistoryBack,
+    HistoryForward,
 
     // Results-specific
     OpenInspector,
@@ -144,6 +146,20 @@ impl Default for KeyMap {
                 modifiers: KeyModifiers::CONTROL,
             },
             KeyAction::ClearEditor,
+        );
+        editor.insert(
+            KeyBind {
+                code: KeyCode::Up,
+                modifiers: KeyModifiers::CONTROL,
+            },
+            KeyAction::HistoryBack,
+        );
+        editor.insert(
+            KeyBind {
+                code: KeyCode::Down,
+                modifiers: KeyModifiers::CONTROL,
+            },
+            KeyAction::HistoryForward,
         );
         panels.insert(PanelFocus::QueryEditor, editor);
 
@@ -551,5 +567,32 @@ mod tests {
             km.resolve(PanelFocus::Inspector, end),
             Some(KeyAction::GoToBottom)
         );
+    }
+
+    #[test]
+    fn test_history_keybindings_resolve() {
+        let km = KeyMap::default();
+        let ctrl_up = KeyEvent::new(KeyCode::Up, KeyModifiers::CONTROL);
+        let ctrl_down = KeyEvent::new(KeyCode::Down, KeyModifiers::CONTROL);
+        assert_eq!(
+            km.resolve(PanelFocus::QueryEditor, ctrl_up),
+            Some(KeyAction::HistoryBack)
+        );
+        assert_eq!(
+            km.resolve(PanelFocus::QueryEditor, ctrl_down),
+            Some(KeyAction::HistoryForward)
+        );
+    }
+
+    #[test]
+    fn test_history_keybindings_only_in_editor() {
+        let km = KeyMap::default();
+        let ctrl_up = KeyEvent::new(KeyCode::Up, KeyModifiers::CONTROL);
+        let ctrl_down = KeyEvent::new(KeyCode::Down, KeyModifiers::CONTROL);
+        // Should not resolve in other panels
+        assert_eq!(km.resolve(PanelFocus::ResultsViewer, ctrl_up), None);
+        assert_eq!(km.resolve(PanelFocus::ResultsViewer, ctrl_down), None);
+        assert_eq!(km.resolve(PanelFocus::TreeBrowser, ctrl_up), None);
+        assert_eq!(km.resolve(PanelFocus::TreeBrowser, ctrl_down), None);
     }
 }
