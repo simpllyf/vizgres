@@ -19,6 +19,7 @@ jobs:
       - uses: jdx/mise-action@v2
         with:
           install_args: rust just
+      - run: rustup component add rustfmt clippy
       - uses: Swatinem/rust-cache@v2
       - run: just lint
 
