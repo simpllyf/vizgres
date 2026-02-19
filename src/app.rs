@@ -102,6 +102,8 @@ pub enum AppEvent {
     SchemaLoaded(SchemaTree),
     /// Schema loading failed
     SchemaFailed(String),
+    /// Bracketed paste event
+    Paste(String),
     /// Background database connection lost
     ConnectionLost(String),
 }
@@ -154,6 +156,12 @@ impl App {
     pub fn handle_event(&mut self, event: AppEvent) -> Result<Action> {
         match event {
             AppEvent::Key(key) => Ok(self.handle_key(key)),
+            AppEvent::Paste(data) => {
+                if self.focus == PanelFocus::QueryEditor {
+                    self.editor.insert_text(&data);
+                }
+                Ok(Action::None)
+            }
             AppEvent::Resize => Ok(Action::None),
             AppEvent::QueryCompleted(results) => {
                 self.query_running = false;
@@ -386,6 +394,24 @@ impl App {
             }
             KeyAction::Redo => {
                 self.editor.redo();
+                Action::None
+            }
+            KeyAction::FormatQuery => {
+                let sql = self.editor.get_content();
+                if !sql.trim().is_empty() {
+                    let formatted = sqlformat::format(
+                        &sql,
+                        &sqlformat::QueryParams::None,
+                        &sqlformat::FormatOptions {
+                            indent: sqlformat::Indent::Spaces(2),
+                            uppercase: Some(true),
+                            lines_between_queries: 1,
+                            ..Default::default()
+                        },
+                    );
+                    self.editor.replace_content(formatted);
+                    self.set_status("Query formatted".to_string(), StatusLevel::Info);
+                }
                 Action::None
             }
             KeyAction::HistoryBack => {
@@ -915,6 +941,74 @@ mod tests {
     }
 
     #[test]
+    fn test_format_query_formats_content() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+        app.editor
+            .set_content("select name, age from users where id > 10".to_string());
+
+        let ctrl_alt_f = KeyEvent::new(
+            KeyCode::Char('f'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        );
+        let action = app.handle_key(ctrl_alt_f);
+        assert!(matches!(action, Action::None));
+
+        let content = app.editor.get_content();
+        // Keywords should be uppercased
+        assert!(content.contains("SELECT"));
+        assert!(content.contains("FROM"));
+        assert!(content.contains("WHERE"));
+        // Status message should be set
+        assert_eq!(
+            app.status_message.as_ref().unwrap().message,
+            "Query formatted"
+        );
+    }
+
+    #[test]
+    fn test_format_query_skips_empty() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+        // Editor is empty by default
+
+        let ctrl_alt_f = KeyEvent::new(
+            KeyCode::Char('f'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        );
+        let action = app.handle_key(ctrl_alt_f);
+        assert!(matches!(action, Action::None));
+        // No status message should be set (status is cleared on key press)
+        assert!(app.status_message.is_none());
+    }
+
+    #[test]
+    fn test_format_query_is_undoable() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+        // replace_content (not set_content) so undo stack is preserved
+        app.editor.replace_content("select 1".to_string());
+
+        let ctrl_alt_f = KeyEvent::new(
+            KeyCode::Char('f'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        );
+        app.handle_key(ctrl_alt_f);
+        let formatted = app.editor.get_content();
+        assert!(formatted.contains("SELECT"));
+
+        // Undo should restore pre-format content
+        app.editor.undo();
+        assert_eq!(app.editor.get_content(), "select 1");
+    }
+
+    #[test]
     fn test_history_back_populates_editor() {
         use crossterm::event::{KeyCode, KeyModifiers};
 
@@ -940,5 +1034,14 @@ mod tests {
         let ctrl_down = KeyEvent::new(KeyCode::Down, KeyModifiers::CONTROL);
         app.handle_key(ctrl_down);
         assert_eq!(app.editor.get_content(), "");
+    }
+
+    #[test]
+    fn test_paste_event_inserts_text() {
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+        app.handle_event(AppEvent::Paste("SELECT 1".to_string()))
+            .unwrap();
+        assert_eq!(app.editor.get_content(), "SELECT 1");
     }
 }
