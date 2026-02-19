@@ -276,8 +276,7 @@ impl QueryEditor {
 
         // Remaining parts become new lines
         for (i, part) in parts[1..].iter().enumerate() {
-            self.lines
-                .insert(self.cursor.0 + 1 + i, part.to_string());
+            self.lines.insert(self.cursor.0 + 1 + i, part.to_string());
         }
 
         // Cursor at end of last inserted part, before after_cursor
