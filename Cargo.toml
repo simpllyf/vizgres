@@ -9,6 +9,8 @@ license = "MIT"
 repository = "https://github.com/simpllyf/vizgres"
 keywords = ["postgresql", "tui", "database", "terminal", "cli"]
 categories = ["command-line-utilities", "database"]
+readme = "README.md"
+exclude = ["tests/", "docs/", ".github/", "docker-compose.test.yml"]
 
 [dependencies]
 # Async runtime

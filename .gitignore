@@ -40,3 +40,8 @@ tarpaulin-report.html
 
 # Logs
 *.log
+
+# Secrets safety net
+.env*
+*.pem
+*.key

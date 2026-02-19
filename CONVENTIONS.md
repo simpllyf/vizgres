@@ -8,19 +8,14 @@
 
 ## Code Style
 
-### Formatting
+### Formatting and Linting
 
 ```bash
-cargo fmt
+just fmt    # Format code
+just lint   # Format check + clippy (same as CI)
 ```
 
 Configuration in `rustfmt.toml`: 100 char lines, 4 space indent, Unix line endings.
-
-### Linting
-
-```bash
-cargo clippy --all-targets --all-features -- -D warnings
-```
 
 ### Naming
 
@@ -121,10 +116,24 @@ Unit tests live in the same file as the code (`#[cfg(test)] mod tests`).
 ### Running
 
 ```bash
-cargo test              # All tests
-cargo test --lib        # Unit tests only
-cargo test test_name    # Specific test
+just test              # Unit + doc tests (same as CI)
+just db-up             # Start test PostgreSQL
+just test-integration  # Run integration tests
+just db-down           # Stop test PostgreSQL
+cargo test test_name   # Specific test
 ```
+
+### Integration Test Database
+
+Integration tests use these defaults (configurable via environment variables):
+
+| Variable | Default |
+|----------|---------|
+| `TEST_DB_HOST` | localhost |
+| `TEST_DB_PORT` | 5433 |
+| `TEST_DB_NAME` | test_db |
+| `TEST_DB_USER` | test_user |
+| `TEST_DB_PASSWORD` | test_password |
 
 ### Test Naming
 
@@ -137,14 +146,20 @@ fn test_<function>_<scenario>() { ... }
 
 ### Commit Messages
 
-Brief imperative summary (50 chars or less), then details if needed.
+Use [conventional commits](https://www.conventionalcommits.org/), lowercase:
+
+```
+feat: add table data preview
+fix: handle null values in results viewer
+docs: update keybinding reference
+build: migrate CI to just
+```
 
 ### Quality
 
 Before committing:
-1. `cargo fmt`
-2. `cargo clippy --all-targets -- -D warnings`
-3. `cargo test`
+1. `just lint`
+2. `just test`
 
 ## Keybindings
 

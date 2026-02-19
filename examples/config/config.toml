@@ -1,9 +1,0 @@
-# Example vizgres configuration
-#
-# Copy this file to ~/.vizgres/config.toml and customize.
-
-# Query result settings
-default_row_limit = 1000
-
-# Theme (default, dark, light)
-theme = "default"

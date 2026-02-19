@@ -1,0 +1,36 @@
+name: Tag
+
+on:
+  push:
+    branches: [main]
+    paths: [VERSION]
+
+permissions:
+  contents: write
+
+jobs:
+  create-tag:
+    name: Create Tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version
+        id: version
+        run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Create tag (idempotent)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_VERSION: ${{ steps.version.outputs.version }}
+          COMMIT_SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          if gh api "repos/${REPO}/git/refs/tags/v${TAG_VERSION}" >/dev/null 2>&1; then
+            echo "Tag v${TAG_VERSION} already exists, skipping"
+          else
+            gh api "repos/${REPO}/git/refs" \
+              -f "ref=refs/tags/v${TAG_VERSION}" \
+              -f "sha=${COMMIT_SHA}"
+            echo "Created tag v${TAG_VERSION}"
+          fi
