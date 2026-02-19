@@ -265,6 +265,28 @@ impl TreeBrowser {
         }
     }
 
+    /// If the selected node is a table or view, return a preview query for it.
+    pub fn preview_query(&self) -> Option<String> {
+        let item = self.items.get(self.selected)?;
+        match item.kind {
+            NodeKind::Table | NodeKind::View => {
+                // Path format: "schema.Tables.tablename" or "schema.Views.viewname"
+                let parts: Vec<&str> = item.path.splitn(3, '.').collect();
+                if parts.len() == 3 {
+                    let schema = parts[0];
+                    let name = parts[2];
+                    Some(format!(
+                        "SELECT * FROM \"{}\".\"{}\" LIMIT 100",
+                        schema, name
+                    ))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
     pub fn collapse_current(&mut self) {
         if let Some(item) = self.items.get(self.selected) {
             let path = item.path.clone();
@@ -585,6 +607,77 @@ mod tests {
         tree.toggle_expand();
         let labels: Vec<&str> = tree.items.iter().map(|i| i.label.as_str()).collect();
         assert!(labels.iter().any(|l| l.contains("users_pkey")));
+    }
+
+    #[test]
+    fn test_preview_query_for_table() {
+        let mut tree = TreeBrowser::new();
+        tree.set_schema(sample_schema());
+        // Select the "users" table
+        let users_idx = tree.items.iter().position(|i| i.label == "users").unwrap();
+        tree.selected = users_idx;
+        assert_eq!(
+            tree.preview_query(),
+            Some("SELECT * FROM \"public\".\"users\" LIMIT 100".to_string())
+        );
+    }
+
+    #[test]
+    fn test_preview_query_for_view() {
+        let mut tree = TreeBrowser::new();
+        tree.set_schema(sample_schema());
+        // Expand Views category first
+        let views_idx = tree.items.iter().position(|i| i.label == "Views").unwrap();
+        tree.selected = views_idx;
+        tree.toggle_expand();
+        // Select the view
+        let view_idx = tree
+            .items
+            .iter()
+            .position(|i| i.label == "active_users")
+            .unwrap();
+        tree.selected = view_idx;
+        assert_eq!(
+            tree.preview_query(),
+            Some("SELECT * FROM \"public\".\"active_users\" LIMIT 100".to_string())
+        );
+    }
+
+    #[test]
+    fn test_preview_query_none_for_schema() {
+        let mut tree = TreeBrowser::new();
+        tree.set_schema(sample_schema());
+        // First item is the schema node
+        tree.selected = 0;
+        assert_eq!(tree.items[0].label, "public");
+        assert_eq!(tree.preview_query(), None);
+    }
+
+    #[test]
+    fn test_preview_query_none_for_category() {
+        let mut tree = TreeBrowser::new();
+        tree.set_schema(sample_schema());
+        let tables_idx = tree.items.iter().position(|i| i.label == "Tables").unwrap();
+        tree.selected = tables_idx;
+        assert_eq!(tree.preview_query(), None);
+    }
+
+    #[test]
+    fn test_preview_query_none_for_column() {
+        let mut tree = TreeBrowser::new();
+        tree.set_schema(sample_schema());
+        // Expand users table to get columns
+        let users_idx = tree.items.iter().position(|i| i.label == "users").unwrap();
+        tree.selected = users_idx;
+        tree.toggle_expand();
+        // Select a column
+        let col_idx = tree
+            .items
+            .iter()
+            .position(|i| i.label.starts_with("* id"))
+            .unwrap();
+        tree.selected = col_idx;
+        assert_eq!(tree.preview_query(), None);
     }
 
     #[test]

@@ -439,6 +439,13 @@ impl App {
                 Action::None
             }
             KeyAction::Expand => {
+                if self.focus == PanelFocus::TreeBrowser
+                    && let Some(sql) = self.tree_browser.preview_query()
+                {
+                    self.editor.set_content(sql.clone());
+                    self.set_status("Executing query...".to_string(), StatusLevel::Info);
+                    return Action::ExecuteQuery(sql);
+                }
                 self.tree_browser.expand_current();
                 Action::None
             }
@@ -815,6 +822,96 @@ mod tests {
         let msg = app.status_message.as_ref().unwrap();
         assert_eq!(msg.message, "Query cancelled");
         assert_eq!(msg.level, StatusLevel::Warning);
+    }
+
+    #[test]
+    fn test_enter_on_table_executes_preview_query() {
+        use crate::db::schema::{Schema, SchemaTree, Table};
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let schema = SchemaTree {
+            schemas: vec![Schema {
+                name: "public".to_string(),
+                tables: vec![Table {
+                    name: "users".to_string(),
+                    columns: vec![],
+                }],
+                views: vec![],
+                indexes: vec![],
+                functions: vec![],
+            }],
+        };
+        let mut app = App::with_connection("test".to_string(), schema);
+        app.focus = PanelFocus::TreeBrowser;
+
+        // Navigate to the "users" table node via public API
+        // Auto-expanded items: [0] public, [1] Tables, [2] users
+        app.tree_browser.move_down(); // → Tables
+        app.tree_browser.move_down(); // → users
+
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        let action = app.handle_key(enter);
+
+        match action {
+            Action::ExecuteQuery(sql) => {
+                assert_eq!(sql, "SELECT * FROM \"public\".\"users\" LIMIT 100");
+            }
+            other => panic!(
+                "Expected ExecuteQuery, got {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+        // Editor should contain the generated SQL
+        assert_eq!(
+            app.editor.get_content(),
+            "SELECT * FROM \"public\".\"users\" LIMIT 100"
+        );
+    }
+
+    #[test]
+    fn test_enter_on_schema_node_expands() {
+        use crate::db::schema::{Schema, SchemaTree, Table};
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let schema = SchemaTree {
+            schemas: vec![
+                Schema {
+                    name: "public".to_string(),
+                    tables: vec![Table {
+                        name: "t".to_string(),
+                        columns: vec![],
+                    }],
+                    views: vec![],
+                    indexes: vec![],
+                    functions: vec![],
+                },
+                Schema {
+                    name: "other".to_string(),
+                    tables: vec![Table {
+                        name: "x".to_string(),
+                        columns: vec![],
+                    }],
+                    views: vec![],
+                    indexes: vec![],
+                    functions: vec![],
+                },
+            ],
+        };
+        let mut app = App::with_connection("test".to_string(), schema);
+        app.focus = PanelFocus::TreeBrowser;
+
+        // Navigate to the collapsed "other" schema node
+        // Items: [0] public, [1] Tables, [2] t, [3] other
+        app.tree_browser.move_down(); // → Tables
+        app.tree_browser.move_down(); // → t
+        app.tree_browser.move_down(); // → other
+
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        let action = app.handle_key(enter);
+
+        // Should expand (not execute a query)
+        assert!(matches!(action, Action::None));
+        assert_eq!(app.editor.get_content(), "");
     }
 
     #[test]
