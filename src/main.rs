@@ -63,7 +63,11 @@ async fn main() -> Result<()> {
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
         let _ = disable_raw_mode();
-        let _ = execute!(std::io::stderr(), DisableBracketedPaste, LeaveAlternateScreen);
+        let _ = execute!(
+            std::io::stderr(),
+            DisableBracketedPaste,
+            LeaveAlternateScreen
+        );
         original_hook(panic_info);
     }));
 
@@ -86,7 +90,11 @@ async fn main() -> Result<()> {
 
     // Restore terminal
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), DisableBracketedPaste, LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        DisableBracketedPaste,
+        LeaveAlternateScreen
+    )?;
     terminal.show_cursor()?;
 
     result
@@ -126,43 +134,55 @@ async fn run_app(
         })?;
 
         // Poll for events
-        let action = tokio::select! {
+        let mut action = Action::None;
+        tokio::select! {
             // Async events from spawned tasks
             Some(event) = event_rx.recv() => {
-                app.handle_event(event)?
+                action = app.handle_event(event)?;
             }
 
             // Background connection died (server restart, idle timeout, etc.)
             Some(msg) = conn_err_rx.recv() => {
-                app.handle_event(AppEvent::ConnectionLost(msg))?
+                action = app.handle_event(AppEvent::ConnectionLost(msg))?;
             }
 
-            // Check for terminal input using a small timeout
+            // Check for terminal input; drain all buffered events before rendering
             result = tokio::task::spawn_blocking(|| {
                 if event::poll(std::time::Duration::from_millis(50)).unwrap_or(false) {
-                    Some(event::read().ok())
+                    let mut events = Vec::new();
+                    while let Ok(ev) = event::read() {
+                        events.push(ev);
+                        if !event::poll(std::time::Duration::ZERO).unwrap_or(false) {
+                            break;
+                        }
+                    }
+                    Some(events)
                 } else {
                     None
                 }
             }) => {
-                match result {
-                    Ok(Some(Some(Event::Key(key)))) => {
-                        if key.kind == KeyEventKind::Press {
-                            app.handle_event(AppEvent::Key(key))?
-                        } else {
-                            Action::None
+                if let Ok(Some(events)) = result {
+                    for ev in events {
+                        let a = match ev {
+                            Event::Key(key) if key.kind == KeyEventKind::Press => {
+                                app.handle_event(AppEvent::Key(key))?
+                            }
+                            Event::Paste(data) => {
+                                app.handle_event(AppEvent::Paste(data))?
+                            }
+                            Event::Resize(_, _) => {
+                                app.handle_event(AppEvent::Resize)?
+                            }
+                            _ => Action::None,
+                        };
+                        if !matches!(a, Action::None) {
+                            action = a;
+                            break;
                         }
                     }
-                    Ok(Some(Some(Event::Paste(data)))) => {
-                        app.handle_event(AppEvent::Paste(data))?
-                    }
-                    Ok(Some(Some(Event::Resize(_, _)))) => {
-                        app.handle_event(AppEvent::Resize)?
-                    }
-                    _ => Action::None,
                 }
             }
-        };
+        }
 
         // Execute actions
         match action {
