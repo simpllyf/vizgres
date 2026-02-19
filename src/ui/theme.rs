@@ -35,11 +35,11 @@ pub struct Theme {
 
     // Query editor
     pub editor_text: Style,
-    #[allow(dead_code)] // reserved for syntax highlighting
     pub editor_keyword: Style,
-    #[allow(dead_code)] // reserved for syntax highlighting
     pub editor_string: Style,
-    #[allow(dead_code)] // reserved for syntax highlighting
+    pub editor_number: Style,
+    pub editor_comment: Style,
+    #[allow(dead_code)] // reserved for cursor-shape rendering
     pub editor_cursor: Style,
     pub editor_line_number: Style,
     pub editor_tilde: Style,
@@ -129,6 +129,8 @@ impl Default for Theme {
                 .fg(Color::Blue)
                 .add_modifier(Modifier::BOLD),
             editor_string: Style::default().fg(Color::Green),
+            editor_number: Style::default().fg(Color::Cyan),
+            editor_comment: Style::default().fg(Color::DarkGray),
             editor_cursor: Style::default().bg(Color::White).fg(Color::Black),
             editor_line_number: Style::default().fg(Color::DarkGray),
             editor_tilde: Style::default().fg(Color::DarkGray),

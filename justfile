@@ -49,6 +49,16 @@ db-up:
 db-down:
     docker compose -f docker-compose.test.yml down
 
+# Regenerate data/sql_keywords.txt from PostgreSQL docs
+update-keywords:
+    curl -s https://www.postgresql.org/docs/18/sql-keywords-appendix.html \
+        | grep -oP '<code class="token">[A-Z_]+</code>' \
+        | sed 's/<[^>]*>//g' \
+        | sort -u \
+        | awk 'length > 1' \
+        > data/sql_keywords.txt
+    @echo "Updated data/sql_keywords.txt ($(wc -l < data/sql_keywords.txt) keywords)"
+
 # ─── Version ──────────────────────────────────────────
 
 # Stamp VERSION into Cargo.toml and regenerate lockfile

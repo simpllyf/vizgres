@@ -4,6 +4,7 @@
 
 use crate::ui::Component;
 use crate::ui::ComponentAction;
+use crate::ui::highlight::{self, TokenKind};
 use crate::ui::theme::Theme;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::prelude::*;
@@ -315,6 +316,12 @@ impl Component for QueryEditor {
         let content_x = area.x + line_num_width + 1; // +1 for space after line number
         let content_width = area.width.saturating_sub(line_num_width + 1);
 
+        // Pre-scan lines above viewport for block-comment state
+        let mut in_block_comment = false;
+        for line in &self.lines[..self.scroll_offset] {
+            in_block_comment = highlight::scan_block_comment_state(line, in_block_comment);
+        }
+
         for i in 0..visible_height {
             let line_idx = self.scroll_offset + i;
             let y = area.y + i as u16;
@@ -328,16 +335,33 @@ impl Component for QueryEditor {
                     Rect::new(area.x, y, line_num_width, 1),
                 );
 
-                // Line content
+                // Highlighted line content
                 let line = &self.lines[line_idx];
-                let display_line = if line.len() > content_width as usize {
-                    &line[..content_width as usize]
-                } else {
-                    line.as_str()
-                };
+                let max_w = content_width as usize;
+                let (tokens, next_bc) = highlight::highlight_sql(line, in_block_comment);
+                in_block_comment = next_bc;
+
+                let spans: Vec<Span> = tokens
+                    .iter()
+                    .filter_map(|(kind, range)| {
+                        let start = range.start.min(max_w);
+                        let end = range.end.min(max_w);
+                        if start >= end {
+                            return None;
+                        }
+                        let style = match kind {
+                            TokenKind::Keyword => theme.editor_keyword,
+                            TokenKind::String => theme.editor_string,
+                            TokenKind::Number => theme.editor_number,
+                            TokenKind::Comment => theme.editor_comment,
+                            TokenKind::Normal => theme.editor_text,
+                        };
+                        Some(Span::styled(&line[start..end], style))
+                    })
+                    .collect();
 
                 frame.render_widget(
-                    Paragraph::new(display_line).style(theme.editor_text),
+                    Paragraph::new(Line::from(spans)),
                     Rect::new(content_x, y, content_width, 1),
                 );
 
