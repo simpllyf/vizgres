@@ -148,6 +148,11 @@ pub fn highlight_sql(line: &str, in_block_comment: bool) -> (Vec<(TokenKind, Ran
     (tokens, in_bc)
 }
 
+/// Expose the static keyword set for use by the completer.
+pub fn sql_keywords() -> &'static HashSet<&'static str> {
+    &SQL_KEYWORDS
+}
+
 /// Advance block-comment state through a line without allocating tokens.
 ///
 /// Used to pre-scan lines above the visible viewport so the first visible

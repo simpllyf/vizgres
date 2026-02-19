@@ -287,6 +287,11 @@ impl TreeBrowser {
         }
     }
 
+    /// Expose the loaded schema tree for use by the completer.
+    pub fn schema(&self) -> Option<&SchemaTree> {
+        self.schema.as_ref()
+    }
+
     pub fn collapse_current(&mut self) {
         if let Some(item) = self.items.get(self.selected) {
             let path = item.path.clone();

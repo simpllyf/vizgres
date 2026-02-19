@@ -54,6 +54,9 @@ pub struct QueryEditor {
 
     /// Viewport height from last render (set via Cell for interior mutability)
     visible_height: Cell<usize>,
+
+    /// Ghost text suffix shown after cursor for auto-completion
+    ghost_text: Option<String>,
 }
 
 impl QueryEditor {
@@ -66,6 +69,7 @@ impl QueryEditor {
             redo_stack: Vec::new(),
             last_op: None,
             visible_height: Cell::new(0),
+            ghost_text: None,
         }
     }
 
@@ -287,6 +291,42 @@ impl QueryEditor {
         self.ensure_cursor_visible();
     }
 
+    /// Set or clear the ghost text suffix.
+    pub fn set_ghost_text(&mut self, text: Option<String>) {
+        self.ghost_text = text;
+    }
+
+    /// Get current ghost text, if any.
+    #[cfg(test)]
+    pub fn ghost_text(&self) -> Option<&str> {
+        self.ghost_text.as_deref()
+    }
+
+    /// Current cursor position (line, column).
+    pub fn cursor(&self) -> (usize, usize) {
+        self.cursor
+    }
+
+    /// Get a line by index.
+    pub fn line(&self, idx: usize) -> Option<&str> {
+        self.lines.get(idx).map(|s| s.as_str())
+    }
+
+    /// Accept ghost text: insert it at cursor and clear. Returns true if accepted.
+    pub fn accept_ghost_text(&mut self) -> bool {
+        if let Some(text) = self.ghost_text.take() {
+            // Break coalescing so acceptance is its own undo step
+            self.last_op = None;
+            self.maybe_snapshot(EditOp::Insert);
+            let col = self.cursor.1.min(self.lines[self.cursor.0].len());
+            self.lines[self.cursor.0].insert_str(col, &text);
+            self.cursor.1 = col + text.len();
+            true
+        } else {
+            false
+        }
+    }
+
     fn ensure_cursor_visible(&mut self) {
         let h = self.visible_height.get();
         if h == 0 {
@@ -308,6 +348,19 @@ impl Default for QueryEditor {
 
 impl Component for QueryEditor {
     fn handle_key(&mut self, key: KeyEvent) -> ComponentAction {
+        // Right arrow: accept ghost text before clearing (so it can be inserted)
+        if key.code == KeyCode::Right
+            && key.modifiers == KeyModifiers::NONE
+            && self.ghost_text.is_some()
+        {
+            self.accept_ghost_text();
+            self.ensure_cursor_visible();
+            return ComponentAction::Consumed;
+        }
+
+        // Clear ghost text on any other key — App will re-set if still appropriate
+        self.ghost_text = None;
+
         let result = match key.code {
             KeyCode::Char(c) => {
                 if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -420,12 +473,29 @@ impl Component for QueryEditor {
                     Rect::new(content_x, y, content_width, 1),
                 );
 
-                // Cursor
+                // Cursor and ghost text
                 if focused && line_idx == self.cursor.0 {
                     let cursor_col = self.cursor.1.min(line.len());
                     let cursor_x = content_x + cursor_col as u16;
                     if cursor_x < area.x + area.width {
                         frame.set_cursor_position(Position::new(cursor_x, y));
+                    }
+
+                    // Render ghost text after cursor
+                    if let Some(ref ghost) = self.ghost_text {
+                        let ghost_x = cursor_x;
+                        let avail = (area.x + area.width).saturating_sub(ghost_x) as usize;
+                        if avail > 0 && !ghost.is_empty() {
+                            let visible = if ghost.len() > avail {
+                                &ghost[..avail]
+                            } else {
+                                ghost.as_str()
+                            };
+                            frame.render_widget(
+                                Paragraph::new(Span::styled(visible, theme.editor_ghost)),
+                                Rect::new(ghost_x, y, visible.len() as u16, 1),
+                            );
+                        }
                     }
                 }
             } else {
@@ -748,5 +818,88 @@ mod tests {
         editor.insert_text("a\r\nb\r\nc");
         assert_eq!(editor.get_content(), "a\nb\nc");
         assert_eq!(editor.lines.len(), 3);
+    }
+
+    // ── Ghost text tests ───────────────────────────────────
+
+    #[test]
+    fn test_accept_ghost_text() {
+        let mut editor = QueryEditor::new();
+        editor.insert_char('S');
+        editor.insert_char('E');
+        editor.insert_char('L');
+        editor.set_ghost_text(Some("ECT".to_string()));
+        assert!(editor.accept_ghost_text());
+        assert_eq!(editor.get_content(), "SELECT");
+        assert_eq!(editor.cursor, (0, 6));
+        assert!(editor.ghost_text().is_none());
+    }
+
+    #[test]
+    fn test_accept_ghost_text_when_none() {
+        let mut editor = QueryEditor::new();
+        editor.insert_char('a');
+        assert!(!editor.accept_ghost_text());
+        assert_eq!(editor.get_content(), "a");
+    }
+
+    #[test]
+    fn test_right_arrow_accepts_ghost() {
+        let mut editor = QueryEditor::new();
+        editor.insert_char('S');
+        editor.insert_char('E');
+        editor.insert_char('L');
+        editor.set_ghost_text(Some("ECT".to_string()));
+        let right = KeyEvent::new(KeyCode::Right, KeyModifiers::NONE);
+        editor.handle_key(right);
+        assert_eq!(editor.get_content(), "SELECT");
+    }
+
+    #[test]
+    fn test_right_arrow_moves_without_ghost() {
+        let mut editor = QueryEditor::new();
+        editor.insert_char('a');
+        editor.insert_char('b');
+        editor.cursor = (0, 0);
+        let right = KeyEvent::new(KeyCode::Right, KeyModifiers::NONE);
+        editor.handle_key(right);
+        assert_eq!(editor.cursor, (0, 1));
+        assert_eq!(editor.get_content(), "ab");
+    }
+
+    #[test]
+    fn test_ghost_cleared_on_insert() {
+        let mut editor = QueryEditor::new();
+        editor.insert_char('S');
+        editor.set_ghost_text(Some("ELECT".to_string()));
+        let key_e = KeyEvent::new(KeyCode::Char('E'), KeyModifiers::NONE);
+        editor.handle_key(key_e);
+        assert!(editor.ghost_text().is_none());
+        assert_eq!(editor.get_content(), "SE");
+    }
+
+    #[test]
+    fn test_ghost_cleared_on_backspace() {
+        let mut editor = QueryEditor::new();
+        editor.insert_char('S');
+        editor.insert_char('E');
+        editor.set_ghost_text(Some("LECT".to_string()));
+        let bs = KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE);
+        editor.handle_key(bs);
+        assert!(editor.ghost_text().is_none());
+        assert_eq!(editor.get_content(), "S");
+    }
+
+    #[test]
+    fn test_accept_ghost_text_is_undoable() {
+        let mut editor = QueryEditor::new();
+        editor.insert_char('S');
+        editor.insert_char('E');
+        editor.insert_char('L');
+        editor.set_ghost_text(Some("ECT".to_string()));
+        editor.accept_ghost_text();
+        assert_eq!(editor.get_content(), "SELECT");
+        editor.undo();
+        assert_eq!(editor.get_content(), "SEL");
     }
 }

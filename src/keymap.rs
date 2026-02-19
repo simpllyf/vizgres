@@ -72,6 +72,10 @@ pub enum KeyAction {
     Expand,
     Collapse,
 
+    // Completion
+    NextCompletion,
+    PrevCompletion,
+
     // Help
     ShowHelp,
 
@@ -212,6 +216,20 @@ impl Default for KeyMap {
                 modifiers: KeyModifiers::NONE,
             },
             KeyAction::CancelQuery,
+        );
+        editor.insert(
+            KeyBind {
+                code: KeyCode::Down,
+                modifiers: KeyModifiers::ALT,
+            },
+            KeyAction::NextCompletion,
+        );
+        editor.insert(
+            KeyBind {
+                code: KeyCode::Up,
+                modifiers: KeyModifiers::ALT,
+            },
+            KeyAction::PrevCompletion,
         );
         panels.insert(PanelFocus::QueryEditor, editor);
 

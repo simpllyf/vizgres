@@ -3,6 +3,7 @@
 //! Central state machine: events come in, state updates, actions go out.
 
 use crate::commands::{Command, parse_command};
+use crate::completer::{self, Completer};
 use crate::db::QueryResults;
 use crate::db::schema::SchemaTree;
 use crate::error::Result;
@@ -55,6 +56,9 @@ pub struct App {
 
     /// Error from clipboard initialization (preserved for diagnostics)
     clipboard_error: Option<String>,
+
+    /// Inline auto-completion engine
+    completer: Completer,
 
     /// Whether a query is currently in flight (for cancel support)
     pub query_running: bool,
@@ -137,6 +141,7 @@ impl App {
             keymap: KeyMap::default(),
             theme: Theme::default(),
             status_message: None,
+            completer: Completer::new(),
             clipboard,
             clipboard_error,
             query_running: false,
@@ -159,6 +164,7 @@ impl App {
             AppEvent::Paste(data) => {
                 if self.focus == PanelFocus::QueryEditor {
                     self.editor.insert_text(&data);
+                    self.update_completions();
                 }
                 Ok(Action::None)
             }
@@ -241,7 +247,13 @@ impl App {
 
         // Fall through to component for free-form text input (editor, command bar)
         let component_action = match self.focus {
-            PanelFocus::QueryEditor => self.editor.handle_key(key),
+            PanelFocus::QueryEditor => {
+                let result = self.editor.handle_key(key);
+                if matches!(result, ComponentAction::Consumed) {
+                    self.update_completions();
+                }
+                result
+            }
             PanelFocus::CommandBar => self.command_bar.handle_key(key),
             _ => ComponentAction::Ignored,
         };
@@ -386,14 +398,17 @@ impl App {
             }
             KeyAction::ClearEditor => {
                 self.editor.clear();
+                self.clear_completions();
                 Action::None
             }
             KeyAction::Undo => {
                 self.editor.undo();
+                self.clear_completions();
                 Action::None
             }
             KeyAction::Redo => {
                 self.editor.redo();
+                self.clear_completions();
                 Action::None
             }
             KeyAction::FormatQuery => {
@@ -410,7 +425,20 @@ impl App {
                         },
                     );
                     self.editor.replace_content(formatted);
+                    self.clear_completions();
                     self.set_status("Query formatted".to_string(), StatusLevel::Info);
+                }
+                Action::None
+            }
+            KeyAction::NextCompletion => {
+                if self.completer.is_active() {
+                    self.editor.set_ghost_text(self.completer.next());
+                }
+                Action::None
+            }
+            KeyAction::PrevCompletion => {
+                if self.completer.is_active() {
+                    self.editor.set_ghost_text(self.completer.prev());
                 }
                 Action::None
             }
@@ -419,12 +447,14 @@ impl App {
                 if let Some(entry) = self.history.back(&current) {
                     self.editor.set_content(entry.to_string());
                 }
+                self.clear_completions();
                 Action::None
             }
             KeyAction::HistoryForward => {
                 if let Some(entry) = self.history.forward() {
                     self.editor.set_content(entry.to_string());
                 }
+                self.clear_completions();
                 Action::None
             }
 
@@ -549,6 +579,43 @@ impl App {
             }
             Command::Quit => Action::Quit,
         }
+    }
+
+    /// Recompute completions based on current cursor context.
+    fn update_completions(&mut self) {
+        let (line_idx, col) = self.editor.cursor();
+        let line = match self.editor.line(line_idx) {
+            Some(l) => l,
+            None => {
+                self.clear_completions();
+                return;
+            }
+        };
+
+        // Only complete at end-of-word: next char (if any) should not be alphanumeric/underscore
+        let bytes = line.as_bytes();
+        if col < bytes.len() {
+            let next = bytes[col];
+            if next.is_ascii_alphanumeric() || next == b'_' {
+                self.clear_completions();
+                return;
+            }
+        }
+
+        let prefix = completer::word_before_cursor(line, col);
+        if prefix.is_empty() {
+            self.clear_completions();
+            return;
+        }
+
+        let ghost = self.completer.recompute(prefix, self.tree_browser.schema());
+        self.editor.set_ghost_text(ghost);
+    }
+
+    /// Clear completion state and editor ghost text.
+    fn clear_completions(&mut self) {
+        self.completer.clear();
+        self.editor.set_ghost_text(None);
     }
 
     pub fn cycle_focus(&mut self) {
