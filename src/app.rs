@@ -949,11 +949,11 @@ mod tests {
         app.editor
             .set_content("select name, age from users where id > 10".to_string());
 
-        let ctrl_shift_f = KeyEvent::new(
-            KeyCode::Char('F'),
-            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        let ctrl_alt_f = KeyEvent::new(
+            KeyCode::Char('f'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
         );
-        let action = app.handle_key(ctrl_shift_f);
+        let action = app.handle_key(ctrl_alt_f);
         assert!(matches!(action, Action::None));
 
         let content = app.editor.get_content();
@@ -976,11 +976,11 @@ mod tests {
         app.focus = PanelFocus::QueryEditor;
         // Editor is empty by default
 
-        let ctrl_shift_f = KeyEvent::new(
-            KeyCode::Char('F'),
-            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        let ctrl_alt_f = KeyEvent::new(
+            KeyCode::Char('f'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
         );
-        let action = app.handle_key(ctrl_shift_f);
+        let action = app.handle_key(ctrl_alt_f);
         assert!(matches!(action, Action::None));
         // No status message should be set (status is cleared on key press)
         assert!(app.status_message.is_none());
@@ -995,11 +995,11 @@ mod tests {
         // replace_content (not set_content) so undo stack is preserved
         app.editor.replace_content("select 1".to_string());
 
-        let ctrl_shift_f = KeyEvent::new(
-            KeyCode::Char('F'),
-            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        let ctrl_alt_f = KeyEvent::new(
+            KeyCode::Char('f'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
         );
-        app.handle_key(ctrl_shift_f);
+        app.handle_key(ctrl_alt_f);
         let formatted = app.editor.get_content();
         assert!(formatted.contains("SELECT"));
 

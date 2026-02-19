@@ -176,6 +176,10 @@ async fn run_app(
                             _ => Action::None,
                         };
                         if !matches!(a, Action::None) {
+                            // Stop on first actionable event (Quit, ExecuteQuery, etc.)
+                            // so we render/execute immediately. Remaining buffered events
+                            // are intentionally discarded — the next loop iteration will
+                            // pick up any new input.
                             action = a;
                             break;
                         }

@@ -86,7 +86,7 @@ impl HelpOverlay {
             help_line("  Ctrl+L", "Clear editor", key, desc),
             help_line("  Ctrl+Z", "Undo", key, desc),
             help_line("  Ctrl+Shift+Z", "Redo", key, desc),
-            help_line("  Ctrl+Shift+F", "Format query", key, desc),
+            help_line("  Ctrl+Alt+F", "Format query", key, desc),
             help_line("  Ctrl+Up/Down", "Query history", key, desc),
             help_line("  Esc", "Cancel running query", key, desc),
             blank.clone(),
