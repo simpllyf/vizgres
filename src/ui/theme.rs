@@ -39,6 +39,7 @@ pub struct Theme {
     pub editor_string: Style,
     pub editor_number: Style,
     pub editor_comment: Style,
+    pub editor_ghost: Style,
     #[allow(dead_code)] // reserved for cursor-shape rendering
     pub editor_cursor: Style,
     pub editor_line_number: Style,
@@ -131,6 +132,7 @@ impl Default for Theme {
             editor_string: Style::default().fg(Color::Green),
             editor_number: Style::default().fg(Color::Cyan),
             editor_comment: Style::default().fg(Color::DarkGray),
+            editor_ghost: Style::default().fg(Color::DarkGray),
             editor_cursor: Style::default().bg(Color::White).fg(Color::Black),
             editor_line_number: Style::default().fg(Color::DarkGray),
             editor_tilde: Style::default().fg(Color::DarkGray),

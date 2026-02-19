@@ -11,18 +11,9 @@ use crossterm::{
 };
 use ratatui::prelude::*;
 use tokio::sync::mpsc;
-
-mod app;
-mod commands;
-mod config;
-mod db;
-mod error;
-mod history;
-mod keymap;
-mod ui;
-
-use app::{Action, App, AppEvent};
-use db::Database;
+use vizgres::app::{Action, App, AppEvent};
+use vizgres::config;
+use vizgres::db::{self, Database};
 
 /// A fast, keyboard-driven PostgreSQL client for the terminal
 #[derive(Parser)]
@@ -130,7 +121,7 @@ async fn run_app(
     loop {
         // Draw
         terminal.draw(|frame| {
-            ui::render::render(frame, &app);
+            vizgres::ui::render::render(frame, &app);
         })?;
 
         // Poll for events

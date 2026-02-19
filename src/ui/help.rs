@@ -14,7 +14,7 @@ pub struct HelpOverlay {
 }
 
 /// Total number of content lines in the help text
-const HELP_LINE_COUNT: usize = 44;
+const HELP_LINE_COUNT: usize = 46;
 
 impl HelpOverlay {
     pub fn new() -> Self {
@@ -88,6 +88,8 @@ impl HelpOverlay {
             help_line("  Ctrl+Shift+Z", "Redo", key, desc),
             help_line("  Ctrl+Alt+F", "Format query", key, desc),
             help_line("  Ctrl+Up/Down", "Query history", key, desc),
+            help_line("  Right", "Accept completion", key, desc),
+            help_line("  Alt+Down/Up", "Cycle completions", key, desc),
             help_line("  Esc", "Cancel running query", key, desc),
             blank.clone(),
             Line::from(Span::styled("Results", section)),

@@ -51,6 +51,7 @@
 
 pub mod app;
 pub mod commands;
+pub mod completer;
 pub mod config;
 pub mod db;
 pub mod error;
