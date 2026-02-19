@@ -101,7 +101,7 @@ impl HelpOverlay {
             blank.clone(),
             Line::from(Span::styled("Schema Tree", section)),
             help_line("  j/k  \u{2191}/\u{2193}", "Navigate", key, desc),
-            help_line("  Enter", "Expand", key, desc),
+            help_line("  Enter", "Preview data / Expand", key, desc),
             help_line("  Space", "Toggle expand", key, desc),
             help_line("  h", "Collapse", key, desc),
             blank.clone(),
