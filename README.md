@@ -2,6 +2,8 @@
 
 A fast, keyboard-driven PostgreSQL client for the terminal.
 
+> **⚠️ Pre-1.0: Expect breaking changes between minor versions.**
+
 ## Features
 
 - **Tree Browser**: Navigate schemas, tables, and columns with expand/collapse
