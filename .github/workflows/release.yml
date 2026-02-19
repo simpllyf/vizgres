@@ -1,0 +1,173 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Validate & Read Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jdx/mise-action@v2
+        with:
+          install_args: rust just
+
+      - name: Validate ref is a tag
+        run: |
+          if [[ ! "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "::error::This workflow must be dispatched from a tag (e.g. v0.1.0), not a branch."
+            exit 1
+          fi
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Release version: $VERSION"
+
+      - name: Verify package version matches tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          CARGO_VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "vizgres") | .version')
+          if [ "$CARGO_VERSION" != "$VERSION" ]; then
+            echo "::error::Cargo.toml version ($CARGO_VERSION) != tag ($VERSION). Run 'just release $VERSION' to sync."
+            exit 1
+          fi
+          echo "Package version matches tag: $VERSION"
+
+  create-release:
+    name: Create Draft Release
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create draft release (idempotent)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          if gh release view "v${RELEASE_VERSION}" >/dev/null 2>&1; then
+            echo "Release v${RELEASE_VERSION} already exists, skipping"
+          else
+            gh release create "v${RELEASE_VERSION}" \
+              --draft \
+              --generate-notes \
+              --title "v${RELEASE_VERSION}"
+          fi
+
+  build-binaries:
+    name: Build (${{ matrix.target }})
+    needs: create-release
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            artifact: vizgres-linux-x86_64
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+            artifact: vizgres-macos-x86_64
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            artifact: vizgres-macos-aarch64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jdx/mise-action@v2
+        with:
+          install_args: rust
+
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package artifact
+        run: |
+          mkdir staging
+          cp target/${{ matrix.target }}/release/vizgres staging/
+          tar -czf ${{ matrix.artifact }}.tar.gz -C staging vizgres
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}.tar.gz
+
+  upload-assets:
+    name: Upload Release Assets
+    needs: [version, build-binaries]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Upload assets to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          gh release upload "v${RELEASE_VERSION}" \
+            dist/vizgres-linux-x86_64/vizgres-linux-x86_64.tar.gz \
+            dist/vizgres-macos-x86_64/vizgres-macos-x86_64.tar.gz \
+            dist/vizgres-macos-aarch64/vizgres-macos-aarch64.tar.gz \
+            --clobber
+
+  publish-crate:
+    name: Publish to crates.io
+    needs: create-release
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jdx/mise-action@v2
+        with:
+          install_args: rust
+
+      - name: Authenticate with crates.io (OIDC)
+        id: crates-auth
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: Publish vizgres
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.crates-auth.outputs.token }}
+        run: |
+          VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "vizgres") | .version')
+          if cargo search vizgres --limit 100 | grep -q "^vizgres = \"$VERSION\""; then
+            echo "vizgres $VERSION already on crates.io, skipping"
+          else
+            cargo publish
+          fi
+
+  publish-release:
+    name: Publish Release
+    needs: [version, upload-assets, publish-crate]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Un-draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ needs.version.outputs.version }}
+        run: gh release edit "v${RELEASE_VERSION}" --draft=false
