@@ -54,6 +54,7 @@ pub enum KeyAction {
     HistoryForward,
     Undo,
     Redo,
+    FormatQuery,
 
     // Query cancellation (works from editor, results, tree)
     CancelQuery,
@@ -197,6 +198,20 @@ impl Default for KeyMap {
                 modifiers: KeyModifiers::CONTROL | KeyModifiers::SHIFT,
             },
             KeyAction::Redo,
+        );
+        editor.insert(
+            KeyBind {
+                code: KeyCode::Char('F'),
+                modifiers: KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            },
+            KeyAction::FormatQuery,
+        );
+        editor.insert(
+            KeyBind {
+                code: KeyCode::Char('f'),
+                modifiers: KeyModifiers::CONTROL | KeyModifiers::ALT,
+            },
+            KeyAction::FormatQuery,
         );
         editor.insert(
             KeyBind {
@@ -761,6 +776,31 @@ mod tests {
         assert_eq!(km.resolve(PanelFocus::Help, j), Some(KeyAction::MoveDown));
         assert_eq!(km.resolve(PanelFocus::Help, k), Some(KeyAction::MoveUp));
         assert_eq!(km.resolve(PanelFocus::Help, g), Some(KeyAction::GoToTop));
+    }
+
+    #[test]
+    fn test_format_query_binding() {
+        let km = KeyMap::default();
+        let ctrl_shift_f = KeyEvent::new(
+            KeyCode::Char('F'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        let ctrl_alt_f = KeyEvent::new(
+            KeyCode::Char('f'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        );
+        // Both bindings resolve to FormatQuery in editor
+        assert_eq!(
+            km.resolve(PanelFocus::QueryEditor, ctrl_shift_f),
+            Some(KeyAction::FormatQuery)
+        );
+        assert_eq!(
+            km.resolve(PanelFocus::QueryEditor, ctrl_alt_f),
+            Some(KeyAction::FormatQuery)
+        );
+        // Should not resolve in other panels
+        assert_eq!(km.resolve(PanelFocus::ResultsViewer, ctrl_shift_f), None);
+        assert_eq!(km.resolve(PanelFocus::ResultsViewer, ctrl_alt_f), None);
     }
 
     #[test]

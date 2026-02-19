@@ -76,6 +76,18 @@ impl QueryEditor {
         self.scroll_offset = 0;
     }
 
+    /// Replace all content, preserving undo history.
+    /// Used by format operations — Ctrl+Z reverts to pre-format state.
+    pub fn replace_content(&mut self, content: String) {
+        self.maybe_snapshot(EditOp::Clear);
+        self.lines = content.lines().map(String::from).collect();
+        if self.lines.is_empty() {
+            self.lines.push(String::new());
+        }
+        self.cursor = (0, 0);
+        self.scroll_offset = 0;
+    }
+
     /// Set the editor content (used by query history navigation).
     /// Resets both undo/redo stacks — history nav is its own undo mechanism.
     pub fn set_content(&mut self, content: String) {
@@ -559,6 +571,23 @@ mod tests {
         editor.backspace();
         assert_eq!(editor.get_content(), "a");
         // Single undo should revert both backspaces
+        editor.undo();
+        assert_eq!(editor.get_content(), "abc");
+    }
+
+    #[test]
+    fn test_replace_content_is_undoable() {
+        let mut editor = QueryEditor::new();
+        editor.insert_char('a');
+        editor.insert_char('b');
+        editor.insert_char('c');
+        assert_eq!(editor.get_content(), "abc");
+
+        editor.replace_content("formatted\ncontent".to_string());
+        assert_eq!(editor.get_content(), "formatted\ncontent");
+        assert_eq!(editor.cursor, (0, 0));
+
+        // Undo should restore original content
         editor.undo();
         assert_eq!(editor.get_content(), "abc");
     }

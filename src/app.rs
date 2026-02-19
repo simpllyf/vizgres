@@ -388,6 +388,24 @@ impl App {
                 self.editor.redo();
                 Action::None
             }
+            KeyAction::FormatQuery => {
+                let sql = self.editor.get_content();
+                if !sql.trim().is_empty() {
+                    let formatted = sqlformat::format(
+                        &sql,
+                        &sqlformat::QueryParams::None,
+                        &sqlformat::FormatOptions {
+                            indent: sqlformat::Indent::Spaces(2),
+                            uppercase: Some(true),
+                            lines_between_queries: 1,
+                            ..Default::default()
+                        },
+                    );
+                    self.editor.replace_content(formatted);
+                    self.set_status("Query formatted".to_string(), StatusLevel::Info);
+                }
+                Action::None
+            }
             KeyAction::HistoryBack => {
                 let current = self.editor.get_content();
                 if let Some(entry) = self.history.back(&current) {
@@ -912,6 +930,74 @@ mod tests {
         // Should expand (not execute a query)
         assert!(matches!(action, Action::None));
         assert_eq!(app.editor.get_content(), "");
+    }
+
+    #[test]
+    fn test_format_query_formats_content() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+        app.editor
+            .set_content("select name, age from users where id > 10".to_string());
+
+        let ctrl_shift_f = KeyEvent::new(
+            KeyCode::Char('F'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        let action = app.handle_key(ctrl_shift_f);
+        assert!(matches!(action, Action::None));
+
+        let content = app.editor.get_content();
+        // Keywords should be uppercased
+        assert!(content.contains("SELECT"));
+        assert!(content.contains("FROM"));
+        assert!(content.contains("WHERE"));
+        // Status message should be set
+        assert_eq!(
+            app.status_message.as_ref().unwrap().message,
+            "Query formatted"
+        );
+    }
+
+    #[test]
+    fn test_format_query_skips_empty() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+        // Editor is empty by default
+
+        let ctrl_shift_f = KeyEvent::new(
+            KeyCode::Char('F'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        let action = app.handle_key(ctrl_shift_f);
+        assert!(matches!(action, Action::None));
+        // No status message should be set (status is cleared on key press)
+        assert!(app.status_message.is_none());
+    }
+
+    #[test]
+    fn test_format_query_is_undoable() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+        // replace_content (not set_content) so undo stack is preserved
+        app.editor.replace_content("select 1".to_string());
+
+        let ctrl_shift_f = KeyEvent::new(
+            KeyCode::Char('F'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        app.handle_key(ctrl_shift_f);
+        let formatted = app.editor.get_content();
+        assert!(formatted.contains("SELECT"));
+
+        // Undo should restore pre-format content
+        app.editor.undo();
+        assert_eq!(app.editor.get_content(), "select 1");
     }
 
     #[test]
