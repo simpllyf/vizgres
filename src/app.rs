@@ -102,6 +102,8 @@ pub enum AppEvent {
     SchemaLoaded(SchemaTree),
     /// Schema loading failed
     SchemaFailed(String),
+    /// Bracketed paste event
+    Paste(String),
     /// Background database connection lost
     ConnectionLost(String),
 }
@@ -154,6 +156,12 @@ impl App {
     pub fn handle_event(&mut self, event: AppEvent) -> Result<Action> {
         match event {
             AppEvent::Key(key) => Ok(self.handle_key(key)),
+            AppEvent::Paste(data) => {
+                if self.focus == PanelFocus::QueryEditor {
+                    self.editor.insert_text(&data);
+                }
+                Ok(Action::None)
+            }
             AppEvent::Resize => Ok(Action::None),
             AppEvent::QueryCompleted(results) => {
                 self.query_running = false;
@@ -1026,5 +1034,14 @@ mod tests {
         let ctrl_down = KeyEvent::new(KeyCode::Down, KeyModifiers::CONTROL);
         app.handle_key(ctrl_down);
         assert_eq!(app.editor.get_content(), "");
+    }
+
+    #[test]
+    fn test_paste_event_inserts_text() {
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+        app.handle_event(AppEvent::Paste("SELECT 1".to_string()))
+            .unwrap();
+        assert_eq!(app.editor.get_content(), "SELECT 1");
     }
 }

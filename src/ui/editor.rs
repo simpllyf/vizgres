@@ -257,6 +257,37 @@ impl QueryEditor {
         self.last_op = None;
     }
 
+    /// Bulk-insert text (e.g. from paste). Single undo step, CRLF normalized.
+    pub fn insert_text(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        self.maybe_snapshot(EditOp::Clear);
+
+        let text = text.replace('\r', "");
+        let col = self.cursor.1.min(self.lines[self.cursor.0].len());
+        let after_cursor = self.lines[self.cursor.0][col..].to_string();
+        self.lines[self.cursor.0].truncate(col);
+
+        let parts: Vec<&str> = text.split('\n').collect();
+
+        // First part appends to current line
+        self.lines[self.cursor.0].push_str(parts[0]);
+
+        // Remaining parts become new lines
+        for (i, part) in parts[1..].iter().enumerate() {
+            self.lines
+                .insert(self.cursor.0 + 1 + i, part.to_string());
+        }
+
+        // Cursor at end of last inserted part, before after_cursor
+        let last_line = self.cursor.0 + parts.len() - 1;
+        let last_col = self.lines[last_line].len();
+        self.lines[last_line].push_str(&after_cursor);
+        self.cursor = (last_line, last_col);
+        self.ensure_cursor_visible();
+    }
+
     fn ensure_cursor_visible(&mut self) {
         let h = self.visible_height.get();
         if h == 0 {
@@ -679,5 +710,44 @@ mod tests {
         editor.undo(); // undo() calls ensure_cursor_visible internally
         assert!(editor.cursor.0 >= editor.scroll_offset);
         assert!(editor.cursor.0 < editor.scroll_offset + 3);
+    }
+
+    // ── Paste / insert_text tests ───────────────────────────
+
+    #[test]
+    fn test_insert_text_single_line() {
+        let mut editor = QueryEditor::new();
+        editor.insert_char('a');
+        editor.insert_text("bc");
+        assert_eq!(editor.get_content(), "abc");
+        assert_eq!(editor.cursor, (0, 3));
+    }
+
+    #[test]
+    fn test_insert_text_multiline() {
+        let mut editor = QueryEditor::new();
+        editor.insert_text("SELECT *\nFROM users\nWHERE id = 1");
+        assert_eq!(editor.lines.len(), 3);
+        assert_eq!(editor.get_content(), "SELECT *\nFROM users\nWHERE id = 1");
+        assert_eq!(editor.cursor, (2, 12));
+    }
+
+    #[test]
+    fn test_insert_text_is_undoable() {
+        let mut editor = QueryEditor::new();
+        editor.insert_char('x');
+        editor.move_end(); // break coalescing
+        editor.insert_text("hello\nworld");
+        assert_eq!(editor.get_content(), "xhello\nworld");
+        editor.undo();
+        assert_eq!(editor.get_content(), "x");
+    }
+
+    #[test]
+    fn test_insert_text_normalizes_crlf() {
+        let mut editor = QueryEditor::new();
+        editor.insert_text("a\r\nb\r\nc");
+        assert_eq!(editor.get_content(), "a\nb\nc");
+        assert_eq!(editor.lines.len(), 3);
     }
 }

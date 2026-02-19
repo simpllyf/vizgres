@@ -5,7 +5,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use clap::Parser;
 use crossterm::{
-    event::{self, Event, KeyEventKind},
+    event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyEventKind},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -63,14 +63,14 @@ async fn main() -> Result<()> {
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
         let _ = disable_raw_mode();
-        let _ = execute!(std::io::stderr(), LeaveAlternateScreen);
+        let _ = execute!(std::io::stderr(), DisableBracketedPaste, LeaveAlternateScreen);
         original_hook(panic_info);
     }));
 
     // Initialize terminal
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -86,7 +86,7 @@ async fn main() -> Result<()> {
 
     // Restore terminal
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(terminal.backend_mut(), DisableBracketedPaste, LeaveAlternateScreen)?;
     terminal.show_cursor()?;
 
     result
@@ -152,6 +152,9 @@ async fn run_app(
                         } else {
                             Action::None
                         }
+                    }
+                    Ok(Some(Some(Event::Paste(data)))) => {
+                        app.handle_event(AppEvent::Paste(data))?
                     }
                     Ok(Some(Some(Event::Resize(_, _)))) => {
                         app.handle_event(AppEvent::Resize)?
