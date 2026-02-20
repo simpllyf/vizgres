@@ -603,12 +603,35 @@ impl App {
         }
 
         let prefix = completer::word_before_cursor(line, col);
-        if prefix.is_empty() {
+        let prefix_start = col - prefix.len();
+
+        // Check for dot qualifier (e.g., "users." or "public.u")
+        let dot_qual = completer::dot_qualifier(line, prefix_start);
+
+        // Allow empty prefix when dot-qualified (e.g., "users.")
+        if prefix.is_empty() && dot_qual.is_none() {
             self.clear_completions();
             return;
         }
 
-        let ghost = self.completer.recompute(prefix, self.tree_browser.schema());
+        let schema = self.tree_browser.schema();
+
+        // Build text-before-prefix for context detection (skip if dot-qualified)
+        let context = if dot_qual.is_some() {
+            completer::detect_context("", dot_qual, schema)
+        } else {
+            let mut text_before = String::new();
+            for i in 0..line_idx {
+                if let Some(prev_line) = self.editor.line(i) {
+                    text_before.push_str(prev_line);
+                    text_before.push('\n');
+                }
+            }
+            text_before.push_str(&line[..prefix_start]);
+            completer::detect_context(&text_before, None, schema)
+        };
+
+        let ghost = self.completer.recompute(prefix, context, schema);
         self.editor.set_ghost_text(ghost);
     }
 
