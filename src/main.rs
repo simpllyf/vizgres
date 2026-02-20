@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use clap::Parser;
+use clap::{Args, Parser, Subcommand};
 use crossterm::{
     event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyEventKind},
     execute,
@@ -12,20 +12,57 @@ use crossterm::{
 use ratatui::prelude::*;
 use tokio::sync::mpsc;
 use vizgres::app::{Action, App, AppEvent, StatusLevel};
-use vizgres::config;
+use vizgres::config::{self, ConnectionConfig, Settings};
 use vizgres::db::{self, Database};
 
 /// A fast, keyboard-driven PostgreSQL client for the terminal
 #[derive(Parser)]
 #[command(name = "vizgres", version, about)]
+#[command(args_conflicts_with_subcommands = true)]
 struct Cli {
-    /// PostgreSQL connection URL (postgres://user:pass@host:port/dbname)
-    url: Option<String>,
+    #[command(subcommand)]
+    command: Option<CliCommand>,
+
+    #[command(flatten)]
+    connect: ConnectArgs,
+}
+
+#[derive(Args)]
+struct ConnectArgs {
+    /// Connection URL (postgres://...) or saved connection name
+    target: Option<String>,
+}
+
+#[derive(Subcommand)]
+enum CliCommand {
+    /// Manage vizgres configuration
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfigAction {
+    /// Show current settings and saved connections
+    List,
+    /// Open config file in $EDITOR
+    Edit,
+    /// Print config directory path
+    Path,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    // Handle config subcommands (non-TUI, print to stdout and exit)
+    if let Some(CliCommand::Config { action }) = cli.command {
+        return handle_config_action(action);
+    }
+
+    // Load settings
+    let settings = Settings::load();
 
     // Set up panic hook to restore terminal before panic message
     let original_hook = std::panic::take_hook();
@@ -39,10 +76,9 @@ async fn main() -> Result<()> {
         original_hook(panic_info);
     }));
 
-    // If URL provided, connect before entering TUI
-    let (mut provider, mut conn_err_rx, mut app) = if let Some(ref url) = cli.url {
-        let conn_config = config::ConnectionConfig::from_url(url)
-            .map_err(|e| anyhow::anyhow!("Invalid connection URL: {}", e))?;
+    // Resolve connection target (URL or saved name)
+    let (mut provider, mut conn_err_rx, mut app) = if let Some(ref target) = cli.connect.target {
+        let conn_config = resolve_connection(target)?;
 
         eprintln!("Connecting to {}...", conn_config.name);
         let (prov, rx) = db::PostgresProvider::connect(&conn_config)
@@ -55,11 +91,11 @@ async fn main() -> Result<()> {
             .await
             .map_err(|e| anyhow::anyhow!("Schema load failed: {}", e))?;
 
-        let app = App::with_connection(conn_config.name.clone(), schema);
+        let app = App::with_connection(conn_config.name.clone(), schema, &settings);
         (Some(prov), Some(rx), app)
     } else {
-        // No URL — start disconnected and show connection dialog
-        let mut app = App::new();
+        // No target — start disconnected and show connection dialog
+        let mut app = App::new_with_settings(&settings);
         app.show_connection_dialog();
         (None, None, app)
     };
@@ -84,6 +120,146 @@ async fn main() -> Result<()> {
     terminal.show_cursor()?;
 
     result
+}
+
+/// Resolve a connection target string to a ConnectionConfig.
+/// Tries URL parsing first, then falls back to saved connection name lookup.
+fn resolve_connection(target: &str) -> Result<ConnectionConfig> {
+    // Try as a URL first
+    if target.starts_with("postgres://") || target.starts_with("postgresql://") {
+        return ConnectionConfig::from_url(target)
+            .map_err(|e| anyhow::anyhow!("Invalid connection URL: {}", e));
+    }
+
+    // Fall back to saved connection name
+    config::find_connection(target).map_err(|e| {
+        anyhow::anyhow!(
+            "Could not resolve '{}': not a valid postgres:// URL and {}",
+            target,
+            e
+        )
+    })
+}
+
+/// Handle `vizgres config <action>` subcommands
+fn handle_config_action(action: ConfigAction) -> Result<()> {
+    match action {
+        ConfigAction::Path => {
+            let dir = ConnectionConfig::config_dir().map_err(|e| anyhow::anyhow!("{}", e))?;
+            println!("{}", dir.display());
+        }
+        ConfigAction::List => {
+            print_config_list()?;
+        }
+        ConfigAction::Edit => {
+            open_config_in_editor()?;
+        }
+    }
+    Ok(())
+}
+
+/// Print current settings and saved connections
+fn print_config_list() -> Result<()> {
+    let config_path = Settings::config_file().map_err(|e| anyhow::anyhow!("{}", e))?;
+    let settings = Settings::load();
+    let defaults = Settings::default();
+
+    // Settings section
+    let exists = config_path.exists();
+    let path_display = if exists {
+        format!("({})", config_path.display())
+    } else {
+        format!("({} — not found, using defaults)", config_path.display())
+    };
+    let default_tag = |val: usize, def: usize| if val == def { "(default)" } else { "" };
+    println!("Settings {}:", path_display);
+    println!(
+        "  {:<20} {:<8} {}",
+        "preview_rows",
+        settings.settings.preview_rows,
+        default_tag(
+            settings.settings.preview_rows,
+            defaults.settings.preview_rows
+        ),
+    );
+    println!(
+        "  {:<20} {:<8} {}",
+        "max_tabs",
+        settings.settings.max_tabs,
+        default_tag(settings.settings.max_tabs, defaults.settings.max_tabs),
+    );
+    println!(
+        "  {:<20} {:<8} {}",
+        "history_size",
+        settings.settings.history_size,
+        default_tag(
+            settings.settings.history_size,
+            defaults.settings.history_size
+        ),
+    );
+
+    // Keybinding overrides
+    let total_overrides = settings.keybindings.global.len()
+        + settings.keybindings.editor.len()
+        + settings.keybindings.results.len()
+        + settings.keybindings.tree.len();
+    if total_overrides == 0 {
+        println!("\nKeybinding overrides: (none)");
+    } else {
+        println!("\nKeybinding overrides ({}):", total_overrides);
+        print_keybinding_section("global", &settings.keybindings.global);
+        print_keybinding_section("editor", &settings.keybindings.editor);
+        print_keybinding_section("results", &settings.keybindings.results);
+        print_keybinding_section("tree", &settings.keybindings.tree);
+    }
+
+    // Saved connections
+    match config::load_connections() {
+        Ok(connections) if connections.is_empty() => {
+            println!("\nSaved connections: (none)");
+        }
+        Ok(connections) => {
+            println!("\nSaved connections:");
+            for conn in &connections {
+                println!("  {:<20} {}", conn.name, conn.to_url_masked());
+            }
+        }
+        Err(e) => {
+            println!("\nSaved connections: (error: {})", e);
+        }
+    }
+
+    Ok(())
+}
+
+fn print_keybinding_section(name: &str, bindings: &std::collections::HashMap<String, String>) {
+    for (key, action) in bindings {
+        println!("  [{}] \"{}\" = \"{}\"", name, key, action);
+    }
+}
+
+/// Open config file in $EDITOR, creating with defaults if missing
+fn open_config_in_editor() -> Result<()> {
+    let config_path = Settings::config_file().map_err(|e| anyhow::anyhow!("{}", e))?;
+
+    // Create with commented defaults if missing
+    if !config_path.exists() {
+        Settings::write_defaults(&config_path)
+            .map_err(|e| anyhow::anyhow!("Failed to create config file: {}", e))?;
+        eprintln!("Created {}", config_path.display());
+    }
+
+    let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+    let status = std::process::Command::new(&editor)
+        .arg(&config_path)
+        .status()
+        .map_err(|e| anyhow::anyhow!("Failed to launch {}: {}", editor, e))?;
+
+    if !status.success() {
+        anyhow::bail!("{} exited with status {}", editor, status);
+    }
+
+    Ok(())
 }
 
 async fn run_app(

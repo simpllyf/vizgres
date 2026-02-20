@@ -45,16 +45,23 @@ pub struct TreeBrowser {
     scroll_offset: usize,
     /// Set of expanded node paths
     expanded: HashSet<String>,
+    /// Number of rows for table/view preview queries
+    preview_rows: usize,
 }
 
 impl TreeBrowser {
     pub fn new() -> Self {
+        Self::with_preview_rows(100)
+    }
+
+    pub fn with_preview_rows(preview_rows: usize) -> Self {
         Self {
             schema: None,
             items: Vec::new(),
             selected: 0,
             scroll_offset: 0,
             expanded: HashSet::new(),
+            preview_rows,
         }
     }
 
@@ -276,8 +283,8 @@ impl TreeBrowser {
                     let schema = parts[0];
                     let name = parts[2];
                     Some(format!(
-                        "SELECT * FROM \"{}\".\"{}\" LIMIT 100",
-                        schema, name
+                        "SELECT * FROM \"{}\".\"{}\" LIMIT {}",
+                        schema, name, self.preview_rows
                     ))
                 } else {
                     None
@@ -706,5 +713,17 @@ mod tests {
         assert!(!labels.contains(&"Views"));
         assert!(!labels.contains(&"Functions"));
         assert!(!labels.contains(&"Indexes"));
+    }
+
+    #[test]
+    fn test_preview_query_uses_configured_limit() {
+        let mut tree = TreeBrowser::with_preview_rows(50);
+        tree.set_schema(sample_schema());
+        let users_idx = tree.items.iter().position(|i| i.label == "users").unwrap();
+        tree.selected = users_idx;
+        assert_eq!(
+            tree.preview_query(),
+            Some("SELECT * FROM \"public\".\"users\" LIMIT 50".to_string())
+        );
     }
 }

@@ -4,8 +4,12 @@
 //! scattered across components. To add a new binding, add an entry to the
 //! appropriate context in `KeyMap::default()` and handle the `KeyAction` in
 //! `App::execute_key_action()`.
+//!
+//! User overrides from `~/.vizgres/config.toml` are merged on top via
+//! `KeyMap::from_config()`.
 
 use crate::app::PanelFocus;
+use crate::config::settings::KeybindingsConfig;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::collections::HashMap;
 
@@ -109,6 +113,262 @@ impl KeyMap {
         }
         self.panels.get(&focus).and_then(|m| m.get(&bind)).copied()
     }
+
+    /// Build a KeyMap from defaults plus user overrides.
+    /// Returns the keymap and a list of warning messages for invalid entries.
+    pub fn from_config(config: &KeybindingsConfig) -> (Self, Vec<String>) {
+        let mut km = Self::default();
+        let mut warnings = Vec::new();
+
+        apply_overrides(&mut km.global, &config.global, "global", &mut warnings);
+
+        let panel_configs: &[(PanelFocus, &HashMap<String, String>)] = &[
+            (PanelFocus::QueryEditor, &config.editor),
+            (PanelFocus::ResultsViewer, &config.results),
+            (PanelFocus::TreeBrowser, &config.tree),
+        ];
+
+        for &(focus, bindings) in panel_configs {
+            let panel_map = km.panels.entry(focus).or_default();
+            let label = match focus {
+                PanelFocus::QueryEditor => "editor",
+                PanelFocus::ResultsViewer => "results",
+                PanelFocus::TreeBrowser => "tree",
+                _ => "unknown",
+            };
+            apply_overrides(panel_map, bindings, label, &mut warnings);
+        }
+
+        (km, warnings)
+    }
+
+    /// Reverse lookup: find all keys bound to a given action.
+    /// Searches global bindings plus the panel-specific map for the given focus.
+    /// Returns formatted key strings joined for display.
+    pub fn keys_for_action(&self, focus: Option<PanelFocus>, action: KeyAction) -> Vec<String> {
+        let mut keys = Vec::new();
+
+        // Search global bindings
+        for (bind, act) in &self.global {
+            if *act == action {
+                keys.push(format_keybind(bind));
+            }
+        }
+
+        // Search panel-specific bindings
+        if let Some(focus) = focus
+            && let Some(panel_map) = self.panels.get(&focus)
+        {
+            for (bind, act) in panel_map {
+                if *act == action {
+                    keys.push(format_keybind(bind));
+                }
+            }
+        }
+
+        // Sort for deterministic output
+        keys.sort();
+        keys
+    }
+}
+
+/// Apply user overrides from a HashMap<String, String> into a binding map.
+fn apply_overrides(
+    map: &mut HashMap<KeyBind, KeyAction>,
+    overrides: &HashMap<String, String>,
+    context: &str,
+    warnings: &mut Vec<String>,
+) {
+    for (key_str, action_str) in overrides {
+        let bind = match parse_keybind(key_str) {
+            Ok(b) => b,
+            Err(e) => {
+                warnings.push(format!(
+                    "[keybindings.{}] invalid key \"{}\": {}",
+                    context, key_str, e
+                ));
+                continue;
+            }
+        };
+        let action = match parse_key_action(action_str) {
+            Ok(a) => a,
+            Err(e) => {
+                warnings.push(format!(
+                    "[keybindings.{}] invalid action \"{}\" for key \"{}\": {}",
+                    context, action_str, key_str, e
+                ));
+                continue;
+            }
+        };
+        map.insert(bind, action);
+    }
+}
+
+/// Parse a key string like "ctrl+shift+z" into a KeyBind.
+///
+/// Format: modifier parts joined with `+`, key name last.
+/// Modifiers: `ctrl`, `alt`, `shift` (case-insensitive).
+/// Key names: `enter`, `esc`, `space`, `tab`, `backtab`, `up`, `down`, `left`, `right`,
+/// `home`, `end`, `pageup`, `pagedown`, `f1`..`f12`, or a single character.
+pub fn parse_keybind(s: &str) -> Result<KeyBind, String> {
+    let s = s.trim().to_lowercase();
+    if s.is_empty() {
+        return Err("empty key string".to_string());
+    }
+
+    let parts: Vec<&str> = s.split('+').collect();
+    if parts.is_empty() {
+        return Err("empty key string".to_string());
+    }
+
+    let mut modifiers = KeyModifiers::NONE;
+    let key_part = parts.last().unwrap();
+
+    // All parts except the last are modifiers
+    for &part in &parts[..parts.len() - 1] {
+        match part.trim() {
+            "ctrl" => modifiers |= KeyModifiers::CONTROL,
+            "alt" => modifiers |= KeyModifiers::ALT,
+            "shift" => modifiers |= KeyModifiers::SHIFT,
+            other => return Err(format!("unknown modifier: {}", other)),
+        }
+    }
+
+    let code = parse_key_code(key_part.trim())?;
+
+    // If shift is specified with a letter, uppercase it
+    if modifiers.contains(KeyModifiers::SHIFT)
+        && let KeyCode::Char(c) = code
+    {
+        return Ok(KeyBind {
+            code: KeyCode::Char(c.to_ascii_uppercase()),
+            modifiers,
+        });
+    }
+
+    Ok(KeyBind { code, modifiers })
+}
+
+/// Parse a key name string into a KeyCode
+fn parse_key_code(s: &str) -> Result<KeyCode, String> {
+    match s {
+        "enter" => Ok(KeyCode::Enter),
+        "esc" | "escape" => Ok(KeyCode::Esc),
+        "space" => Ok(KeyCode::Char(' ')),
+        "tab" => Ok(KeyCode::Tab),
+        "backtab" => Ok(KeyCode::BackTab),
+        "backspace" => Ok(KeyCode::Backspace),
+        "delete" | "del" => Ok(KeyCode::Delete),
+        "up" => Ok(KeyCode::Up),
+        "down" => Ok(KeyCode::Down),
+        "left" => Ok(KeyCode::Left),
+        "right" => Ok(KeyCode::Right),
+        "home" => Ok(KeyCode::Home),
+        "end" => Ok(KeyCode::End),
+        "pageup" | "pgup" => Ok(KeyCode::PageUp),
+        "pagedown" | "pgdn" | "pgdown" => Ok(KeyCode::PageDown),
+        _ if s.starts_with('f') && s.len() >= 2 => {
+            let num: u8 = s[1..]
+                .parse()
+                .map_err(|_| format!("invalid function key: {}", s))?;
+            if (1..=12).contains(&num) {
+                Ok(KeyCode::F(num))
+            } else {
+                Err(format!("function key out of range: {}", s))
+            }
+        }
+        _ if s.chars().count() == 1 => Ok(KeyCode::Char(s.chars().next().unwrap())),
+        _ => Err(format!("unknown key: {}", s)),
+    }
+}
+
+/// Parse a snake_case action string into a KeyAction.
+pub fn parse_key_action(s: &str) -> Result<KeyAction, String> {
+    match s.trim() {
+        "quit" => Ok(KeyAction::Quit),
+        "command_bar" | "open_command_bar" => Ok(KeyAction::OpenCommandBar),
+        "cycle_focus" => Ok(KeyAction::CycleFocus),
+        "cycle_focus_reverse" => Ok(KeyAction::CycleFocusReverse),
+        "move_up" => Ok(KeyAction::MoveUp),
+        "move_down" => Ok(KeyAction::MoveDown),
+        "move_left" => Ok(KeyAction::MoveLeft),
+        "move_right" => Ok(KeyAction::MoveRight),
+        "page_up" => Ok(KeyAction::PageUp),
+        "page_down" => Ok(KeyAction::PageDown),
+        "go_to_top" => Ok(KeyAction::GoToTop),
+        "go_to_bottom" => Ok(KeyAction::GoToBottom),
+        "home" => Ok(KeyAction::Home),
+        "end" => Ok(KeyAction::End),
+        "execute_query" => Ok(KeyAction::ExecuteQuery),
+        "explain_query" => Ok(KeyAction::ExplainQuery),
+        "clear_editor" => Ok(KeyAction::ClearEditor),
+        "history_back" => Ok(KeyAction::HistoryBack),
+        "history_forward" => Ok(KeyAction::HistoryForward),
+        "undo" => Ok(KeyAction::Undo),
+        "redo" => Ok(KeyAction::Redo),
+        "format_query" => Ok(KeyAction::FormatQuery),
+        "cancel_query" => Ok(KeyAction::CancelQuery),
+        "open_inspector" => Ok(KeyAction::OpenInspector),
+        "copy_cell" => Ok(KeyAction::CopyCell),
+        "copy_row" => Ok(KeyAction::CopyRow),
+        "export_csv" => Ok(KeyAction::ExportCsv),
+        "export_json" => Ok(KeyAction::ExportJson),
+        "copy_content" => Ok(KeyAction::CopyContent),
+        "toggle_expand" => Ok(KeyAction::ToggleExpand),
+        "expand" => Ok(KeyAction::Expand),
+        "collapse" => Ok(KeyAction::Collapse),
+        "next_completion" => Ok(KeyAction::NextCompletion),
+        "prev_completion" => Ok(KeyAction::PrevCompletion),
+        "show_help" => Ok(KeyAction::ShowHelp),
+        "new_tab" => Ok(KeyAction::NewTab),
+        "close_tab" => Ok(KeyAction::CloseTab),
+        "next_tab" => Ok(KeyAction::NextTab),
+        "dismiss" => Ok(KeyAction::Dismiss),
+        "submit" => Ok(KeyAction::Submit),
+        other => Err(format!("unknown action: {}", other)),
+    }
+}
+
+/// Format a KeyBind as a human-readable string like "Ctrl+Shift+Z"
+pub fn format_keybind(bind: &KeyBind) -> String {
+    let mut parts = Vec::new();
+
+    if bind.modifiers.contains(KeyModifiers::CONTROL) {
+        parts.push("Ctrl".to_string());
+    }
+    if bind.modifiers.contains(KeyModifiers::ALT) {
+        parts.push("Alt".to_string());
+    }
+    if bind.modifiers.contains(KeyModifiers::SHIFT) {
+        // Don't show Shift for uppercase letters — they imply it
+        if !matches!(bind.code, KeyCode::Char(c) if c.is_ascii_uppercase()) {
+            parts.push("Shift".to_string());
+        }
+    }
+
+    let key_name = match bind.code {
+        KeyCode::Char(' ') => "Space".to_string(),
+        KeyCode::Char(c) => c.to_string(),
+        KeyCode::Enter => "Enter".to_string(),
+        KeyCode::Esc => "Esc".to_string(),
+        KeyCode::Tab => "Tab".to_string(),
+        KeyCode::BackTab => "Shift+Tab".to_string(),
+        KeyCode::Backspace => "Backspace".to_string(),
+        KeyCode::Delete => "Delete".to_string(),
+        KeyCode::Up => "Up".to_string(),
+        KeyCode::Down => "Down".to_string(),
+        KeyCode::Left => "Left".to_string(),
+        KeyCode::Right => "Right".to_string(),
+        KeyCode::Home => "Home".to_string(),
+        KeyCode::End => "End".to_string(),
+        KeyCode::PageUp => "PgUp".to_string(),
+        KeyCode::PageDown => "PgDn".to_string(),
+        KeyCode::F(n) => format!("F{}", n),
+        _ => "?".to_string(),
+    };
+
+    parts.push(key_name);
+    parts.join("+")
 }
 
 impl Default for KeyMap {
@@ -898,5 +1158,227 @@ mod tests {
             assert_eq!(km.resolve(panel, ctrl_w), Some(KeyAction::CloseTab));
             assert_eq!(km.resolve(panel, ctrl_n), Some(KeyAction::NextTab));
         }
+    }
+
+    // ── Key string parsing tests ──────────────────────────────
+
+    #[test]
+    fn test_parse_keybind_ctrl_q() {
+        let bind = parse_keybind("ctrl+q").unwrap();
+        assert_eq!(bind.code, KeyCode::Char('q'));
+        assert_eq!(bind.modifiers, KeyModifiers::CONTROL);
+    }
+
+    #[test]
+    fn test_parse_keybind_ctrl_shift_z() {
+        let bind = parse_keybind("ctrl+shift+z").unwrap();
+        assert_eq!(bind.code, KeyCode::Char('Z'));
+        assert!(bind.modifiers.contains(KeyModifiers::CONTROL));
+        assert!(bind.modifiers.contains(KeyModifiers::SHIFT));
+    }
+
+    #[test]
+    fn test_parse_keybind_bare_char() {
+        let bind = parse_keybind("j").unwrap();
+        assert_eq!(bind.code, KeyCode::Char('j'));
+        assert_eq!(bind.modifiers, KeyModifiers::NONE);
+    }
+
+    #[test]
+    fn test_parse_keybind_f5() {
+        let bind = parse_keybind("f5").unwrap();
+        assert_eq!(bind.code, KeyCode::F(5));
+        assert_eq!(bind.modifiers, KeyModifiers::NONE);
+    }
+
+    #[test]
+    fn test_parse_keybind_special_keys() {
+        assert_eq!(parse_keybind("enter").unwrap().code, KeyCode::Enter);
+        assert_eq!(parse_keybind("esc").unwrap().code, KeyCode::Esc);
+        assert_eq!(parse_keybind("space").unwrap().code, KeyCode::Char(' '));
+        assert_eq!(parse_keybind("tab").unwrap().code, KeyCode::Tab);
+        assert_eq!(parse_keybind("backtab").unwrap().code, KeyCode::BackTab);
+        assert_eq!(parse_keybind("up").unwrap().code, KeyCode::Up);
+        assert_eq!(parse_keybind("down").unwrap().code, KeyCode::Down);
+        assert_eq!(parse_keybind("left").unwrap().code, KeyCode::Left);
+        assert_eq!(parse_keybind("right").unwrap().code, KeyCode::Right);
+        assert_eq!(parse_keybind("home").unwrap().code, KeyCode::Home);
+        assert_eq!(parse_keybind("end").unwrap().code, KeyCode::End);
+        assert_eq!(parse_keybind("pageup").unwrap().code, KeyCode::PageUp);
+        assert_eq!(parse_keybind("pagedown").unwrap().code, KeyCode::PageDown);
+    }
+
+    #[test]
+    fn test_parse_keybind_ctrl_enter() {
+        let bind = parse_keybind("ctrl+enter").unwrap();
+        assert_eq!(bind.code, KeyCode::Enter);
+        assert_eq!(bind.modifiers, KeyModifiers::CONTROL);
+    }
+
+    #[test]
+    fn test_parse_keybind_ctrl_alt_f() {
+        let bind = parse_keybind("ctrl+alt+f").unwrap();
+        assert_eq!(bind.code, KeyCode::Char('f'));
+        assert!(bind.modifiers.contains(KeyModifiers::CONTROL));
+        assert!(bind.modifiers.contains(KeyModifiers::ALT));
+    }
+
+    #[test]
+    fn test_parse_keybind_case_insensitive() {
+        let bind = parse_keybind("Ctrl+Q").unwrap();
+        assert_eq!(bind.code, KeyCode::Char('q'));
+        assert_eq!(bind.modifiers, KeyModifiers::CONTROL);
+    }
+
+    #[test]
+    fn test_parse_keybind_invalid() {
+        assert!(parse_keybind("").is_err());
+        assert!(parse_keybind("magic+q").is_err());
+        assert!(parse_keybind("f99").is_err());
+    }
+
+    // ── Action string parsing tests ──────────────────────────
+
+    #[test]
+    fn test_parse_key_action_all_variants() {
+        assert_eq!(parse_key_action("quit").unwrap(), KeyAction::Quit);
+        assert_eq!(
+            parse_key_action("execute_query").unwrap(),
+            KeyAction::ExecuteQuery
+        );
+        assert_eq!(
+            parse_key_action("explain_query").unwrap(),
+            KeyAction::ExplainQuery
+        );
+        assert_eq!(parse_key_action("copy_cell").unwrap(), KeyAction::CopyCell);
+        assert_eq!(parse_key_action("show_help").unwrap(), KeyAction::ShowHelp);
+        assert_eq!(parse_key_action("new_tab").unwrap(), KeyAction::NewTab);
+        assert_eq!(parse_key_action("dismiss").unwrap(), KeyAction::Dismiss);
+    }
+
+    #[test]
+    fn test_parse_key_action_aliases() {
+        assert_eq!(
+            parse_key_action("command_bar").unwrap(),
+            KeyAction::OpenCommandBar
+        );
+        assert_eq!(
+            parse_key_action("open_command_bar").unwrap(),
+            KeyAction::OpenCommandBar
+        );
+    }
+
+    #[test]
+    fn test_parse_key_action_invalid() {
+        assert!(parse_key_action("nonexistent").is_err());
+    }
+
+    // ── Format keybind tests ──────────────────────────────────
+
+    #[test]
+    fn test_format_keybind_ctrl_q() {
+        let bind = KeyBind {
+            code: KeyCode::Char('q'),
+            modifiers: KeyModifiers::CONTROL,
+        };
+        assert_eq!(format_keybind(&bind), "Ctrl+q");
+    }
+
+    #[test]
+    fn test_format_keybind_f5() {
+        let bind = KeyBind {
+            code: KeyCode::F(5),
+            modifiers: KeyModifiers::NONE,
+        };
+        assert_eq!(format_keybind(&bind), "F5");
+    }
+
+    #[test]
+    fn test_format_keybind_ctrl_shift_z() {
+        let bind = KeyBind {
+            code: KeyCode::Char('Z'),
+            modifiers: KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        };
+        assert_eq!(format_keybind(&bind), "Ctrl+Z");
+    }
+
+    // ── from_config tests ─────────────────────────────────────
+
+    #[test]
+    fn test_from_config_overrides_default() {
+        let mut config = KeybindingsConfig::default();
+        config
+            .editor
+            .insert("f6".to_string(), "execute_query".to_string());
+
+        let (km, warnings) = KeyMap::from_config(&config);
+        assert!(warnings.is_empty(), "warnings: {:?}", warnings);
+
+        let f6 = KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE);
+        assert_eq!(
+            km.resolve(PanelFocus::QueryEditor, f6),
+            Some(KeyAction::ExecuteQuery)
+        );
+    }
+
+    #[test]
+    fn test_from_config_invalid_key_warns() {
+        let mut config = KeybindingsConfig::default();
+        config
+            .global
+            .insert("magic+q".to_string(), "quit".to_string());
+
+        let (_, warnings) = KeyMap::from_config(&config);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("invalid key"));
+    }
+
+    #[test]
+    fn test_from_config_invalid_action_warns() {
+        let mut config = KeybindingsConfig::default();
+        config
+            .editor
+            .insert("f6".to_string(), "nonexistent".to_string());
+
+        let (_, warnings) = KeyMap::from_config(&config);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("invalid action"));
+    }
+
+    #[test]
+    fn test_from_config_empty_preserves_defaults() {
+        let config = KeybindingsConfig::default();
+        let (km, warnings) = KeyMap::from_config(&config);
+        assert!(warnings.is_empty());
+
+        let ctrl_q = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL);
+        assert_eq!(
+            km.resolve(PanelFocus::QueryEditor, ctrl_q),
+            Some(KeyAction::Quit)
+        );
+    }
+
+    // ── keys_for_action tests ────────────────────────────────
+
+    #[test]
+    fn test_keys_for_action_finds_global() {
+        let km = KeyMap::default();
+        let keys = km.keys_for_action(None, KeyAction::Quit);
+        assert!(!keys.is_empty());
+        assert!(keys.iter().any(|k| k.contains("Ctrl") && k.contains("q")));
+    }
+
+    #[test]
+    fn test_keys_for_action_finds_panel_specific() {
+        let km = KeyMap::default();
+        let keys = km.keys_for_action(Some(PanelFocus::QueryEditor), KeyAction::ExecuteQuery);
+        assert!(keys.len() >= 2); // F5 and Ctrl+Enter
+    }
+
+    #[test]
+    fn test_keys_for_action_empty_for_unbound() {
+        let km = KeyMap::default();
+        let keys = km.keys_for_action(Some(PanelFocus::QueryEditor), KeyAction::CopyCell);
+        assert!(keys.is_empty());
     }
 }

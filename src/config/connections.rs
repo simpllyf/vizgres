@@ -154,26 +154,8 @@ impl ConnectionConfig {
     /// (`@`, `:`, `/`, etc.) round-trip safely through `from_url()`.
     pub fn to_url(&self) -> String {
         let user = utf8_percent_encode(&self.username, NON_ALPHANUMERIC);
-        let host_port = if self.port == 5432 {
-            self.host.clone()
-        } else {
-            format!("{}:{}", self.host, self.port)
-        };
-        // Wrap IPv6 addresses in brackets
-        let host_port = if self.host.contains(':') {
-            if self.port == 5432 {
-                format!("[{}]", self.host)
-            } else {
-                format!("[{}]:{}", self.host, self.port)
-            }
-        } else {
-            host_port
-        };
-        let ssl_param = match self.ssl_mode {
-            SslMode::Prefer => String::new(),
-            SslMode::Disable => "?sslmode=disable".to_string(),
-            SslMode::Require => "?sslmode=require".to_string(),
-        };
+        let host_port = self.format_host_port();
+        let ssl_param = self.ssl_param();
         if let Some(ref pw) = self.password {
             let pass = utf8_percent_encode(pw, NON_ALPHANUMERIC);
             format!(
@@ -185,6 +167,50 @@ impl ConnectionConfig {
                 "postgres://{}@{}/{}{}",
                 user, host_port, self.database, ssl_param
             )
+        }
+    }
+
+    /// Build a postgres:// URL with the password replaced by `****`.
+    /// Useful for display in `config list` output.
+    pub fn to_url_masked(&self) -> String {
+        let user = utf8_percent_encode(&self.username, NON_ALPHANUMERIC);
+        let host_port = self.format_host_port();
+        let ssl_param = self.ssl_param();
+        if self.password.is_some() {
+            format!(
+                "postgres://{}:****@{}/{}{}",
+                user, host_port, self.database, ssl_param
+            )
+        } else {
+            format!(
+                "postgres://{}@{}/{}{}",
+                user, host_port, self.database, ssl_param
+            )
+        }
+    }
+
+    /// Format host:port with IPv6 bracket wrapping
+    fn format_host_port(&self) -> String {
+        if self.host.contains(':') {
+            // IPv6: wrap in brackets
+            if self.port == 5432 {
+                format!("[{}]", self.host)
+            } else {
+                format!("[{}]:{}", self.host, self.port)
+            }
+        } else if self.port == 5432 {
+            self.host.clone()
+        } else {
+            format!("{}:{}", self.host, self.port)
+        }
+    }
+
+    /// Format the sslmode query parameter
+    fn ssl_param(&self) -> &'static str {
+        match self.ssl_mode {
+            SslMode::Prefer => "",
+            SslMode::Disable => "?sslmode=disable",
+            SslMode::Require => "?sslmode=require",
         }
     }
 
@@ -634,6 +660,58 @@ mod tests {
         );
         assert!(toml_str.contains("secret"));
     }
+
+    // ── to_url_masked tests ────────────────────────────────────
+
+    #[test]
+    fn test_to_url_masked_hides_password() {
+        let config = ConnectionConfig {
+            name: "test".to_string(),
+            host: "localhost".to_string(),
+            port: 5432,
+            database: "mydb".to_string(),
+            username: "user".to_string(),
+            password: Some("supersecret".to_string()),
+            ssl_mode: SslMode::Prefer,
+        };
+        let masked = config.to_url_masked();
+        assert_eq!(masked, "postgres://user:****@localhost/mydb");
+        assert!(!masked.contains("supersecret"));
+    }
+
+    #[test]
+    fn test_to_url_masked_no_password() {
+        let config = ConnectionConfig {
+            name: "test".to_string(),
+            host: "localhost".to_string(),
+            port: 5432,
+            database: "mydb".to_string(),
+            username: "user".to_string(),
+            password: None,
+            ssl_mode: SslMode::Prefer,
+        };
+        assert_eq!(config.to_url_masked(), "postgres://user@localhost/mydb");
+    }
+
+    #[test]
+    fn test_to_url_masked_with_port_and_ssl() {
+        let config = ConnectionConfig {
+            name: "test".to_string(),
+            host: "db.example.com".to_string(),
+            port: 5433,
+            database: "prod".to_string(),
+            username: "admin".to_string(),
+            password: Some("secret".to_string()),
+            ssl_mode: SslMode::Require,
+        };
+        let masked = config.to_url_masked();
+        assert_eq!(
+            masked,
+            "postgres://admin:****@db.example.com:5433/prod?sslmode=require"
+        );
+    }
+
+    // ── password serialization ────────────────────────────────────
 
     #[test]
     fn test_no_password_omitted_from_toml() {
