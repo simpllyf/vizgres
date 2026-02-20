@@ -12,7 +12,8 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 /// Render the entire application
 pub fn render(frame: &mut Frame, app: &App) {
     let theme = &app.theme;
-    let layout = calculate_layout(frame.area());
+    let show_tab_bar = app.tab_count() > 1;
+    let layout = calculate_layout(frame.area(), show_tab_bar);
 
     // Tree browser
     render_panel(
@@ -27,7 +28,12 @@ pub fn render(frame: &mut Frame, app: &App) {
         },
     );
 
-    // Editor
+    // Tab bar (only when >1 tab)
+    if show_tab_bar {
+        render_tab_bar(frame, layout.tab_bar, app, theme);
+    }
+
+    // Editor (active tab)
     render_panel(
         frame,
         theme,
@@ -35,12 +41,13 @@ pub fn render(frame: &mut Frame, app: &App) {
         " Query ",
         app.focus == PanelFocus::QueryEditor,
         |f, inner| {
-            app.editor
+            app.tab()
+                .editor
                 .render(f, inner, app.focus == PanelFocus::QueryEditor, theme);
         },
     );
 
-    // Results
+    // Results (active tab)
     render_panel(
         frame,
         theme,
@@ -48,8 +55,12 @@ pub fn render(frame: &mut Frame, app: &App) {
         " Results ",
         app.focus == PanelFocus::ResultsViewer,
         |f, inner| {
-            app.results_viewer
-                .render(f, inner, app.focus == PanelFocus::ResultsViewer, theme);
+            app.tab().results_viewer.render(
+                f,
+                inner,
+                app.focus == PanelFocus::ResultsViewer,
+                theme,
+            );
         },
     );
 
@@ -65,6 +76,35 @@ pub fn render(frame: &mut Frame, app: &App) {
 
     // Status bar
     render_status_bar(frame, layout.command_bar, app, theme);
+}
+
+/// Render the tab bar showing all open tabs with the active tab highlighted
+fn render_tab_bar(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let mut spans = Vec::new();
+    for (i, tab) in app.tabs.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" \u{2502} ", theme.tab_separator));
+        }
+
+        let label = if tab.query_running {
+            format!(" Tab {}* ", i + 1)
+        } else {
+            format!(" Tab {} ", i + 1)
+        };
+
+        let style = if i == app.active_tab {
+            theme.tab_active
+        } else {
+            theme.tab_inactive
+        };
+        spans.push(Span::styled(label, style));
+    }
+
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 /// Render a panel with consistent focus indication

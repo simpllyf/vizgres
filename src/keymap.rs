@@ -79,6 +79,11 @@ pub enum KeyAction {
     // Help
     ShowHelp,
 
+    // Tabs
+    NewTab,
+    CloseTab,
+    NextTab,
+
     // Modal dismiss/submit
     Dismiss,
     Submit,
@@ -141,6 +146,27 @@ impl Default for KeyMap {
                 modifiers: KeyModifiers::NONE,
             },
             KeyAction::ShowHelp,
+        );
+        global.insert(
+            KeyBind {
+                code: KeyCode::Char('t'),
+                modifiers: KeyModifiers::CONTROL,
+            },
+            KeyAction::NewTab,
+        );
+        global.insert(
+            KeyBind {
+                code: KeyCode::Char('w'),
+                modifiers: KeyModifiers::CONTROL,
+            },
+            KeyAction::CloseTab,
+        );
+        global.insert(
+            KeyBind {
+                code: KeyCode::Char('n'),
+                modifiers: KeyModifiers::CONTROL,
+            },
+            KeyAction::NextTab,
         );
 
         let mut panels = HashMap::new();
@@ -814,5 +840,24 @@ mod tests {
         assert_eq!(km.resolve(PanelFocus::ResultsViewer, ctrl_down), None);
         assert_eq!(km.resolve(PanelFocus::TreeBrowser, ctrl_up), None);
         assert_eq!(km.resolve(PanelFocus::TreeBrowser, ctrl_down), None);
+    }
+
+    #[test]
+    fn test_tab_keybindings_resolve() {
+        let km = KeyMap::default();
+        let ctrl_t = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL);
+        let ctrl_w = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL);
+        let ctrl_n = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL);
+
+        // All three should resolve as global bindings from any non-modal panel
+        for panel in [
+            PanelFocus::QueryEditor,
+            PanelFocus::ResultsViewer,
+            PanelFocus::TreeBrowser,
+        ] {
+            assert_eq!(km.resolve(panel, ctrl_t), Some(KeyAction::NewTab));
+            assert_eq!(km.resolve(panel, ctrl_w), Some(KeyAction::CloseTab));
+            assert_eq!(km.resolve(panel, ctrl_n), Some(KeyAction::NextTab));
+        }
     }
 }

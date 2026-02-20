@@ -14,7 +14,7 @@ pub struct HelpOverlay {
 }
 
 /// Total number of content lines in the help text
-const HELP_LINE_COUNT: usize = 46;
+const HELP_LINE_COUNT: usize = 49;
 
 impl HelpOverlay {
     pub fn new() -> Self {
@@ -79,6 +79,9 @@ impl HelpOverlay {
             help_line("  Tab / Shift+Tab", "Cycle panel focus", key, desc),
             help_line("  Ctrl+P", "Command palette", key, desc),
             help_line("  F1 / ?", "Help", key, desc),
+            help_line("  Ctrl+T", "New tab", key, desc),
+            help_line("  Ctrl+W", "Close tab", key, desc),
+            help_line("  Ctrl+N", "Next tab", key, desc),
             blank.clone(),
             Line::from(Span::styled("Editor", section)),
             help_line("  F5 / Ctrl+Enter", "Execute query", key, desc),

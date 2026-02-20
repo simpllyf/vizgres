@@ -75,6 +75,11 @@ pub struct Theme {
     #[allow(dead_code)] // reserved for autocomplete suggestions
     pub command_autocomplete: Style,
 
+    // Tab bar
+    pub tab_active: Style,
+    pub tab_inactive: Style,
+    pub tab_separator: Style,
+
     // Status bar
     pub status_success: Style,
     pub status_error: Style,
@@ -175,6 +180,14 @@ impl Default for Theme {
             command_input: Style::default().fg(Color::White),
             command_text: Style::default().fg(Color::White),
             command_autocomplete: Style::default().fg(Color::DarkGray),
+
+            // Tab bar
+            tab_active: Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+            tab_inactive: Style::default().fg(Color::DarkGray),
+            tab_separator: Style::default().fg(Color::DarkGray),
 
             // Status bar
             status_success: Style::default().fg(Color::Green),

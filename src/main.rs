@@ -185,17 +185,19 @@ async fn run_app(
                 app.running = false;
                 break;
             }
-            Action::ExecuteQuery(sql) => {
-                app.query_running = true;
+            Action::ExecuteQuery { sql, tab_id } => {
                 let db = Arc::clone(&provider);
                 let tx = event_tx.clone();
                 tokio::spawn(async move {
                     match db.execute_query(&sql).await {
                         Ok(results) => {
-                            let _ = tx.send(AppEvent::QueryCompleted(results));
+                            let _ = tx.send(AppEvent::QueryCompleted { results, tab_id });
                         }
                         Err(e) => {
-                            let _ = tx.send(AppEvent::QueryFailed(e.to_string()));
+                            let _ = tx.send(AppEvent::QueryFailed {
+                                error: e.to_string(),
+                                tab_id,
+                            });
                         }
                     }
                 });
