@@ -7,6 +7,7 @@ use crate::completer::{self, Completer};
 use crate::db::QueryResults;
 use crate::db::schema::SchemaTree;
 use crate::error::Result;
+use crate::export::ExportFormat;
 use crate::history::QueryHistory;
 use crate::keymap::{KeyAction, KeyMap};
 use crate::ui::Component;
@@ -69,6 +70,9 @@ pub struct App {
     pub active_tab: usize,
     /// Next stable tab ID to assign
     next_tab_id: usize,
+
+    /// Pending export format (set when Ctrl+S/Ctrl+J opens the filename prompt)
+    pending_export: Option<ExportFormat>,
 
     /// Query history for Ctrl+Up/Down navigation
     history: QueryHistory,
@@ -166,6 +170,7 @@ impl App {
             tabs: vec![Tab::new(0)],
             active_tab: 0,
             next_tab_id: 1,
+            pending_export: None,
             history: QueryHistory::load(500),
             keymap: KeyMap::default(),
             theme: Theme::default(),
@@ -559,6 +564,14 @@ impl App {
                 }
                 Action::None
             }
+            KeyAction::ExportCsv => {
+                self.start_export(ExportFormat::Csv);
+                Action::None
+            }
+            KeyAction::ExportJson => {
+                self.start_export(ExportFormat::Json);
+                Action::None
+            }
 
             // ── Inspector ────────────────────────────────────
             KeyAction::CopyContent => {
@@ -599,6 +612,7 @@ impl App {
                         self.focus = self.previous_focus;
                     }
                     PanelFocus::CommandBar => {
+                        self.pending_export = None;
                         self.command_bar.deactivate();
                         self.focus = self.previous_focus;
                     }
@@ -613,6 +627,8 @@ impl App {
             KeyAction::Submit => {
                 if self.focus == PanelFocus::CommandBar {
                     let input = self.command_bar.input_text().to_string();
+                    let is_prompt = self.command_bar.is_prompt_mode();
+                    let format = self.pending_export.take();
                     self.command_bar.deactivate();
                     self.focus = self.previous_focus;
 
@@ -620,11 +636,18 @@ impl App {
                         return Action::None;
                     }
 
-                    match parse_command(&input) {
-                        Ok(cmd) => self.execute_command(cmd),
-                        Err(e) => {
-                            self.set_status(e.to_string(), StatusLevel::Error);
-                            Action::None
+                    if is_prompt {
+                        if let Some(fmt) = format {
+                            self.execute_export(fmt, &input);
+                        }
+                        Action::None
+                    } else {
+                        match parse_command(&input) {
+                            Ok(cmd) => self.execute_command(cmd),
+                            Err(e) => {
+                                self.set_status(e.to_string(), StatusLevel::Error);
+                                Action::None
+                            }
                         }
                     }
                 } else {
@@ -802,6 +825,49 @@ impl App {
 
     pub fn set_status(&mut self, message: String, level: StatusLevel) {
         self.status_message = Some(StatusMessage { message, level });
+    }
+
+    fn start_export(&mut self, format: ExportFormat) {
+        if self.tab().results_viewer.results().is_none() {
+            self.set_status("No results to export".to_string(), StatusLevel::Warning);
+            return;
+        }
+        let now = chrono::Local::now();
+        let filename = format!(
+            "export_{}.{}",
+            now.format("%Y-%m-%d_%H%M%S"),
+            format.extension()
+        );
+        self.pending_export = Some(format);
+        self.previous_focus = self.focus;
+        self.focus = PanelFocus::CommandBar;
+        self.command_bar
+            .activate_with_prompt("Save as: ".to_string(), filename);
+    }
+
+    fn execute_export(&mut self, format: ExportFormat, path: &str) {
+        let Some(results) = self.tab().results_viewer.results() else {
+            self.set_status("No results to export".to_string(), StatusLevel::Warning);
+            return;
+        };
+
+        let data = match format {
+            ExportFormat::Csv => crate::export::to_csv(results),
+            ExportFormat::Json => crate::export::to_json(results),
+        };
+
+        match std::fs::write(path, &data) {
+            Ok(()) => {
+                let ext = format.extension().to_uppercase();
+                self.set_status(
+                    format!("Exported {} as {} ({} bytes)", path, ext, data.len()),
+                    StatusLevel::Success,
+                );
+            }
+            Err(e) => {
+                self.set_status(format!("Export failed: {}", e), StatusLevel::Error);
+            }
+        }
     }
 
     fn copy_to_clipboard(&mut self, text: &str) {
@@ -1477,6 +1543,84 @@ mod tests {
                 focus
             );
         }
+    }
+
+    #[test]
+    fn test_export_no_results_warns() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.focus = PanelFocus::ResultsViewer;
+
+        let ctrl_s = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL);
+        app.handle_key(ctrl_s);
+
+        let msg = app.status_message.as_ref().unwrap();
+        assert_eq!(msg.message, "No results to export");
+        assert_eq!(msg.level, StatusLevel::Warning);
+        assert!(app.pending_export.is_none());
+    }
+
+    #[test]
+    fn test_export_opens_prompt() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        // Load some results
+        let results =
+            crate::db::QueryResults::new(vec![], vec![], std::time::Duration::from_millis(1), 0);
+        app.tabs[0].results_viewer.set_results(results);
+        app.focus = PanelFocus::ResultsViewer;
+
+        let ctrl_s = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL);
+        app.handle_key(ctrl_s);
+
+        assert!(app.pending_export.is_some());
+        assert_eq!(app.pending_export, Some(ExportFormat::Csv));
+        assert_eq!(app.focus, PanelFocus::CommandBar);
+        assert!(app.command_bar.is_active());
+        assert!(app.command_bar.is_prompt_mode());
+        assert!(app.command_bar.input_text().ends_with(".csv"));
+    }
+
+    #[test]
+    fn test_dismiss_clears_pending_export() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        let results =
+            crate::db::QueryResults::new(vec![], vec![], std::time::Duration::from_millis(1), 0);
+        app.tabs[0].results_viewer.set_results(results);
+        app.focus = PanelFocus::ResultsViewer;
+
+        // Start export flow
+        let ctrl_s = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL);
+        app.handle_key(ctrl_s);
+        assert!(app.pending_export.is_some());
+
+        // Press Escape to dismiss
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        app.handle_key(esc);
+
+        assert!(app.pending_export.is_none());
+        assert!(!app.command_bar.is_active());
+    }
+
+    #[test]
+    fn test_export_json_opens_prompt() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        let results =
+            crate::db::QueryResults::new(vec![], vec![], std::time::Duration::from_millis(1), 0);
+        app.tabs[0].results_viewer.set_results(results);
+        app.focus = PanelFocus::ResultsViewer;
+
+        let ctrl_j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL);
+        app.handle_key(ctrl_j);
+
+        assert_eq!(app.pending_export, Some(ExportFormat::Json));
+        assert!(app.command_bar.input_text().ends_with(".json"));
     }
 
     #[test]

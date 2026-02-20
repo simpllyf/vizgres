@@ -59,6 +59,11 @@ impl ResultsViewer {
         self.col_widths.clear();
     }
 
+    /// Access the underlying query results (for export)
+    pub fn results(&self) -> Option<&QueryResults> {
+        self.results.as_ref()
+    }
+
     /// Get text of the selected cell
     pub fn selected_cell_text(&self) -> Option<String> {
         let results = self.results.as_ref()?;

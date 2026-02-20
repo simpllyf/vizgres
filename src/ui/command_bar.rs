@@ -14,6 +14,8 @@ pub struct CommandBar {
     input: String,
     cursor: usize,
     active: bool,
+    /// Custom prompt prefix (e.g. "Save as: "). When None, uses "/".
+    prompt: Option<String>,
 }
 
 impl CommandBar {
@@ -22,6 +24,7 @@ impl CommandBar {
             input: String::new(),
             cursor: 0,
             active: false,
+            prompt: None,
         }
     }
 
@@ -29,12 +32,27 @@ impl CommandBar {
         self.active = true;
         self.input.clear();
         self.cursor = 0;
+        self.prompt = None;
+    }
+
+    /// Activate with a custom prompt prefix and pre-filled input text.
+    pub fn activate_with_prompt(&mut self, prompt: String, prefill: String) {
+        self.active = true;
+        self.cursor = prefill.len();
+        self.input = prefill;
+        self.prompt = Some(prompt);
     }
 
     pub fn deactivate(&mut self) {
         self.active = false;
         self.input.clear();
         self.cursor = 0;
+        self.prompt = None;
+    }
+
+    /// Whether the command bar is in prompt mode (vs command mode).
+    pub fn is_prompt_mode(&self) -> bool {
+        self.prompt.is_some()
     }
 
     pub fn is_active(&self) -> bool {
@@ -101,7 +119,7 @@ impl Component for CommandBar {
             return;
         }
 
-        let prompt = "/";
+        let prompt = self.prompt.as_deref().unwrap_or("/");
         let display = format!("{}{}", prompt, self.input);
         let paragraph = Paragraph::new(display).style(theme.command_text);
         frame.render_widget(paragraph, area);
@@ -132,5 +150,39 @@ mod tests {
         assert!(bar.is_active());
         bar.deactivate();
         assert!(!bar.is_active());
+    }
+
+    #[test]
+    fn test_prompt_mode() {
+        let mut bar = CommandBar::new();
+        assert!(!bar.is_prompt_mode());
+
+        bar.activate_with_prompt("Save as: ".to_string(), "file.csv".to_string());
+        assert!(bar.is_active());
+        assert!(bar.is_prompt_mode());
+        assert_eq!(bar.input_text(), "file.csv");
+        assert_eq!(bar.cursor, 8);
+    }
+
+    #[test]
+    fn test_prompt_mode_cleared_on_deactivate() {
+        let mut bar = CommandBar::new();
+        bar.activate_with_prompt("Save as: ".to_string(), "file.csv".to_string());
+        assert!(bar.is_prompt_mode());
+
+        bar.deactivate();
+        assert!(!bar.is_prompt_mode());
+        assert!(!bar.is_active());
+    }
+
+    #[test]
+    fn test_activate_clears_prompt() {
+        let mut bar = CommandBar::new();
+        bar.activate_with_prompt("Save as: ".to_string(), "file.csv".to_string());
+        assert!(bar.is_prompt_mode());
+
+        bar.activate();
+        assert!(!bar.is_prompt_mode());
+        assert_eq!(bar.input_text(), "");
     }
 }
