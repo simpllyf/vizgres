@@ -3,6 +3,7 @@
 //! Orchestrates rendering of all panels using the layout module.
 
 use crate::app::{App, PanelFocus, StatusLevel};
+use crate::keymap::KeyAction;
 use crate::ui::Component;
 use crate::ui::layout::calculate_layout;
 use crate::ui::theme::Theme;
@@ -189,12 +190,20 @@ fn render_inspector_popup(frame: &mut Frame, theme: &Theme, app: &App) {
 
     // Clear the popup area
     frame.render_widget(Clear, popup_area);
+
+    let dismiss_key = key_hint(&app.keymap, Some(PanelFocus::Inspector), KeyAction::Dismiss);
+    let copy_key = key_hint(
+        &app.keymap,
+        Some(PanelFocus::Inspector),
+        KeyAction::CopyContent,
+    );
+    let title = format!(
+        " Inspector \u{2014} {} to close, {} to copy ",
+        dismiss_key, copy_key
+    );
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(Span::styled(
-            " Inspector \u{2014} Esc to close, y to copy ",
-            theme.popup_title,
-        ))
+        .title(Span::styled(title, theme.popup_title))
         .border_style(theme.popup_border);
 
     let inner = block.inner(popup_area);
@@ -234,17 +243,17 @@ fn render_help_popup(frame: &mut Frame, theme: &Theme, app: &App) {
 
     // Clear and draw border
     frame.render_widget(Clear, popup_area);
+
+    let dismiss_key = key_hint(&app.keymap, Some(PanelFocus::Help), KeyAction::Dismiss);
+    let title = format!(" Help \u{2014} {} to close ", dismiss_key);
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(Span::styled(
-            " Help \u{2014} Esc to close ",
-            theme.popup_title,
-        ))
+        .title(Span::styled(title, theme.popup_title))
         .border_style(theme.popup_border);
 
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
-    app.help.render(frame, inner, theme);
+    app.help.render(frame, inner, theme, &app.keymap);
 }
 
 /// Render the connection dialog as a centered floating popup with shadow.
@@ -340,10 +349,33 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             Rect::new(area.x, area.y, max_left_width, 1),
         );
     } else {
+        let help_key = key_hint(&app.keymap, None, KeyAction::ShowHelp);
+        let cmd_key = key_hint(&app.keymap, None, KeyAction::OpenCommandBar);
+        let run_key = key_hint(
+            &app.keymap,
+            Some(PanelFocus::QueryEditor),
+            KeyAction::ExecuteQuery,
+        );
+        let quit_key = key_hint(&app.keymap, None, KeyAction::Quit);
+        let hint = format!(
+            "{}=help | {}=commands | {}=run | {}=quit",
+            help_key, cmd_key, run_key, quit_key
+        );
         frame.render_widget(
-            Paragraph::new("F1=help | Ctrl+P=commands | F5=run | Ctrl+Q=quit")
-                .style(theme.status_help_hint),
+            Paragraph::new(hint).style(theme.status_help_hint),
             Rect::new(area.x, area.y, max_left_width, 1),
         );
     }
+}
+
+/// Get the first key bound to an action, formatted for display hints
+fn key_hint(
+    keymap: &crate::keymap::KeyMap,
+    focus: Option<PanelFocus>,
+    action: KeyAction,
+) -> String {
+    let keys = keymap.keys_for_action(focus, action);
+    keys.into_iter()
+        .next()
+        .unwrap_or_else(|| "(unset)".to_string())
 }

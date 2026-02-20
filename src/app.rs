@@ -5,6 +5,7 @@
 use crate::commands::{Command, parse_command};
 use crate::completer::{self, Completer};
 use crate::config::ConnectionConfig;
+use crate::config::settings::Settings;
 use crate::db::QueryResults;
 use crate::db::schema::SchemaTree;
 use crate::error::Result;
@@ -22,9 +23,6 @@ use crate::ui::results::ResultsViewer;
 use crate::ui::theme::Theme;
 use crate::ui::tree::TreeBrowser;
 use crossterm::event::KeyEvent;
-
-/// Maximum number of tabs allowed
-pub const MAX_TABS: usize = 5;
 
 /// A single query tab containing its own editor, results, and completer
 pub struct Tab {
@@ -80,8 +78,11 @@ pub struct App {
     /// Query history for Ctrl+Up/Down navigation
     history: QueryHistory,
 
+    /// Maximum number of tabs allowed
+    max_tabs: usize,
+
     /// Data-driven keybinding configuration
-    keymap: KeyMap,
+    pub keymap: KeyMap,
 
     /// UI theme (created once, reused every frame)
     pub theme: Theme,
@@ -160,15 +161,21 @@ pub enum Action {
 
 impl App {
     pub fn new() -> Self {
+        Self::new_with_settings(&Settings::default())
+    }
+
+    /// Create an app with custom settings (preview rows, max tabs, keybindings, etc.)
+    pub fn new_with_settings(settings: &Settings) -> Self {
         let (clipboard, clipboard_error) = match arboard::Clipboard::new() {
             Ok(c) => (Some(c), None),
             Err(e) => (None, Some(e.to_string())),
         };
-        Self {
+        let (keymap, warnings) = KeyMap::from_config(&settings.keybindings);
+        let mut app = Self {
             connection_name: None,
             focus: PanelFocus::QueryEditor,
             previous_focus: PanelFocus::QueryEditor,
-            tree_browser: TreeBrowser::new(),
+            tree_browser: TreeBrowser::with_preview_rows(settings.settings.preview_rows),
             command_bar: CommandBar::new(),
             inspector: Inspector::new(),
             help: HelpOverlay::new(),
@@ -177,19 +184,27 @@ impl App {
             active_tab: 0,
             next_tab_id: 1,
             pending_export: None,
-            history: QueryHistory::load(500),
-            keymap: KeyMap::default(),
+            history: QueryHistory::load(settings.settings.history_size),
+            max_tabs: settings.settings.max_tabs,
+            keymap,
             theme: Theme::default(),
             status_message: None,
             clipboard,
             clipboard_error,
             running: true,
+        };
+        if !warnings.is_empty() {
+            app.set_status(
+                format!("Config: {}", warnings.join("; ")),
+                StatusLevel::Warning,
+            );
         }
+        app
     }
 
     /// Create an app pre-loaded with a connection name and schema
-    pub fn with_connection(name: String, schema: SchemaTree) -> Self {
-        let mut app = Self::new();
+    pub fn with_connection(name: String, schema: SchemaTree, settings: &Settings) -> Self {
+        let mut app = Self::new_with_settings(settings);
         app.connection_name = Some(name);
         app.tree_browser.set_schema(schema);
         app
@@ -355,7 +370,7 @@ impl App {
             KeyAction::NewTab => {
                 if !self.new_tab() {
                     self.set_status(
-                        format!("Maximum {} tabs open", MAX_TABS),
+                        format!("Maximum {} tabs open", self.max_tabs),
                         StatusLevel::Warning,
                     );
                 }
@@ -735,7 +750,7 @@ impl App {
 
     /// Open a new tab and switch to it. Returns false if at capacity.
     fn new_tab(&mut self) -> bool {
-        if self.tabs.len() >= MAX_TABS {
+        if self.tabs.len() >= self.max_tabs {
             return false;
         }
         let id = self.next_tab_id;
@@ -970,7 +985,7 @@ mod tests {
                 functions: vec![],
             }],
         };
-        let app = App::with_connection("test-db".to_string(), schema);
+        let app = App::with_connection("test-db".to_string(), schema, &Settings::default());
         assert_eq!(app.connection_name.as_deref(), Some("test-db"));
     }
 
@@ -1214,7 +1229,7 @@ mod tests {
                 functions: vec![],
             }],
         };
-        let mut app = App::with_connection("test".to_string(), schema);
+        let mut app = App::with_connection("test".to_string(), schema, &Settings::default());
         app.focus = PanelFocus::TreeBrowser;
 
         // Navigate to the "users" table node via public API
@@ -1270,7 +1285,7 @@ mod tests {
                 },
             ],
         };
-        let mut app = App::with_connection("test".to_string(), schema);
+        let mut app = App::with_connection("test".to_string(), schema, &Settings::default());
         app.focus = PanelFocus::TreeBrowser;
 
         // Navigate to the collapsed "other" schema node
@@ -1468,13 +1483,24 @@ mod tests {
     #[test]
     fn test_max_tabs() {
         let mut app = App::new();
-        // Already have 1, add 4 more
+        // Default max_tabs is 5, already have 1, add 4 more
         for _ in 0..4 {
             assert!(app.new_tab());
         }
-        assert_eq!(app.tabs.len(), MAX_TABS);
+        assert_eq!(app.tabs.len(), 5);
         assert!(!app.new_tab());
-        assert_eq!(app.tabs.len(), MAX_TABS);
+        assert_eq!(app.tabs.len(), 5);
+    }
+
+    #[test]
+    fn test_configurable_max_tabs() {
+        let mut settings = Settings::default();
+        settings.settings.max_tabs = 3;
+        let mut app = App::new_with_settings(&settings);
+        assert!(app.new_tab());
+        assert!(app.new_tab());
+        assert!(!app.new_tab()); // 3rd tab fails (already have 3)
+        assert_eq!(app.tabs.len(), 3);
     }
 
     #[test]
