@@ -9,6 +9,22 @@ use crate::ui::highlight;
 
 const MAX_CANDIDATES: usize = 5;
 
+/// SQL clause context — controls which schema objects to suggest.
+pub enum SqlContext<'a> {
+    /// No schema objects, keywords only (default/unknown position)
+    Keyword,
+    /// Tables and views (after FROM, JOIN, INTO, UPDATE, TABLE, TRUNCATE)
+    Table,
+    /// Columns and functions (after SELECT, WHERE, AND, OR, ON, SET, HAVING, etc.)
+    ColumnOrFunction,
+    /// Columns only (after ORDER BY, GROUP BY)
+    Column,
+    /// Columns of a specific table (after "tablename.")
+    TableColumns(&'a str),
+    /// Tables in a specific schema (after "schema.")
+    SchemaTables(&'a str),
+}
+
 /// Completion engine — tracks filtered candidates and cycling index.
 pub struct Completer {
     candidates: Vec<String>,
@@ -25,45 +41,112 @@ impl Completer {
         }
     }
 
-    /// Rebuild candidates from `prefix` (case-insensitive prefix match).
+    /// Rebuild candidates from `prefix` filtered by SQL context.
     ///
-    /// Sources: schema objects first (tables, views, columns, functions),
-    /// then SQL keywords. Returns the ghost-text suffix for the first match
-    /// or `None` if no matches.
-    pub fn recompute(&mut self, prefix: &str, schema: Option<&SchemaTree>) -> Option<String> {
+    /// Sources: schema objects first (filtered by `context`),
+    /// then SQL keywords as fallback. Returns the ghost-text suffix for the
+    /// first match or `None` if no matches.
+    pub fn recompute(
+        &mut self,
+        prefix: &str,
+        context: SqlContext<'_>,
+        schema: Option<&SchemaTree>,
+    ) -> Option<String> {
         self.candidates.clear();
         self.index = 0;
         self.prefix = prefix.to_string();
 
-        if prefix.is_empty() {
+        // Allow empty prefix for dot-qualified contexts (e.g., "users.")
+        let allow_empty = matches!(
+            context,
+            SqlContext::TableColumns(_) | SqlContext::SchemaTables(_)
+        );
+        if prefix.is_empty() && !allow_empty {
             return None;
         }
 
         let prefix_lower = prefix.to_ascii_lowercase();
 
-        // Schema objects first
+        // Schema objects — filtered by context
         if let Some(tree) = schema {
-            for s in &tree.schemas {
-                for table in &s.tables {
-                    self.try_push(&table.name, &prefix_lower, prefix);
-                    for col in &table.columns {
-                        self.try_push(&col.name, &prefix_lower, prefix);
+            match context {
+                SqlContext::Keyword => { /* skip schema objects entirely */ }
+
+                SqlContext::Table => {
+                    for s in &tree.schemas {
+                        for table in &s.tables {
+                            self.try_push(&table.name, &prefix_lower, prefix);
+                        }
+                        for view in &s.views {
+                            self.try_push(&view.name, &prefix_lower, prefix);
+                        }
                     }
                 }
-                for view in &s.views {
-                    self.try_push(&view.name, &prefix_lower, prefix);
-                    for col in &view.columns {
-                        self.try_push(&col.name, &prefix_lower, prefix);
+
+                SqlContext::ColumnOrFunction => {
+                    for s in &tree.schemas {
+                        for table in &s.tables {
+                            for col in &table.columns {
+                                self.try_push(&col.name, &prefix_lower, prefix);
+                            }
+                        }
+                        for view in &s.views {
+                            for col in &view.columns {
+                                self.try_push(&col.name, &prefix_lower, prefix);
+                            }
+                        }
+                        for func in &s.functions {
+                            self.try_push(&func.name, &prefix_lower, prefix);
+                        }
                     }
                 }
-                for func in &s.functions {
-                    self.try_push(&func.name, &prefix_lower, prefix);
+
+                SqlContext::Column => {
+                    for s in &tree.schemas {
+                        for table in &s.tables {
+                            for col in &table.columns {
+                                self.try_push(&col.name, &prefix_lower, prefix);
+                            }
+                        }
+                        for view in &s.views {
+                            for col in &view.columns {
+                                self.try_push(&col.name, &prefix_lower, prefix);
+                            }
+                        }
+                    }
+                }
+
+                SqlContext::TableColumns(table_name) => {
+                    let table_lower = table_name.to_ascii_lowercase();
+                    for s in &tree.schemas {
+                        for table in s.tables.iter().chain(s.views.iter()) {
+                            if table.name.to_ascii_lowercase() == table_lower {
+                                for col in &table.columns {
+                                    self.try_push_dot(&col.name, &prefix_lower);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                SqlContext::SchemaTables(schema_name) => {
+                    let schema_lower = schema_name.to_ascii_lowercase();
+                    for s in &tree.schemas {
+                        if s.name.to_ascii_lowercase() == schema_lower {
+                            for table in &s.tables {
+                                self.try_push_dot(&table.name, &prefix_lower);
+                            }
+                            for view in &s.views {
+                                self.try_push_dot(&view.name, &prefix_lower);
+                            }
+                        }
+                    }
                 }
             }
         }
 
-        // SQL keywords
-        if self.candidates.len() < MAX_CANDIDATES {
+        // SQL keywords (always available as fallback)
+        if !prefix.is_empty() && self.candidates.len() < MAX_CANDIDATES {
             let keywords = highlight::sql_keywords();
             let mut kw_matches: Vec<&str> = keywords
                 .iter()
@@ -77,7 +160,6 @@ impl Completer {
                 if self.candidates.len() >= MAX_CANDIDATES {
                     break;
                 }
-                // Avoid duplicating schema objects that happen to match
                 if !self.candidates.iter().any(|c| c.eq_ignore_ascii_case(kw)) {
                     self.candidates.push(kw.to_string());
                 }
@@ -134,11 +216,23 @@ impl Completer {
         if self.candidates.len() >= MAX_CANDIDATES {
             return;
         }
-        if name.len() > prefix.len() && name.to_ascii_lowercase().starts_with(prefix_lower) {
-            // Avoid duplicates
-            if !self.candidates.iter().any(|c| c == name) {
-                self.candidates.push(name.to_string());
-            }
+        if name.len() > prefix.len()
+            && name.to_ascii_lowercase().starts_with(prefix_lower)
+            && !self.candidates.iter().any(|c| c == name)
+        {
+            self.candidates.push(name.to_string());
+        }
+    }
+
+    /// Push candidate for dot-qualified completion (allows empty prefix).
+    fn try_push_dot(&mut self, name: &str, prefix_lower: &str) {
+        if self.candidates.len() >= MAX_CANDIDATES {
+            return;
+        }
+        if (prefix_lower.is_empty() || name.to_ascii_lowercase().starts_with(prefix_lower))
+            && !self.candidates.iter().any(|c| c == name)
+        {
+            self.candidates.push(name.to_string());
         }
     }
 }
@@ -167,6 +261,89 @@ pub fn word_before_cursor(line: &str, col: usize) -> &str {
         start -= 1;
     }
     &line[start..col]
+}
+
+/// Check for a dot-qualifier before the current prefix.
+///
+/// If the character at `prefix_start - 1` is `.`, returns the word before the
+/// dot (e.g., for `"users.na"` with prefix_start=6, returns `Some("users")`).
+pub fn dot_qualifier(line: &str, prefix_start: usize) -> Option<&str> {
+    if prefix_start == 0 || !line.is_char_boundary(prefix_start) {
+        return None;
+    }
+    if line.as_bytes()[prefix_start - 1] != b'.' {
+        return None;
+    }
+    let dot_pos = prefix_start - 1;
+    if dot_pos == 0 {
+        return None;
+    }
+    // Scan backward from the dot to find the qualifier word
+    let word = word_before_cursor(line, dot_pos);
+    if word.is_empty() { None } else { Some(word) }
+}
+
+/// Detect the SQL context by scanning backward through tokens before the cursor.
+///
+/// Uses the most recent SQL clause keyword to determine what kind of completion
+/// is appropriate. With a `dot_qualifier`, checks against schema/table names instead.
+pub fn detect_context<'a>(
+    text_before_prefix: &str,
+    dot_qual: Option<&'a str>,
+    schema: Option<&SchemaTree>,
+) -> SqlContext<'a> {
+    // Dot-qualified: check if qualifier is a schema name or table name
+    if let Some(qualifier) = dot_qual {
+        if let Some(tree) = schema {
+            let q_lower = qualifier.to_ascii_lowercase();
+            // Check schemas first
+            for s in &tree.schemas {
+                if s.name.to_ascii_lowercase() == q_lower {
+                    return SqlContext::SchemaTables(qualifier);
+                }
+            }
+            // Then tables/views
+            for s in &tree.schemas {
+                for table in s.tables.iter().chain(s.views.iter()) {
+                    if table.name.to_ascii_lowercase() == q_lower {
+                        return SqlContext::TableColumns(qualifier);
+                    }
+                }
+            }
+        }
+        return SqlContext::Keyword;
+    }
+
+    // Tokenize by splitting on whitespace and punctuation, scan backward
+    let tokens: Vec<&str> = text_before_prefix
+        .split(|c: char| c.is_ascii_whitespace() || "(),;=<>!+-*/'\"".contains(c))
+        .filter(|t| !t.is_empty())
+        .collect();
+
+    for i in (0..tokens.len()).rev() {
+        let upper = tokens[i].to_ascii_uppercase();
+        match upper.as_str() {
+            "FROM" | "JOIN" | "INTO" | "UPDATE" | "TABLE" | "TRUNCATE" => {
+                return SqlContext::Table;
+            }
+            "SELECT" | "WHERE" | "AND" | "OR" | "ON" | "SET" | "HAVING" | "CASE" | "WHEN"
+            | "THEN" | "ELSE" | "RETURNING" => {
+                return SqlContext::ColumnOrFunction;
+            }
+            "BY" => {
+                // Look for ORDER/GROUP before BY
+                if i > 0 {
+                    let prev = tokens[i - 1].to_ascii_uppercase();
+                    if prev == "ORDER" || prev == "GROUP" {
+                        return SqlContext::Column;
+                    }
+                }
+            }
+            _ => continue,
+        }
+    }
+
+    SqlContext::Keyword
 }
 
 #[cfg(test)]
@@ -217,12 +394,186 @@ mod tests {
         assert_eq!(word_before_cursor("abc", 10), "abc");
     }
 
+    // ── dot_qualifier ───────────────────────────────────────
+
+    #[test]
+    fn dot_qualifier_present() {
+        // "users.na" with prefix "na" starting at 6
+        assert_eq!(dot_qualifier("users.na", 6), Some("users"));
+    }
+
+    #[test]
+    fn dot_qualifier_empty_prefix() {
+        // "users." with prefix "" starting at 6
+        assert_eq!(dot_qualifier("users.", 6), Some("users"));
+    }
+
+    #[test]
+    fn dot_qualifier_no_dot() {
+        assert_eq!(dot_qualifier("SELECT us", 7), None);
+    }
+
+    #[test]
+    fn dot_qualifier_at_line_start() {
+        assert_eq!(dot_qualifier(".foo", 1), None);
+    }
+
+    #[test]
+    fn dot_qualifier_nothing_before_dot() {
+        // Space before dot: "( .foo"
+        assert_eq!(dot_qualifier(" .foo", 2), None);
+    }
+
+    // ── detect_context ──────────────────────────────────────
+
+    #[test]
+    fn context_after_from() {
+        assert!(matches!(
+            detect_context("SELECT * FROM ", None, None),
+            SqlContext::Table
+        ));
+    }
+
+    #[test]
+    fn context_after_select() {
+        assert!(matches!(
+            detect_context("SELECT ", None, None),
+            SqlContext::ColumnOrFunction
+        ));
+    }
+
+    #[test]
+    fn context_after_join() {
+        assert!(matches!(
+            detect_context("FROM users JOIN ", None, None),
+            SqlContext::Table
+        ));
+    }
+
+    #[test]
+    fn context_after_where() {
+        assert!(matches!(
+            detect_context("SELECT * FROM users WHERE ", None, None),
+            SqlContext::ColumnOrFunction
+        ));
+    }
+
+    #[test]
+    fn context_order_by() {
+        assert!(matches!(
+            detect_context("SELECT * FROM users ORDER BY ", None, None),
+            SqlContext::Column
+        ));
+    }
+
+    #[test]
+    fn context_group_by() {
+        assert!(matches!(
+            detect_context("SELECT count(*) FROM users GROUP BY ", None, None),
+            SqlContext::Column
+        ));
+    }
+
+    #[test]
+    fn context_order_by_after_columns() {
+        // ORDER and BY are always adjacent tokens; identifiers after BY don't break detection
+        assert!(matches!(
+            detect_context("SELECT * FROM t ORDER BY col1, ", None, None),
+            SqlContext::Column
+        ));
+    }
+
+    #[test]
+    fn context_comma_list_select() {
+        // "SELECT col1, col2, " — scanner skips identifiers, finds SELECT
+        assert!(matches!(
+            detect_context("SELECT col1, col2, ", None, None),
+            SqlContext::ColumnOrFunction
+        ));
+    }
+
+    #[test]
+    fn context_multiline() {
+        assert!(matches!(
+            detect_context("SELECT *\nFROM ", None, None),
+            SqlContext::Table
+        ));
+    }
+
+    #[test]
+    fn context_empty_text() {
+        assert!(matches!(
+            detect_context("", None, None),
+            SqlContext::Keyword
+        ));
+    }
+
+    #[test]
+    fn context_unknown_defaults_to_keyword() {
+        assert!(matches!(
+            detect_context("FOOBAR ", None, None),
+            SqlContext::Keyword
+        ));
+    }
+
+    #[test]
+    fn context_dot_schema() {
+        let schema = sample_schema();
+        assert!(matches!(
+            detect_context("", Some("public"), Some(&schema)),
+            SqlContext::SchemaTables("public")
+        ));
+    }
+
+    #[test]
+    fn context_dot_table() {
+        let schema = sample_schema();
+        assert!(matches!(
+            detect_context("", Some("users"), Some(&schema)),
+            SqlContext::TableColumns("users")
+        ));
+    }
+
+    #[test]
+    fn context_dot_unknown() {
+        let schema = sample_schema();
+        assert!(matches!(
+            detect_context("", Some("nonexistent"), Some(&schema)),
+            SqlContext::Keyword
+        ));
+    }
+
+    #[test]
+    fn context_subquery_from() {
+        // Subquery: inner FROM should be detected
+        assert!(matches!(
+            detect_context("WHERE id IN (SELECT name FROM ", None, None),
+            SqlContext::Table
+        ));
+    }
+
+    #[test]
+    fn context_after_and() {
+        assert!(matches!(
+            detect_context("WHERE id = 1 AND ", None, None),
+            SqlContext::ColumnOrFunction
+        ));
+    }
+
+    #[test]
+    fn context_case_insensitive() {
+        assert!(matches!(
+            detect_context("select * from ", None, None),
+            SqlContext::Table
+        ));
+    }
+
     // ── Completer basics ────────────────────────────────────
 
     #[test]
     fn recompute_keywords() {
         let mut c = Completer::new();
-        let result = c.recompute("SEL", None);
+        let result = c.recompute("SEL", SqlContext::Keyword, None);
         assert!(result.is_some());
         assert_eq!(result.unwrap(), "ECT");
     }
@@ -230,19 +581,15 @@ mod tests {
     #[test]
     fn recompute_case_insensitive() {
         let mut c = Completer::new();
-        let result = c.recompute("sel", None);
+        let result = c.recompute("sel", SqlContext::Keyword, None);
         assert!(result.is_some());
-        // Should match the keyword "SELECT" and return the suffix preserving its casing
         assert_eq!(result.unwrap(), "ECT");
     }
 
     #[test]
     fn exact_match_excluded() {
         let mut c = Completer::new();
-        // "SELECT" exactly should not suggest itself
-        let result = c.recompute("SELECT", None);
-        // Should have other matches starting with SELECT but not SELECT itself
-        // (or none if no longer keywords start with SELECT)
+        let result = c.recompute("SELECT", SqlContext::Keyword, None);
         if let Some(suffix) = result {
             assert!(!suffix.is_empty());
         }
@@ -251,17 +598,17 @@ mod tests {
     #[test]
     fn empty_prefix_returns_none() {
         let mut c = Completer::new();
-        assert!(c.recompute("", None).is_none());
+        assert!(c.recompute("", SqlContext::Keyword, None).is_none());
         assert!(!c.is_active());
     }
 
     #[test]
     fn no_match_returns_none() {
         let mut c = Completer::new();
-        assert!(c.recompute("zzzzzzz", None).is_none());
+        assert!(c.recompute("zzzzzzz", SqlContext::Keyword, None).is_none());
     }
 
-    // ── Schema objects rank before keywords ──────────────────
+    // ── Schema objects with context filtering ────────────────
 
     fn sample_schema() -> SchemaTree {
         SchemaTree {
@@ -288,31 +635,87 @@ mod tests {
     }
 
     #[test]
-    fn schema_objects_before_keywords() {
+    fn table_context_only_tables() {
         let mut c = Completer::new();
         let schema = sample_schema();
-        let result = c.recompute("us", Some(&schema));
+        let result = c.recompute("us", SqlContext::Table, Some(&schema));
         assert!(result.is_some());
-        // First candidate should be the table "users", not keyword "USING"
+        assert_eq!(result.unwrap(), "ers"); // "users" table
+        // Should NOT include "username" column
+        assert!(!c.candidates.iter().any(|c| c == "username"));
+    }
+
+    #[test]
+    fn column_or_function_context() {
+        let mut c = Completer::new();
+        let schema = sample_schema();
+        let result = c.recompute("us", SqlContext::ColumnOrFunction, Some(&schema));
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), "ername"); // "username" column
+        // Should NOT include "users" table
+        assert!(!c.candidates.iter().any(|c| c == "users"));
+    }
+
+    #[test]
+    fn column_context_no_functions() {
+        let mut c = Completer::new();
+        let schema = sample_schema();
+        c.recompute("update", SqlContext::Column, Some(&schema));
+        // "update_stats" is a function — Column context must not include it
+        assert!(!c.candidates.iter().any(|c| c == "update_stats"));
+    }
+
+    #[test]
+    fn keyword_context_skips_schema() {
+        let mut c = Completer::new();
+        let schema = sample_schema();
+        let result = c.recompute("us", SqlContext::Keyword, Some(&schema));
+        // Should NOT include "users" (table) or "username" (column)
+        assert!(!c.candidates.iter().any(|c| c == "users"));
+        assert!(!c.candidates.iter().any(|c| c == "username"));
+        // But should still match keywords like USING
+        if let Some(suffix) = result {
+            assert!(!suffix.is_empty());
+        }
+    }
+
+    #[test]
+    fn dot_table_columns() {
+        let mut c = Completer::new();
+        let schema = sample_schema();
+        // "users." → empty prefix, TableColumns context
+        let result = c.recompute("", SqlContext::TableColumns("users"), Some(&schema));
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), "username");
+        assert!(c.candidates.iter().any(|c| c == "username"));
+    }
+
+    #[test]
+    fn dot_table_columns_with_prefix() {
+        let mut c = Completer::new();
+        let schema = sample_schema();
+        let result = c.recompute("user", SqlContext::TableColumns("users"), Some(&schema));
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), "name");
+    }
+
+    #[test]
+    fn dot_schema_tables() {
+        let mut c = Completer::new();
+        let schema = sample_schema();
+        // "public." → empty prefix, SchemaTables context
+        let result = c.recompute("", SqlContext::SchemaTables("public"), Some(&schema));
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), "users");
+    }
+
+    #[test]
+    fn dot_schema_tables_with_prefix() {
+        let mut c = Completer::new();
+        let schema = sample_schema();
+        let result = c.recompute("us", SqlContext::SchemaTables("public"), Some(&schema));
+        assert!(result.is_some());
         assert_eq!(result.unwrap(), "ers");
-    }
-
-    #[test]
-    fn schema_function_match() {
-        let mut c = Completer::new();
-        let schema = sample_schema();
-        let result = c.recompute("update", Some(&schema));
-        assert!(result.is_some());
-        assert_eq!(result.unwrap(), "_stats");
-    }
-
-    #[test]
-    fn schema_column_match() {
-        let mut c = Completer::new();
-        let schema = sample_schema();
-        let result = c.recompute("usern", Some(&schema));
-        assert!(result.is_some());
-        assert_eq!(result.unwrap(), "ame");
     }
 
     // ── Cycling ─────────────────────────────────────────────
@@ -320,10 +723,9 @@ mod tests {
     #[test]
     fn cycling_wraps_around() {
         let mut c = Completer::new();
-        c.recompute("SEL", None);
+        c.recompute("SEL", SqlContext::Keyword, None);
         assert!(c.is_active());
         let first = c.suffix().unwrap();
-        // Cycle through all candidates and come back to the first
         for _ in 0..c.candidates.len() {
             c.next();
         }
@@ -333,9 +735,8 @@ mod tests {
     #[test]
     fn prev_wraps_from_zero() {
         let mut c = Completer::new();
-        c.recompute("SEL", None);
+        c.recompute("SEL", SqlContext::Keyword, None);
         assert!(c.is_active());
-        // prev from index 0 wraps to last
         let prev_result = c.prev();
         assert!(prev_result.is_some());
         assert_eq!(c.index, c.candidates.len() - 1);
@@ -358,8 +759,7 @@ mod tests {
     #[test]
     fn max_five_candidates() {
         let mut c = Completer::new();
-        // "A" should match many keywords — ensure capped at 5
-        c.recompute("A", None);
+        c.recompute("A", SqlContext::Keyword, None);
         assert!(c.candidates.len() <= MAX_CANDIDATES);
     }
 
@@ -368,7 +768,7 @@ mod tests {
     #[test]
     fn clear_resets_state() {
         let mut c = Completer::new();
-        c.recompute("SEL", None);
+        c.recompute("SEL", SqlContext::Keyword, None);
         assert!(c.is_active());
         c.clear();
         assert!(!c.is_active());
