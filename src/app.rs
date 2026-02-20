@@ -4,6 +4,7 @@
 
 use crate::commands::{Command, parse_command};
 use crate::completer::{self, Completer};
+use crate::config::ConnectionConfig;
 use crate::db::QueryResults;
 use crate::db::schema::SchemaTree;
 use crate::error::Result;
@@ -13,6 +14,7 @@ use crate::keymap::{KeyAction, KeyMap};
 use crate::ui::Component;
 use crate::ui::ComponentAction;
 use crate::ui::command_bar::CommandBar;
+use crate::ui::connection_dialog::{ConnectionDialog, DialogAction};
 use crate::ui::editor::QueryEditor;
 use crate::ui::help::HelpOverlay;
 use crate::ui::inspector::Inspector;
@@ -63,6 +65,7 @@ pub struct App {
     pub command_bar: CommandBar,
     pub inspector: Inspector,
     pub help: HelpOverlay,
+    pub connection_dialog: ConnectionDialog,
 
     /// Query tabs (each has its own editor + results + completer)
     pub tabs: Vec<Tab>,
@@ -105,6 +108,7 @@ pub enum PanelFocus {
     CommandBar,
     Inspector,
     Help,
+    ConnectionDialog,
 }
 
 /// Status message with severity level
@@ -149,6 +153,7 @@ pub enum Action {
     ExecuteQuery { sql: String, tab_id: usize },
     CancelQuery,
     LoadSchema,
+    Connect(ConnectionConfig),
     Quit,
     None,
 }
@@ -167,6 +172,7 @@ impl App {
             command_bar: CommandBar::new(),
             inspector: Inspector::new(),
             help: HelpOverlay::new(),
+            connection_dialog: ConnectionDialog::new(),
             tabs: vec![Tab::new(0)],
             active_tab: 0,
             next_tab_id: 1,
@@ -262,6 +268,23 @@ impl App {
     fn handle_key(&mut self, key: KeyEvent) -> Action {
         self.status_message = None;
 
+        // Connection dialog intercepts all keys when visible
+        if self.focus == PanelFocus::ConnectionDialog {
+            return match self.connection_dialog.handle_key(key) {
+                DialogAction::Connect(config) => {
+                    self.connection_dialog.hide();
+                    self.focus = self.previous_focus;
+                    Action::Connect(config)
+                }
+                DialogAction::Dismissed => {
+                    self.connection_dialog.hide();
+                    self.focus = self.previous_focus;
+                    Action::None
+                }
+                DialogAction::Consumed => Action::None,
+            };
+        }
+
         // Try KeyMap first — global bindings, then panel-specific
         if let Some(key_action) = self.keymap.resolve(self.focus, key) {
             // Suppress certain global actions in modal panels to avoid
@@ -278,7 +301,8 @@ impl App {
                 | KeyAction::NextTab
                     if self.focus == PanelFocus::CommandBar
                         || self.focus == PanelFocus::Inspector
-                        || self.focus == PanelFocus::Help =>
+                        || self.focus == PanelFocus::Help
+                        || self.focus == PanelFocus::ConnectionDialog =>
                 {
                     return Action::None;
                 }
@@ -682,6 +706,10 @@ impl App {
                 Action::None
             }
             Command::Quit => Action::Quit,
+            Command::Connect => {
+                self.show_connection_dialog();
+                Action::None
+            }
         }
     }
 
@@ -825,6 +853,24 @@ impl App {
 
     pub fn set_status(&mut self, message: String, level: StatusLevel) {
         self.status_message = Some(StatusMessage { message, level });
+    }
+
+    /// Show the connection picker dialog
+    pub fn show_connection_dialog(&mut self) {
+        self.previous_focus = self.focus;
+        self.focus = PanelFocus::ConnectionDialog;
+        self.connection_dialog.show();
+    }
+
+    /// Apply a new connection (after successful connect + schema load)
+    pub fn apply_connection(&mut self, name: String, schema: crate::db::schema::SchemaTree) {
+        self.connection_name = Some(name);
+        self.tree_browser.set_schema(schema);
+        // Reset all tabs to fresh state
+        self.tabs = vec![Tab::new(0)];
+        self.active_tab = 0;
+        self.next_tab_id = 1;
+        self.focus = PanelFocus::QueryEditor;
     }
 
     fn start_export(&mut self, format: ExportFormat) {
@@ -1636,5 +1682,114 @@ mod tests {
 
         assert!(matches!(action, Action::ExecuteQuery { .. }));
         assert!(app.tabs[0].query_running);
+    }
+
+    // ── Connection dialog tests ─────────────────────────────────
+
+    #[test]
+    fn test_connection_dialog_opens_on_command() {
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+
+        // Open command bar, type /connect, submit
+        let action = app.execute_command(crate::commands::Command::Connect);
+        assert!(matches!(action, Action::None));
+        assert_eq!(app.focus, PanelFocus::ConnectionDialog);
+        assert!(app.connection_dialog.is_visible());
+    }
+
+    #[test]
+    fn test_connection_dialog_dismiss_restores_focus() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.focus = PanelFocus::ResultsViewer;
+        app.show_connection_dialog();
+
+        assert_eq!(app.focus, PanelFocus::ConnectionDialog);
+        assert_eq!(app.previous_focus, PanelFocus::ResultsViewer);
+
+        // Press Esc to dismiss
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        let action = app.handle_key(esc);
+        assert!(matches!(action, Action::None));
+        assert_eq!(app.focus, PanelFocus::ResultsViewer);
+        assert!(!app.connection_dialog.is_visible());
+    }
+
+    #[test]
+    fn test_connection_dialog_returns_connect_action() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.show_connection_dialog();
+
+        // Type a valid URL
+        for c in "postgres://user:pass@localhost/mydb".chars() {
+            let key = KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+            app.handle_key(key);
+        }
+
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        let action = app.handle_key(enter);
+
+        match action {
+            Action::Connect(config) => {
+                assert_eq!(config.host, "localhost");
+                assert_eq!(config.username, "user");
+            }
+            other => panic!(
+                "Expected Action::Connect, got {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+        // Dialog should be hidden after connect
+        assert!(!app.connection_dialog.is_visible());
+    }
+
+    #[test]
+    fn test_apply_connection_resets_state() {
+        use crate::db::schema::{Schema, SchemaTree, Table};
+
+        let mut app = App::new();
+        // Simulate having multiple tabs
+        app.new_tab();
+        app.new_tab();
+        assert_eq!(app.tabs.len(), 3);
+
+        let schema = SchemaTree {
+            schemas: vec![Schema {
+                name: "public".to_string(),
+                tables: vec![Table {
+                    name: "users".to_string(),
+                    columns: vec![],
+                }],
+                views: vec![],
+                indexes: vec![],
+                functions: vec![],
+            }],
+        };
+
+        app.apply_connection("new-db".to_string(), schema);
+
+        assert_eq!(app.connection_name.as_deref(), Some("new-db"));
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.active_tab, 0);
+        assert_eq!(app.focus, PanelFocus::QueryEditor);
+    }
+
+    #[test]
+    fn test_global_keys_suppressed_in_connection_dialog() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.show_connection_dialog();
+
+        // Tab should be consumed by dialog (cycling focus), not global CycleFocus
+        let tab = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
+        let action = app.handle_key(tab);
+        assert!(matches!(action, Action::None));
+        // Still in ConnectionDialog focus
+        assert_eq!(app.focus, PanelFocus::ConnectionDialog);
     }
 }

@@ -76,6 +76,10 @@ pub enum ConfigError {
     #[error("Failed to parse configuration: {0}")]
     ParseError(#[from] toml::de::Error),
 
+    /// Failed to serialize TOML
+    #[error("Failed to serialize configuration: {0}")]
+    SerializeError(#[from] toml::ser::Error),
+
     /// IO error when reading/writing config
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),

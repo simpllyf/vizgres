@@ -19,6 +19,9 @@ pub enum Command {
 
     /// Quit the application
     Quit,
+
+    /// Open connection picker dialog
+    Connect,
 }
 
 /// Parse a command string into a Command enum
@@ -40,6 +43,7 @@ pub fn parse_command(input: &str) -> CommandResult<Command> {
         "clear" | "cl" => Ok(Command::Clear),
         "help" | "h" | "?" => Ok(Command::Help),
         "quit" | "q" | "exit" => Ok(Command::Quit),
+        "connect" | "conn" => Ok(Command::Connect),
         unknown => Err(CommandError::Unknown(unknown.to_string())),
     }
 }
@@ -89,5 +93,11 @@ mod tests {
     fn test_parse_colon_prefix_still_works() {
         assert_eq!(parse_command(":quit").unwrap(), Command::Quit);
         assert_eq!(parse_command(":help").unwrap(), Command::Help);
+    }
+
+    #[test]
+    fn test_parse_connect() {
+        assert_eq!(parse_command("/connect").unwrap(), Command::Connect);
+        assert_eq!(parse_command("/conn").unwrap(), Command::Connect);
     }
 }

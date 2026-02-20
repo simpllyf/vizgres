@@ -80,6 +80,14 @@ pub struct Theme {
     pub tab_inactive: Style,
     pub tab_separator: Style,
 
+    // Connection dialog
+    pub dialog_label: Style,
+    pub dialog_input: Style,
+    pub dialog_input_focused: Style,
+    pub dialog_selected: Style,
+    pub dialog_hint: Style,
+    pub dialog_warning: Style,
+
     // Status bar
     pub status_success: Style,
     pub status_error: Style,
@@ -180,6 +188,19 @@ impl Default for Theme {
             command_input: Style::default().fg(Color::White),
             command_text: Style::default().fg(Color::White),
             command_autocomplete: Style::default().fg(Color::DarkGray),
+
+            // Connection dialog
+            dialog_label: Style::default().fg(Color::Cyan),
+            dialog_input: Style::default().fg(Color::White),
+            dialog_input_focused: Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+            dialog_selected: Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+            dialog_hint: Style::default().fg(Color::DarkGray),
+            dialog_warning: Style::default().fg(Color::Yellow),
 
             // Tab bar
             tab_active: Style::default()

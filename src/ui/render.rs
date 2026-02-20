@@ -74,6 +74,11 @@ pub fn render(frame: &mut Frame, app: &App) {
         render_help_popup(frame, theme, app);
     }
 
+    // Connection dialog (on top of everything)
+    if app.connection_dialog.is_visible() {
+        render_connection_dialog_popup(frame, theme, app);
+    }
+
     // Status bar
     render_status_bar(frame, layout.command_bar, app, theme);
 }
@@ -240,6 +245,50 @@ fn render_help_popup(frame: &mut Frame, theme: &Theme, app: &App) {
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
     app.help.render(frame, inner, theme);
+}
+
+/// Render the connection dialog as a centered floating popup with shadow.
+fn render_connection_dialog_popup(frame: &mut Frame, theme: &Theme, app: &App) {
+    let screen = frame.area();
+
+    let popup_w: u16 = 60.min(screen.width.saturating_sub(2));
+    let popup_h: u16 = 18.min(screen.height.saturating_sub(2));
+    let popup_x = (screen.width.saturating_sub(popup_w)) / 2;
+    let popup_y = (screen.height.saturating_sub(popup_h)) / 2;
+    let popup_area = Rect::new(popup_x, popup_y, popup_w, popup_h);
+
+    // Shadow (1 cell right and down)
+    let shadow_area = Rect::new(
+        (popup_x + 1).min(screen.width.saturating_sub(1)),
+        (popup_y + 1).min(screen.height.saturating_sub(1)),
+        popup_w.min(screen.width.saturating_sub(popup_x + 1)),
+        popup_h.min(screen.height.saturating_sub(popup_y + 1)),
+    );
+    let shadow_style = theme.shadow;
+    for y in shadow_area.y..shadow_area.y + shadow_area.height {
+        for x in shadow_area.x..shadow_area.x + shadow_area.width {
+            if x < screen.width && y < screen.height {
+                frame.render_widget(
+                    Paragraph::new(" ").style(shadow_style),
+                    Rect::new(x, y, 1, 1),
+                );
+            }
+        }
+    }
+
+    // Clear and draw border
+    frame.render_widget(Clear, popup_area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(Span::styled(
+            " Connect \u{2014} Enter to connect, Esc to cancel ",
+            theme.popup_title,
+        ))
+        .border_style(theme.popup_border);
+
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+    app.connection_dialog.render(frame, inner, theme);
 }
 
 /// Render the status bar with partitioned layout:
