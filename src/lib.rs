@@ -55,6 +55,7 @@ pub mod completer;
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod export;
 pub mod history;
 pub mod keymap;
 pub mod ui;

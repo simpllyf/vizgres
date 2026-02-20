@@ -14,7 +14,7 @@ pub struct HelpOverlay {
 }
 
 /// Total number of content lines in the help text
-const HELP_LINE_COUNT: usize = 49;
+const HELP_LINE_COUNT: usize = 51;
 
 impl HelpOverlay {
     pub fn new() -> Self {
@@ -101,6 +101,8 @@ impl HelpOverlay {
             help_line("  Enter", "Inspect cell", key, desc),
             help_line("  y", "Copy cell", key, desc),
             help_line("  Y", "Copy row", key, desc),
+            help_line("  Ctrl+S", "Export CSV", key, desc),
+            help_line("  Ctrl+J", "Export JSON", key, desc),
             help_line("  g / G", "Top / Bottom", key, desc),
             help_line("  Home / End", "First / Last column", key, desc),
             help_line("  PgUp / PgDn", "Page up / down", key, desc),

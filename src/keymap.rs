@@ -63,6 +63,8 @@ pub enum KeyAction {
     OpenInspector,
     CopyCell,
     CopyRow,
+    ExportCsv,
+    ExportJson,
 
     // Inspector-specific
     CopyContent,
@@ -282,6 +284,20 @@ impl Default for KeyMap {
                 modifiers: KeyModifiers::SHIFT,
             },
             KeyAction::CopyRow,
+        );
+        results.insert(
+            KeyBind {
+                code: KeyCode::Char('s'),
+                modifiers: KeyModifiers::CONTROL,
+            },
+            KeyAction::ExportCsv,
+        );
+        results.insert(
+            KeyBind {
+                code: KeyCode::Char('j'),
+                modifiers: KeyModifiers::CONTROL,
+            },
+            KeyAction::ExportJson,
         );
         results.insert(
             KeyBind {
@@ -828,6 +844,29 @@ mod tests {
         );
         // Should not resolve in other panels
         assert_eq!(km.resolve(PanelFocus::ResultsViewer, ctrl_alt_f), None);
+    }
+
+    #[test]
+    fn test_export_keybindings_resolve() {
+        let km = KeyMap::default();
+        let ctrl_s = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL);
+        let ctrl_j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL);
+
+        // Ctrl+S → ExportCsv in results only
+        assert_eq!(
+            km.resolve(PanelFocus::ResultsViewer, ctrl_s),
+            Some(KeyAction::ExportCsv)
+        );
+        assert_eq!(km.resolve(PanelFocus::QueryEditor, ctrl_s), None);
+        assert_eq!(km.resolve(PanelFocus::TreeBrowser, ctrl_s), None);
+
+        // Ctrl+J → ExportJson in results only
+        assert_eq!(
+            km.resolve(PanelFocus::ResultsViewer, ctrl_j),
+            Some(KeyAction::ExportJson)
+        );
+        assert_eq!(km.resolve(PanelFocus::QueryEditor, ctrl_j), None);
+        assert_eq!(km.resolve(PanelFocus::TreeBrowser, ctrl_j), None);
     }
 
     #[test]
