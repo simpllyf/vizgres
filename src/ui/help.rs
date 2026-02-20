@@ -14,7 +14,7 @@ pub struct HelpOverlay {
 }
 
 /// Total number of content lines in the help text
-const HELP_LINE_COUNT: usize = 51;
+const HELP_LINE_COUNT: usize = 52;
 
 impl HelpOverlay {
     pub fn new() -> Self {
@@ -124,6 +124,7 @@ impl HelpOverlay {
             blank.clone(),
             Line::from(Span::styled("Commands", section)),
             help_line("  /help", "Show this help", key, desc),
+            help_line("  /connect", "Connection picker", key, desc),
             help_line("  /refresh", "Reload schema", key, desc),
         ]
     }

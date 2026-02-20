@@ -3,12 +3,12 @@
 //! Manages database connection profiles stored in ~/.vizgres/connections.toml
 
 use crate::error::{ConfigError, ConfigResult};
-use percent_encoding::percent_decode_str;
+use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Database connection configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConnectionConfig {
     /// Connection profile name
     pub name: String,
@@ -26,8 +26,8 @@ pub struct ConnectionConfig {
     /// Username
     pub username: String,
 
-    /// Password
-    #[serde(skip_serializing)]
+    /// Password (stored in plaintext in config file)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
 
     /// SSL mode
@@ -45,7 +45,6 @@ pub enum SslMode {
     Require,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
 struct ConnectionsFile {
     #[serde(default)]
@@ -149,15 +148,53 @@ impl ConnectionConfig {
         }
     }
 
+    /// Build a postgres:// URL from this config.
+    ///
+    /// Percent-encodes username and password so special characters
+    /// (`@`, `:`, `/`, etc.) round-trip safely through `from_url()`.
+    pub fn to_url(&self) -> String {
+        let user = utf8_percent_encode(&self.username, NON_ALPHANUMERIC);
+        let host_port = if self.port == 5432 {
+            self.host.clone()
+        } else {
+            format!("{}:{}", self.host, self.port)
+        };
+        // Wrap IPv6 addresses in brackets
+        let host_port = if self.host.contains(':') {
+            if self.port == 5432 {
+                format!("[{}]", self.host)
+            } else {
+                format!("[{}]:{}", self.host, self.port)
+            }
+        } else {
+            host_port
+        };
+        let ssl_param = match self.ssl_mode {
+            SslMode::Prefer => String::new(),
+            SslMode::Disable => "?sslmode=disable".to_string(),
+            SslMode::Require => "?sslmode=require".to_string(),
+        };
+        if let Some(ref pw) = self.password {
+            let pass = utf8_percent_encode(pw, NON_ALPHANUMERIC);
+            format!(
+                "postgres://{}:{}@{}/{}{}",
+                user, pass, host_port, self.database, ssl_param
+            )
+        } else {
+            format!(
+                "postgres://{}@{}/{}{}",
+                user, host_port, self.database, ssl_param
+            )
+        }
+    }
+
     /// Get the config directory path (~/.vizgres/)
-    #[allow(dead_code)]
     pub fn config_dir() -> ConfigResult<PathBuf> {
         let home = dirs::home_dir().ok_or(ConfigError::NoHomeDir)?;
         Ok(home.join(".vizgres"))
     }
 
     /// Get the connections file path
-    #[allow(dead_code)]
     pub fn connections_file() -> ConfigResult<PathBuf> {
         Ok(Self::config_dir()?.join("connections.toml"))
     }
@@ -224,7 +261,6 @@ fn parse_sslmode_param(query: &str) -> ConfigResult<SslMode> {
 }
 
 /// Load all connection profiles from config file
-#[allow(dead_code)]
 pub fn load_connections() -> ConfigResult<Vec<ConnectionConfig>> {
     let path = ConnectionConfig::connections_file()?;
     if !path.exists() {
@@ -236,8 +272,21 @@ pub fn load_connections() -> ConfigResult<Vec<ConnectionConfig>> {
     Ok(file.connections)
 }
 
+/// Save connection profiles to config file
+pub fn save_connections(connections: &[ConnectionConfig]) -> ConfigResult<()> {
+    let file = ConnectionsFile {
+        connections: connections.to_vec(),
+    };
+    let content = toml::to_string_pretty(&file)?;
+    let path = ConnectionConfig::connections_file()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, content)?;
+    Ok(())
+}
+
 /// Find a connection by name
-#[allow(dead_code)]
 pub fn find_connection(name: &str) -> ConfigResult<ConnectionConfig> {
     let connections = load_connections()?;
     connections
@@ -460,5 +509,147 @@ mod tests {
     fn test_from_url_bad_scheme() {
         let result = ConnectionConfig::from_url("mysql://user:pass@localhost/mydb");
         assert!(result.is_err());
+    }
+
+    // ── to_url tests ──────────────────────────────────────────────
+
+    #[test]
+    fn test_to_url_roundtrip() {
+        let original = ConnectionConfig {
+            name: "test".to_string(),
+            host: "localhost".to_string(),
+            port: 5432,
+            database: "mydb".to_string(),
+            username: "user".to_string(),
+            password: Some("pass".to_string()),
+            ssl_mode: SslMode::Prefer,
+        };
+        let url = original.to_url();
+        let parsed = ConnectionConfig::from_url(&url).unwrap();
+        assert_eq!(parsed.host, original.host);
+        assert_eq!(parsed.port, original.port);
+        assert_eq!(parsed.database, original.database);
+        assert_eq!(parsed.username, original.username);
+        assert_eq!(parsed.password, original.password);
+        assert_eq!(parsed.ssl_mode, original.ssl_mode);
+    }
+
+    #[test]
+    fn test_to_url_special_chars() {
+        let config = ConnectionConfig {
+            name: "test".to_string(),
+            host: "localhost".to_string(),
+            port: 5432,
+            database: "mydb".to_string(),
+            username: "user".to_string(),
+            password: Some("p@ss:w/rd".to_string()),
+            ssl_mode: SslMode::Prefer,
+        };
+        let url = config.to_url();
+        // Special chars should be percent-encoded
+        assert!(!url.contains("p@ss"));
+        // Round-trip should decode correctly
+        let parsed = ConnectionConfig::from_url(&url).unwrap();
+        assert_eq!(parsed.password, Some("p@ss:w/rd".to_string()));
+    }
+
+    #[test]
+    fn test_to_url_no_password() {
+        let config = ConnectionConfig {
+            name: "test".to_string(),
+            host: "localhost".to_string(),
+            port: 5432,
+            database: "mydb".to_string(),
+            username: "user".to_string(),
+            password: None,
+            ssl_mode: SslMode::Prefer,
+        };
+        let url = config.to_url();
+        assert_eq!(url, "postgres://user@localhost/mydb");
+    }
+
+    #[test]
+    fn test_to_url_with_sslmode() {
+        let config = ConnectionConfig {
+            name: "test".to_string(),
+            host: "host".to_string(),
+            port: 5432,
+            database: "db".to_string(),
+            username: "user".to_string(),
+            password: Some("pass".to_string()),
+            ssl_mode: SslMode::Require,
+        };
+        let url = config.to_url();
+        assert!(url.ends_with("?sslmode=require"));
+    }
+
+    #[test]
+    fn test_to_url_non_default_port() {
+        let config = ConnectionConfig {
+            name: "test".to_string(),
+            host: "localhost".to_string(),
+            port: 5433,
+            database: "mydb".to_string(),
+            username: "user".to_string(),
+            password: None,
+            ssl_mode: SslMode::Prefer,
+        };
+        let url = config.to_url();
+        assert_eq!(url, "postgres://user@localhost:5433/mydb");
+    }
+
+    #[test]
+    fn test_to_url_ipv6() {
+        let config = ConnectionConfig {
+            name: "test".to_string(),
+            host: "::1".to_string(),
+            port: 5432,
+            database: "mydb".to_string(),
+            username: "user".to_string(),
+            password: Some("pass".to_string()),
+            ssl_mode: SslMode::Prefer,
+        };
+        let url = config.to_url();
+        let parsed = ConnectionConfig::from_url(&url).unwrap();
+        assert_eq!(parsed.host, "::1");
+    }
+
+    // ── password serialization ────────────────────────────────────
+
+    #[test]
+    fn test_password_serializes_to_toml() {
+        let config = ConnectionConfig {
+            name: "test".to_string(),
+            host: "localhost".to_string(),
+            port: 5432,
+            database: "mydb".to_string(),
+            username: "user".to_string(),
+            password: Some("secret".to_string()),
+            ssl_mode: SslMode::Prefer,
+        };
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+        assert!(
+            toml_str.contains("password"),
+            "password should be serialized"
+        );
+        assert!(toml_str.contains("secret"));
+    }
+
+    #[test]
+    fn test_no_password_omitted_from_toml() {
+        let config = ConnectionConfig {
+            name: "test".to_string(),
+            host: "localhost".to_string(),
+            port: 5432,
+            database: "mydb".to_string(),
+            username: "user".to_string(),
+            password: None,
+            ssl_mode: SslMode::Prefer,
+        };
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+        assert!(
+            !toml_str.contains("password"),
+            "None password should not appear in TOML"
+        );
     }
 }

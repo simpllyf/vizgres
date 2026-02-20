@@ -3,6 +3,7 @@
 //! All UI widgets and rendering logic using ratatui.
 
 pub mod command_bar;
+pub mod connection_dialog;
 pub mod editor;
 pub mod help;
 pub mod highlight;

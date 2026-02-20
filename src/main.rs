@@ -11,7 +11,7 @@ use crossterm::{
 };
 use ratatui::prelude::*;
 use tokio::sync::mpsc;
-use vizgres::app::{Action, App, AppEvent};
+use vizgres::app::{Action, App, AppEvent, StatusLevel};
 use vizgres::config;
 use vizgres::db::{self, Database};
 
@@ -27,29 +27,6 @@ struct Cli {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Get connection URL: from CLI arg or prompt interactively
-    let url = match cli.url {
-        Some(u) => u,
-        None => prompt_for_url()?,
-    };
-
-    // Parse and validate the URL before entering TUI
-    let conn_config = config::ConnectionConfig::from_url(&url)
-        .map_err(|e| anyhow::anyhow!("Invalid connection URL: {}", e))?;
-
-    // Connect to the database before entering TUI
-    eprintln!("Connecting to {}...", conn_config.name);
-    let (provider, conn_err_rx) = db::PostgresProvider::connect(&conn_config)
-        .await
-        .map_err(|e| anyhow::anyhow!("Connection failed: {}", e))?;
-    let provider = Arc::new(provider);
-
-    // Load schema
-    let schema = provider
-        .get_schema()
-        .await
-        .map_err(|e| anyhow::anyhow!("Schema load failed: {}", e))?;
-
     // Set up panic hook to restore terminal before panic message
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
@@ -62,6 +39,31 @@ async fn main() -> Result<()> {
         original_hook(panic_info);
     }));
 
+    // If URL provided, connect before entering TUI
+    let (mut provider, mut conn_err_rx, mut app) = if let Some(ref url) = cli.url {
+        let conn_config = config::ConnectionConfig::from_url(url)
+            .map_err(|e| anyhow::anyhow!("Invalid connection URL: {}", e))?;
+
+        eprintln!("Connecting to {}...", conn_config.name);
+        let (prov, rx) = db::PostgresProvider::connect(&conn_config)
+            .await
+            .map_err(|e| anyhow::anyhow!("Connection failed: {}", e))?;
+        let prov = Arc::new(prov);
+
+        let schema = prov
+            .get_schema()
+            .await
+            .map_err(|e| anyhow::anyhow!("Schema load failed: {}", e))?;
+
+        let app = App::with_connection(conn_config.name.clone(), schema);
+        (Some(prov), Some(rx), app)
+    } else {
+        // No URL — start disconnected and show connection dialog
+        let mut app = App::new();
+        app.show_connection_dialog();
+        (None, None, app)
+    };
+
     // Initialize terminal
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
@@ -70,14 +72,7 @@ async fn main() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     // Run the app (separated so we can always clean up)
-    let result = run_app(
-        &mut terminal,
-        provider,
-        conn_config.name,
-        schema,
-        conn_err_rx,
-    )
-    .await;
+    let result = run_app(&mut terminal, &mut app, &mut provider, &mut conn_err_rx).await;
 
     // Restore terminal
     disable_raw_mode()?;
@@ -91,29 +86,12 @@ async fn main() -> Result<()> {
     result
 }
 
-/// Prompt the user for a connection URL on stdin (before TUI starts)
-fn prompt_for_url() -> Result<String> {
-    use std::io::Write;
-    eprint!("PostgreSQL URL: ");
-    std::io::stderr().flush()?;
-    let mut url = String::new();
-    std::io::stdin().read_line(&mut url)?;
-    let url = url.trim().to_string();
-    if url.is_empty() {
-        anyhow::bail!("No connection URL provided. Usage: vizgres <postgres://...>");
-    }
-    Ok(url)
-}
-
 async fn run_app(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
-    provider: Arc<db::PostgresProvider>,
-    connection_name: String,
-    schema: db::schema::SchemaTree,
-    mut conn_err_rx: mpsc::UnboundedReceiver<String>,
+    app: &mut App,
+    provider: &mut Option<Arc<db::PostgresProvider>>,
+    conn_err_rx: &mut Option<mpsc::UnboundedReceiver<String>>,
 ) -> Result<()> {
-    let mut app = App::with_connection(connection_name, schema);
-
     // Channel for async events (db results, etc.)
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<AppEvent>();
 
@@ -121,7 +99,7 @@ async fn run_app(
     loop {
         // Draw
         terminal.draw(|frame| {
-            vizgres::ui::render::render(frame, &app);
+            vizgres::ui::render::render(frame, app);
         })?;
 
         // Poll for events
@@ -133,7 +111,13 @@ async fn run_app(
             }
 
             // Background connection died (server restart, idle timeout, etc.)
-            Some(msg) = conn_err_rx.recv() => {
+            // Only poll when we have a receiver
+            Some(msg) = async {
+                match conn_err_rx.as_mut() {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
                 action = app.handle_event(AppEvent::ConnectionLost(msg))?;
             }
 
@@ -167,10 +151,6 @@ async fn run_app(
                             _ => Action::None,
                         };
                         if !matches!(a, Action::None) {
-                            // Stop on first actionable event (Quit, ExecuteQuery, etc.)
-                            // so we render/execute immediately. Remaining buffered events
-                            // are intentionally discarded — the next loop iteration will
-                            // pick up any new input.
                             action = a;
                             break;
                         }
@@ -185,42 +165,88 @@ async fn run_app(
                 app.running = false;
                 break;
             }
-            Action::ExecuteQuery { sql, tab_id } => {
-                let db = Arc::clone(&provider);
-                let tx = event_tx.clone();
-                tokio::spawn(async move {
-                    match db.execute_query(&sql).await {
-                        Ok(results) => {
-                            let _ = tx.send(AppEvent::QueryCompleted { results, tab_id });
-                        }
-                        Err(e) => {
-                            let _ = tx.send(AppEvent::QueryFailed {
-                                error: e.to_string(),
-                                tab_id,
-                            });
+            Action::Connect(config) => {
+                // Show connecting status and render immediately
+                app.set_status("Connecting...".to_string(), StatusLevel::Info);
+                terminal.draw(|f| vizgres::ui::render::render(f, app))?;
+
+                // Drop old provider
+                *provider = None;
+                *conn_err_rx = None;
+
+                // Connect
+                match db::PostgresProvider::connect(&config).await {
+                    Ok((prov, rx)) => {
+                        let prov = Arc::new(prov);
+                        match prov.get_schema().await {
+                            Ok(schema) => {
+                                app.apply_connection(config.name.clone(), schema);
+                                app.set_status(
+                                    format!("Connected to {}", config.name),
+                                    StatusLevel::Success,
+                                );
+                                *provider = Some(prov);
+                                *conn_err_rx = Some(rx);
+                            }
+                            Err(e) => {
+                                app.set_status(
+                                    format!("Schema load failed: {}", e),
+                                    StatusLevel::Error,
+                                );
+                            }
                         }
                     }
-                });
+                    Err(e) => {
+                        app.set_status(format!("Connection failed: {}", e), StatusLevel::Error);
+                    }
+                }
+            }
+            Action::ExecuteQuery { sql, tab_id } => {
+                if let Some(prov) = provider.as_ref() {
+                    let db = Arc::clone(prov);
+                    let tx = event_tx.clone();
+                    tokio::spawn(async move {
+                        match db.execute_query(&sql).await {
+                            Ok(results) => {
+                                let _ = tx.send(AppEvent::QueryCompleted { results, tab_id });
+                            }
+                            Err(e) => {
+                                let _ = tx.send(AppEvent::QueryFailed {
+                                    error: e.to_string(),
+                                    tab_id,
+                                });
+                            }
+                        }
+                    });
+                } else {
+                    app.set_status("Not connected".to_string(), StatusLevel::Warning);
+                }
             }
             Action::CancelQuery => {
-                let db = Arc::clone(&provider);
-                tokio::spawn(async move {
-                    let _ = db.cancel_query().await;
-                });
+                if let Some(prov) = provider.as_ref() {
+                    let db = Arc::clone(prov);
+                    tokio::spawn(async move {
+                        let _ = db.cancel_query().await;
+                    });
+                }
             }
             Action::LoadSchema => {
-                let db = Arc::clone(&provider);
-                let tx = event_tx.clone();
-                tokio::spawn(async move {
-                    match db.get_schema().await {
-                        Ok(schema) => {
-                            let _ = tx.send(AppEvent::SchemaLoaded(schema));
+                if let Some(prov) = provider.as_ref() {
+                    let db = Arc::clone(prov);
+                    let tx = event_tx.clone();
+                    tokio::spawn(async move {
+                        match db.get_schema().await {
+                            Ok(schema) => {
+                                let _ = tx.send(AppEvent::SchemaLoaded(schema));
+                            }
+                            Err(e) => {
+                                let _ = tx.send(AppEvent::SchemaFailed(e.to_string()));
+                            }
                         }
-                        Err(e) => {
-                            let _ = tx.send(AppEvent::SchemaFailed(e.to_string()));
-                        }
-                    }
-                });
+                    });
+                } else {
+                    app.set_status("Not connected".to_string(), StatusLevel::Warning);
+                }
             }
             Action::None => {}
         }
