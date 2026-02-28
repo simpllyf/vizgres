@@ -50,6 +50,8 @@ pub struct TreeBrowser {
     expanded: HashSet<String>,
     /// Number of rows for table/view preview queries
     preview_rows: usize,
+    /// Category limit for pagination (0 = unlimited)
+    category_limit: usize,
     /// Whether filter mode is active
     filter_active: bool,
     /// Current filter text
@@ -68,10 +70,14 @@ pub struct TreeBrowser {
 
 impl TreeBrowser {
     pub fn new() -> Self {
-        Self::with_preview_rows(100)
+        Self::with_settings(100, 500)
     }
 
     pub fn with_preview_rows(preview_rows: usize) -> Self {
+        Self::with_settings(preview_rows, 500)
+    }
+
+    pub fn with_settings(preview_rows: usize, category_limit: usize) -> Self {
         Self {
             schema: None,
             items: Vec::new(),
@@ -79,6 +85,7 @@ impl TreeBrowser {
             scroll_offset: 0,
             expanded: HashSet::new(),
             preview_rows,
+            category_limit,
             filter_active: false,
             filter_text: String::new(),
             filter_cursor: 0,
@@ -805,6 +812,83 @@ impl TreeBrowser {
             None
         }
     }
+
+    /// Get the current loaded count for a category in a schema
+    pub fn loaded_count(&self, schema_name: &str, category: &str) -> usize {
+        if let Some(schema) = self.schema.as_ref()
+            && let Some(s) = schema.schemas.iter().find(|s| s.name == schema_name)
+        {
+            return match category {
+                "Tables" => s.tables.len(),
+                "Views" => s.views.len(),
+                "Functions" => s.functions.len(),
+                "Indexes" => s.indexes.len(),
+                _ => 0,
+            };
+        }
+        0
+    }
+
+    /// Extend a category with more loaded items
+    pub fn extend_tables(&mut self, schema_name: &str, items: Vec<crate::db::schema::Table>) {
+        if let Some(schema) = self.schema.as_mut()
+            && let Some(s) = schema
+                .schemas
+                .items
+                .iter_mut()
+                .find(|s| s.name == schema_name)
+        {
+            s.tables.extend(items);
+        }
+        self.rebuild_items();
+    }
+
+    /// Extend views with more loaded items
+    pub fn extend_views(&mut self, schema_name: &str, items: Vec<crate::db::schema::Table>) {
+        if let Some(schema) = self.schema.as_mut()
+            && let Some(s) = schema
+                .schemas
+                .items
+                .iter_mut()
+                .find(|s| s.name == schema_name)
+        {
+            s.views.extend(items);
+        }
+        self.rebuild_items();
+    }
+
+    /// Extend functions with more loaded items
+    pub fn extend_functions(&mut self, schema_name: &str, items: Vec<crate::db::schema::Function>) {
+        if let Some(schema) = self.schema.as_mut()
+            && let Some(s) = schema
+                .schemas
+                .items
+                .iter_mut()
+                .find(|s| s.name == schema_name)
+        {
+            s.functions.extend(items);
+        }
+        self.rebuild_items();
+    }
+
+    /// Extend indexes with more loaded items
+    pub fn extend_indexes(&mut self, schema_name: &str, items: Vec<crate::db::schema::Index>) {
+        if let Some(schema) = self.schema.as_mut()
+            && let Some(s) = schema
+                .schemas
+                .items
+                .iter_mut()
+                .find(|s| s.name == schema_name)
+        {
+            s.indexes.extend(items);
+        }
+        self.rebuild_items();
+    }
+
+    /// Get the category limit from settings
+    pub fn category_limit(&self) -> usize {
+        self.category_limit
+    }
 }
 
 /// Push column items into the flat item list
@@ -1509,5 +1593,110 @@ mod tests {
 
         tree.deactivate_filter();
         assert!(!tree.is_searching());
+    }
+
+    #[test]
+    fn test_category_limit_stored() {
+        let tree = TreeBrowser::with_settings(100, 250);
+        assert_eq!(tree.category_limit(), 250);
+    }
+
+    #[test]
+    fn test_loaded_count_returns_correct_counts() {
+        let mut tree = TreeBrowser::new();
+        tree.set_schema(sample_schema());
+        // sample_schema has 2 tables, 1 view, 1 function, 1 index
+        assert_eq!(tree.loaded_count("public", "Tables"), 2);
+        assert_eq!(tree.loaded_count("public", "Views"), 1);
+        assert_eq!(tree.loaded_count("public", "Functions"), 1);
+        assert_eq!(tree.loaded_count("public", "Indexes"), 1);
+        assert_eq!(tree.loaded_count("nonexistent", "Tables"), 0);
+    }
+
+    #[test]
+    fn test_load_more_info_returns_schema_and_category() {
+        let mut tree = TreeBrowser::new();
+
+        // Create a truncated schema that will show "Load more" item
+        let mut schema = sample_schema();
+        schema.schemas.items[0].tables = PaginatedVec::new(
+            schema.schemas.items[0].tables.items.clone(),
+            100, // total_count > items.len()
+        );
+
+        tree.set_schema(schema);
+
+        // Expand public schema
+        tree.expand_current(); // Schema
+        tree.move_down();
+        tree.expand_current(); // Tables category
+
+        // Find and select the LoadMore item
+        let load_more_idx = tree
+            .items
+            .iter()
+            .position(|i| i.kind == NodeKind::LoadMore);
+        if let Some(idx) = load_more_idx {
+            tree.selected = idx;
+            assert!(tree.is_load_more_selected());
+            let info = tree.load_more_info();
+            assert!(info.is_some());
+            let (schema, category) = info.unwrap();
+            assert_eq!(schema, "public");
+            assert_eq!(category, "Tables");
+        }
+    }
+
+    #[test]
+    fn test_extend_tables_adds_items() {
+        let mut tree = TreeBrowser::new();
+        tree.set_schema(sample_schema());
+        let initial_count = tree.loaded_count("public", "Tables");
+
+        let new_table = Table {
+            name: "new_table".to_string(),
+            columns: vec![],
+        };
+        tree.extend_tables("public", vec![new_table]);
+
+        assert_eq!(
+            tree.loaded_count("public", "Tables"),
+            initial_count + 1
+        );
+    }
+
+    #[test]
+    fn test_truncated_category_shows_load_more() {
+        let mut tree = TreeBrowser::new();
+
+        // Create schema where tables are truncated
+        let mut schema = sample_schema();
+        schema.schemas.items[0].tables = PaginatedVec::new(
+            vec![Table {
+                name: "table1".to_string(),
+                columns: vec![],
+            }],
+            10, // total is 10, but only 1 loaded
+        );
+
+        tree.set_schema(schema);
+        tree.expand_current(); // Schema
+        tree.move_down();
+        tree.expand_current(); // Tables category
+
+        // Should have a LoadMore item
+        let has_load_more = tree.items.iter().any(|i| i.kind == NodeKind::LoadMore);
+        assert!(has_load_more, "Truncated category should show Load more item");
+
+        // Category label should show counts
+        let tables_category = tree
+            .items
+            .iter()
+            .find(|i| i.kind == NodeKind::Category && i.path.contains("Tables"));
+        assert!(tables_category.is_some());
+        assert!(
+            tables_category.unwrap().label.contains("1 of 10"),
+            "Category should show 'X of Y' when truncated"
+        );
     }
 }
