@@ -32,6 +32,22 @@ enum EditOp {
     Clear,
 }
 
+/// Get character count of a string (not byte count).
+#[inline]
+fn char_count(s: &str) -> usize {
+    s.chars().count()
+}
+
+/// Convert character index to byte index in a string.
+/// Returns `s.len()` if char_idx is beyond the string length.
+#[inline]
+fn char_to_byte_idx(s: &str, char_idx: usize) -> usize {
+    s.char_indices()
+        .nth(char_idx)
+        .map(|(i, _)| i)
+        .unwrap_or(s.len())
+}
+
 /// Query editor component
 pub struct QueryEditor {
     /// Lines of text
@@ -168,35 +184,40 @@ impl QueryEditor {
     fn insert_char(&mut self, c: char) {
         self.maybe_snapshot(EditOp::Insert);
         let line = &mut self.lines[self.cursor.0];
-        // Handle cursor beyond line length
-        let col = self.cursor.1.min(line.len());
-        line.insert(col, c);
-        self.cursor.1 = col + 1;
+        // Handle cursor beyond line length (char-based)
+        let char_col = self.cursor.1.min(char_count(line));
+        let byte_idx = char_to_byte_idx(line, char_col);
+        line.insert(byte_idx, c);
+        self.cursor.1 = char_col + 1;
     }
 
     fn backspace(&mut self) {
         self.maybe_snapshot(EditOp::Backspace);
         if self.cursor.1 > 0 {
-            let col = self.cursor.1.min(self.lines[self.cursor.0].len());
-            if col > 0 {
-                self.lines[self.cursor.0].remove(col - 1);
-                self.cursor.1 = col - 1;
+            let line = &self.lines[self.cursor.0];
+            let char_col = self.cursor.1.min(char_count(line));
+            if char_col > 0 {
+                let byte_idx = char_to_byte_idx(line, char_col - 1);
+                self.lines[self.cursor.0].remove(byte_idx);
+                self.cursor.1 = char_col - 1;
             }
         } else if self.cursor.0 > 0 {
             // Join with previous line
             let current_line = self.lines.remove(self.cursor.0);
             self.cursor.0 -= 1;
-            self.cursor.1 = self.lines[self.cursor.0].len();
+            self.cursor.1 = char_count(&self.lines[self.cursor.0]);
             self.lines[self.cursor.0].push_str(&current_line);
         }
     }
 
     fn delete_forward(&mut self) {
         self.maybe_snapshot(EditOp::DeleteForward);
-        let line_len = self.lines[self.cursor.0].len();
-        let col = self.cursor.1.min(line_len);
-        if col < line_len {
-            self.lines[self.cursor.0].remove(col);
+        let line = &self.lines[self.cursor.0];
+        let line_char_len = char_count(line);
+        let char_col = self.cursor.1.min(line_char_len);
+        if char_col < line_char_len {
+            let byte_idx = char_to_byte_idx(line, char_col);
+            self.lines[self.cursor.0].remove(byte_idx);
         } else if self.cursor.0 < self.lines.len() - 1 {
             // Join next line into current
             let next_line = self.lines.remove(self.cursor.0 + 1);
@@ -206,9 +227,11 @@ impl QueryEditor {
 
     fn new_line(&mut self) {
         self.maybe_snapshot(EditOp::NewLine);
-        let col = self.cursor.1.min(self.lines[self.cursor.0].len());
-        let rest = self.lines[self.cursor.0][col..].to_string();
-        self.lines[self.cursor.0].truncate(col);
+        let line = &self.lines[self.cursor.0];
+        let char_col = self.cursor.1.min(char_count(line));
+        let byte_idx = char_to_byte_idx(line, char_col);
+        let rest = self.lines[self.cursor.0][byte_idx..].to_string();
+        self.lines[self.cursor.0].truncate(byte_idx);
         self.cursor.0 += 1;
         self.cursor.1 = 0;
         self.lines.insert(self.cursor.0, rest);
@@ -217,7 +240,7 @@ impl QueryEditor {
     fn move_up(&mut self) {
         if self.cursor.0 > 0 {
             self.cursor.0 -= 1;
-            self.cursor.1 = self.cursor.1.min(self.lines[self.cursor.0].len());
+            self.cursor.1 = self.cursor.1.min(char_count(&self.lines[self.cursor.0]));
         }
         self.last_op = None;
     }
@@ -225,7 +248,7 @@ impl QueryEditor {
     fn move_down(&mut self) {
         if self.cursor.0 < self.lines.len() - 1 {
             self.cursor.0 += 1;
-            self.cursor.1 = self.cursor.1.min(self.lines[self.cursor.0].len());
+            self.cursor.1 = self.cursor.1.min(char_count(&self.lines[self.cursor.0]));
         }
         self.last_op = None;
     }
@@ -235,14 +258,14 @@ impl QueryEditor {
             self.cursor.1 -= 1;
         } else if self.cursor.0 > 0 {
             self.cursor.0 -= 1;
-            self.cursor.1 = self.lines[self.cursor.0].len();
+            self.cursor.1 = char_count(&self.lines[self.cursor.0]);
         }
         self.last_op = None;
     }
 
     fn move_right(&mut self) {
-        let line_len = self.lines[self.cursor.0].len();
-        if self.cursor.1 < line_len {
+        let line_char_len = char_count(&self.lines[self.cursor.0]);
+        if self.cursor.1 < line_char_len {
             self.cursor.1 += 1;
         } else if self.cursor.0 < self.lines.len() - 1 {
             self.cursor.0 += 1;
@@ -257,7 +280,7 @@ impl QueryEditor {
     }
 
     fn move_end(&mut self) {
-        self.cursor.1 = self.lines[self.cursor.0].len();
+        self.cursor.1 = char_count(&self.lines[self.cursor.0]);
         self.last_op = None;
     }
 
@@ -269,9 +292,11 @@ impl QueryEditor {
         self.maybe_snapshot(EditOp::Clear);
 
         let text = text.replace('\r', "");
-        let col = self.cursor.1.min(self.lines[self.cursor.0].len());
-        let after_cursor = self.lines[self.cursor.0][col..].to_string();
-        self.lines[self.cursor.0].truncate(col);
+        let line = &self.lines[self.cursor.0];
+        let char_col = self.cursor.1.min(char_count(line));
+        let byte_idx = char_to_byte_idx(line, char_col);
+        let after_cursor = self.lines[self.cursor.0][byte_idx..].to_string();
+        self.lines[self.cursor.0].truncate(byte_idx);
 
         let parts: Vec<&str> = text.split('\n').collect();
 
@@ -283,9 +308,9 @@ impl QueryEditor {
             self.lines.insert(self.cursor.0 + 1 + i, part.to_string());
         }
 
-        // Cursor at end of last inserted part, before after_cursor
+        // Cursor at end of last inserted part, before after_cursor (char-based)
         let last_line = self.cursor.0 + parts.len() - 1;
-        let last_col = self.lines[last_line].len();
+        let last_col = char_count(&self.lines[last_line]);
         self.lines[last_line].push_str(&after_cursor);
         self.cursor = (last_line, last_col);
         self.ensure_cursor_visible();
@@ -307,10 +332,10 @@ impl QueryEditor {
         self.cursor
     }
 
-    /// Set cursor position, clamping to valid bounds.
+    /// Set cursor position (char-based), clamping to valid bounds.
     pub fn set_cursor_position(&mut self, line: usize, col: usize) {
         let line = line.min(self.lines.len().saturating_sub(1));
-        let col = col.min(self.lines[line].len());
+        let col = col.min(char_count(&self.lines[line]));
         self.cursor = (line, col);
         self.ensure_cursor_visible();
     }
@@ -326,9 +351,11 @@ impl QueryEditor {
             // Break coalescing so acceptance is its own undo step
             self.last_op = None;
             self.maybe_snapshot(EditOp::Insert);
-            let col = self.cursor.1.min(self.lines[self.cursor.0].len());
-            self.lines[self.cursor.0].insert_str(col, &text);
-            self.cursor.1 = col + text.len();
+            let line = &self.lines[self.cursor.0];
+            let char_col = self.cursor.1.min(char_count(line));
+            let byte_idx = char_to_byte_idx(line, char_col);
+            self.lines[self.cursor.0].insert_str(byte_idx, &text);
+            self.cursor.1 = char_col + char_count(&text);
             true
         } else {
             false
@@ -483,7 +510,7 @@ impl Component for QueryEditor {
 
                 // Cursor and ghost text
                 if focused && line_idx == self.cursor.0 {
-                    let cursor_col = self.cursor.1.min(line.len());
+                    let cursor_col = self.cursor.1.min(char_count(line));
                     let cursor_x = content_x + cursor_col as u16;
                     if cursor_x < area.x + area.width {
                         frame.set_cursor_position(Position::new(cursor_x, y));
@@ -493,15 +520,14 @@ impl Component for QueryEditor {
                     if let Some(ref ghost) = self.ghost_text {
                         let ghost_x = cursor_x;
                         let avail = (area.x + area.width).saturating_sub(ghost_x) as usize;
-                        if avail > 0 && !ghost.is_empty() {
-                            let visible = if ghost.len() > avail {
-                                &ghost[..avail]
-                            } else {
-                                ghost.as_str()
-                            };
+                        let ghost_char_count = char_count(ghost);
+                        if avail > 0 && ghost_char_count > 0 {
+                            // Truncate to available width (char-based)
+                            let visible: String = ghost.chars().take(avail).collect();
+                            let visible_char_count = visible.chars().count();
                             frame.render_widget(
                                 Paragraph::new(Span::styled(visible, theme.editor_ghost)),
-                                Rect::new(ghost_x, y, visible.len() as u16, 1),
+                                Rect::new(ghost_x, y, visible_char_count as u16, 1),
                             );
                         }
                     }
@@ -946,5 +972,170 @@ mod tests {
         editor.set_cursor_position(1, 5);
         // Empty line has length 0, should clamp to 0
         assert_eq!(editor.cursor(), (1, 0));
+    }
+
+    // ── UTF-8 / multi-byte character tests ──────────────────────
+
+    #[test]
+    fn test_utf8_insert_after_emoji() {
+        let mut editor = QueryEditor::new();
+        editor.set_content("👋".to_string()); // 4 bytes, 1 char
+        editor.set_cursor_position(0, 1); // After the emoji
+        editor.insert_char('x');
+        assert_eq!(editor.get_content(), "👋x");
+        assert_eq!(editor.cursor(), (0, 2));
+    }
+
+    #[test]
+    fn test_utf8_insert_before_emoji() {
+        let mut editor = QueryEditor::new();
+        editor.set_content("👋".to_string());
+        editor.set_cursor_position(0, 0); // Before the emoji
+        editor.insert_char('x');
+        assert_eq!(editor.get_content(), "x👋");
+        assert_eq!(editor.cursor(), (0, 1));
+    }
+
+    #[test]
+    fn test_utf8_backspace_emoji() {
+        let mut editor = QueryEditor::new();
+        editor.set_content("a👋b".to_string()); // a(1) + 👋(4) + b(1) = 6 bytes, 3 chars
+        editor.set_cursor_position(0, 2); // After the emoji
+        editor.backspace();
+        assert_eq!(editor.get_content(), "ab");
+        assert_eq!(editor.cursor(), (0, 1));
+    }
+
+    #[test]
+    fn test_utf8_delete_emoji() {
+        let mut editor = QueryEditor::new();
+        editor.set_content("a👋b".to_string());
+        editor.set_cursor_position(0, 1); // Before the emoji
+        editor.delete_forward();
+        assert_eq!(editor.get_content(), "ab");
+        assert_eq!(editor.cursor(), (0, 1));
+    }
+
+    #[test]
+    fn test_utf8_accented_chars() {
+        let mut editor = QueryEditor::new();
+        editor.set_content("café".to_string()); // 5 bytes, 4 chars (é is 2 bytes)
+        assert_eq!(editor.lines[0].len(), 5); // Byte length
+        editor.set_cursor_position(0, 4); // End of line (char-based)
+        assert_eq!(editor.cursor(), (0, 4));
+        editor.insert_char('!');
+        assert_eq!(editor.get_content(), "café!");
+        assert_eq!(editor.cursor(), (0, 5));
+    }
+
+    #[test]
+    fn test_utf8_cursor_movement() {
+        let mut editor = QueryEditor::new();
+        editor.set_content("a👋b🎉c".to_string()); // 5 chars
+        editor.set_cursor_position(0, 0);
+
+        // Move right through the string
+        editor.move_right();
+        assert_eq!(editor.cursor(), (0, 1)); // After 'a'
+        editor.move_right();
+        assert_eq!(editor.cursor(), (0, 2)); // After '👋'
+        editor.move_right();
+        assert_eq!(editor.cursor(), (0, 3)); // After 'b'
+        editor.move_right();
+        assert_eq!(editor.cursor(), (0, 4)); // After '🎉'
+        editor.move_right();
+        assert_eq!(editor.cursor(), (0, 5)); // After 'c' (end)
+
+        // Move left back
+        editor.move_left();
+        assert_eq!(editor.cursor(), (0, 4));
+        editor.move_left();
+        assert_eq!(editor.cursor(), (0, 3));
+    }
+
+    #[test]
+    fn test_utf8_new_line_splits_correctly() {
+        let mut editor = QueryEditor::new();
+        editor.set_content("café☕".to_string()); // "café" + coffee emoji
+        editor.set_cursor_position(0, 4); // After 'é', before '☕'
+        editor.new_line();
+        assert_eq!(editor.lines.len(), 2);
+        assert_eq!(editor.lines[0], "café");
+        assert_eq!(editor.lines[1], "☕");
+        assert_eq!(editor.cursor(), (1, 0));
+    }
+
+    #[test]
+    fn test_utf8_paste_with_emoji() {
+        let mut editor = QueryEditor::new();
+        editor.set_content("hello".to_string());
+        editor.set_cursor_position(0, 5); // End
+        editor.insert_text(" 🌍🌎🌏"); // 3 earth emojis
+        assert_eq!(editor.get_content(), "hello 🌍🌎🌏");
+        assert_eq!(editor.cursor(), (0, 9)); // 5 + 1 space + 3 emoji = 9 chars
+    }
+
+    #[test]
+    fn test_utf8_multiline_cursor_clamp() {
+        let mut editor = QueryEditor::new();
+        editor.set_content("long line here\n短".to_string()); // "短" is 1 char
+        editor.set_cursor_position(0, 10); // Middle of first line
+        editor.move_down();
+        // Second line only has 1 char, cursor should clamp
+        assert_eq!(editor.cursor(), (1, 1));
+    }
+
+    #[test]
+    fn test_utf8_home_end() {
+        let mut editor = QueryEditor::new();
+        editor.set_content("🎵音楽🎵".to_string()); // 4 chars
+        editor.set_cursor_position(0, 2);
+        editor.move_home();
+        assert_eq!(editor.cursor(), (0, 0));
+        editor.move_end();
+        assert_eq!(editor.cursor(), (0, 4));
+    }
+
+    #[test]
+    fn test_utf8_ghost_text_acceptance() {
+        let mut editor = QueryEditor::new();
+        editor.set_content("SELECT 名前".to_string()); // "SELECT " + 2 Japanese chars
+        editor.set_cursor_position(0, 9); // End (7 + 2)
+        editor.set_ghost_text(Some(" FROM 表".to_string())); // ghost with Japanese
+        assert!(editor.accept_ghost_text());
+        assert_eq!(editor.get_content(), "SELECT 名前 FROM 表");
+        assert_eq!(editor.cursor(), (0, 16)); // 9 + 7 chars in ghost
+    }
+
+    #[test]
+    fn test_utf8_undo_preserves_content() {
+        let mut editor = QueryEditor::new();
+        editor.set_content("🚀".to_string());
+        editor.set_cursor_position(0, 1);
+        editor.insert_char('x');
+        assert_eq!(editor.get_content(), "🚀x");
+        editor.undo();
+        assert_eq!(editor.get_content(), "🚀");
+    }
+
+    #[test]
+    fn test_utf8_mixed_content_editing() {
+        let mut editor = QueryEditor::new();
+        // Mix of ASCII, accents, emoji, CJK
+        editor.set_content("Hello café 👋 世界".to_string());
+        // Byte count: 5 + 1 + 5 + 1 + 4 + 1 + 6 = 23 bytes
+        // Char count: 5 + 1 + 4 + 1 + 1 + 1 + 2 = 15 chars
+
+        editor.set_cursor_position(0, 15); // End
+        assert_eq!(editor.cursor(), (0, 15));
+
+        // Insert at end
+        editor.insert_char('!');
+        assert_eq!(editor.get_content(), "Hello café 👋 世界!");
+
+        // Delete from middle (the emoji)
+        editor.set_cursor_position(0, 12); // After the emoji
+        editor.backspace();
+        assert_eq!(editor.get_content(), "Hello café  世界!");
     }
 }
