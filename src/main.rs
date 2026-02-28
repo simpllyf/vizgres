@@ -454,6 +454,10 @@ async fn run_app(
                     app.set_status("Not connected".to_string(), StatusLevel::Warning);
                 }
             }
+            Action::Disconnect => {
+                *provider = None;
+                *conn_err_rx = None;
+            }
             Action::None => {}
         }
     }
