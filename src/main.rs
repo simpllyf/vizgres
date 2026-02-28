@@ -11,7 +11,7 @@ use crossterm::{
 };
 use ratatui::prelude::*;
 use tokio::sync::mpsc;
-use vizgres::app::{Action, App, AppEvent, StatusLevel};
+use vizgres::app::{Action, App, AppEvent, LoadMoreItems, StatusLevel};
 use vizgres::config::{self, ConnectionConfig, Settings};
 use vizgres::db::{self, Database};
 use vizgres::error::DbError;
@@ -88,7 +88,7 @@ async fn main() -> Result<()> {
         let prov = Arc::new(prov);
 
         let schema = prov
-            .get_schema()
+            .get_schema(settings.settings.tree_category_limit)
             .await
             .map_err(|e| anyhow::anyhow!("Schema load failed: {}", e))?;
 
@@ -374,7 +374,8 @@ async fn run_app(
                 match db::PostgresProvider::connect(&config).await {
                     Ok((prov, rx)) => {
                         let prov = Arc::new(prov);
-                        match prov.get_schema().await {
+                        let limit = app.tree_browser.category_limit();
+                        match prov.get_schema(limit).await {
                             Ok(schema) => {
                                 app.apply_connection(config.name.clone(), schema);
                                 app.set_status(
@@ -450,8 +451,9 @@ async fn run_app(
                 if let Some(prov) = provider.as_ref() {
                     let db = Arc::clone(prov);
                     let tx = event_tx.clone();
+                    let limit = app.tree_browser.category_limit();
                     tokio::spawn(async move {
-                        match db.get_schema().await {
+                        match db.get_schema(limit).await {
                             Ok(schema) => {
                                 let _ = tx.send(AppEvent::SchemaLoaded(schema));
                             }
@@ -475,6 +477,54 @@ async fn run_app(
                             }
                             Err(e) => {
                                 let _ = tx.send(AppEvent::SchemaSearchFailed(e.to_string()));
+                            }
+                        }
+                    });
+                } else {
+                    app.set_status("Not connected".to_string(), StatusLevel::Warning);
+                }
+            }
+            Action::LoadMoreCategory {
+                schema_name,
+                category,
+                offset,
+                limit,
+            } => {
+                if let Some(prov) = provider.as_ref() {
+                    let db = Arc::clone(prov);
+                    let tx = event_tx.clone();
+                    let schema = schema_name.clone();
+                    let cat = category.clone();
+                    tokio::spawn(async move {
+                        let result = match category.as_str() {
+                            "Tables" => db
+                                .load_more_tables(&schema_name, offset, limit)
+                                .await
+                                .map(LoadMoreItems::Tables),
+                            "Views" => db
+                                .load_more_views(&schema_name, offset, limit)
+                                .await
+                                .map(LoadMoreItems::Views),
+                            "Functions" => db
+                                .load_more_functions(&schema_name, offset, limit)
+                                .await
+                                .map(LoadMoreItems::Functions),
+                            "Indexes" => db
+                                .load_more_indexes(&schema_name, offset, limit)
+                                .await
+                                .map(LoadMoreItems::Indexes),
+                            _ => return,
+                        };
+                        match result {
+                            Ok(items) => {
+                                let _ = tx.send(AppEvent::LoadMoreCompleted {
+                                    schema_name: schema,
+                                    category: cat,
+                                    items,
+                                });
+                            }
+                            Err(e) => {
+                                let _ = tx.send(AppEvent::LoadMoreFailed(e.to_string()));
                             }
                         }
                     });

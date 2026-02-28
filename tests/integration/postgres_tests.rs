@@ -252,7 +252,7 @@ async fn test_get_schema() {
         }
     };
 
-    let schema = provider.get_schema().await;
+    let schema = provider.get_schema(0).await;
     assert!(
         schema.is_ok(),
         "Schema load should succeed: {:?}",
@@ -337,7 +337,7 @@ async fn test_multiple_schemas() {
         }
     };
 
-    let schema = provider.get_schema().await.unwrap();
+    let schema = provider.get_schema(0).await.unwrap();
 
     // Should have both public and test_schema
     let schema_names: Vec<&str> = schema.schemas.iter().map(|s| s.name.as_str()).collect();
