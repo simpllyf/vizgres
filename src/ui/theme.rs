@@ -30,8 +30,12 @@ pub struct Theme {
     pub tree_column: Style,
     pub tree_function: Style,
     pub tree_index: Style,
+    pub tree_load_more: Style,
     pub tree_selected: Style,
     pub tree_empty: Style,
+    pub tree_filter_bar: Style,
+    pub tree_filter_text: Style,
+    pub tree_filter_match: Style,
 
     // Query editor
     pub editor_text: Style,
@@ -131,11 +135,21 @@ impl Default for Theme {
             tree_column: Style::default().fg(Color::Gray),
             tree_function: Style::default().fg(Color::Cyan),
             tree_index: Style::default().fg(Color::DarkGray),
+            tree_load_more: Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::ITALIC),
             tree_selected: Style::default()
                 .fg(Color::Black)
                 .bg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
             tree_empty: Style::default().fg(Color::DarkGray),
+            tree_filter_bar: Style::default().fg(Color::White).bg(Color::Blue),
+            tree_filter_text: Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+            tree_filter_match: Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
 
             // Query editor
             editor_text: Style::default().fg(Color::White),

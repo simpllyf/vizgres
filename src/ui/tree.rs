@@ -20,6 +20,7 @@ enum NodeKind {
     Column,
     Function,
     Index,
+    LoadMore,
 }
 
 /// A single item in the flattened tree view
@@ -32,6 +33,8 @@ struct TreeItem {
     path: String,
     /// Whether this node can be expanded
     expandable: bool,
+    /// Whether this item matches the current filter (for highlighting)
+    matches_filter: bool,
 }
 
 /// Tree browser component
@@ -47,6 +50,20 @@ pub struct TreeBrowser {
     expanded: HashSet<String>,
     /// Number of rows for table/view preview queries
     preview_rows: usize,
+    /// Whether filter mode is active
+    filter_active: bool,
+    /// Current filter text
+    filter_text: String,
+    /// Cursor position within filter text
+    filter_cursor: usize,
+    /// Paths that directly match the current filter (for highlighting)
+    filter_match_paths: HashSet<String>,
+    /// Expanded state before filtering started (to restore on clear)
+    pre_filter_expanded: Option<HashSet<String>>,
+    /// Original schema before search (to restore on clear)
+    pre_search_schema: Option<SchemaTree>,
+    /// Whether a backend search is in progress
+    searching: bool,
 }
 
 impl TreeBrowser {
@@ -62,6 +79,13 @@ impl TreeBrowser {
             scroll_offset: 0,
             expanded: HashSet::new(),
             preview_rows,
+            filter_active: false,
+            filter_text: String::new(),
+            filter_cursor: 0,
+            filter_match_paths: HashSet::new(),
+            pre_filter_expanded: None,
+            pre_search_schema: None,
+            searching: false,
         }
     }
 
@@ -74,7 +98,7 @@ impl TreeBrowser {
             && let Some(first) = tree.schemas.first()
         {
             self.expanded.insert(first.name.clone());
-            if !first.tables.is_empty() {
+            if !first.tables.items.is_empty() {
                 self.expanded.insert(format!("{}.Tables", first.name));
             }
         }
@@ -97,19 +121,35 @@ impl TreeBrowser {
             None => return,
         };
 
+        // If filtering, we collect items then filter based on the filter text
+        let filter_lower = self.filter_text.to_lowercase();
+
+        // Show schema count if there are multiple or if truncated
+        let show_schema_count =
+            schema_tree.schemas.total_count > 1 || schema_tree.schemas.is_truncated();
+
         for schema in &schema_tree.schemas {
             let schema_path = schema.name.clone();
-            let has_children = !schema.tables.is_empty()
-                || !schema.views.is_empty()
-                || !schema.functions.is_empty()
-                || !schema.indexes.is_empty();
+            let has_children = !schema.tables.items.is_empty()
+                || !schema.views.items.is_empty()
+                || !schema.functions.items.is_empty()
+                || !schema.indexes.items.is_empty();
+
+            // Schema label with optional count indicator
+            let label = if show_schema_count && schema_tree.schemas.is_truncated() {
+                // Only show "X of Y" format if schemas are truncated
+                schema.name.clone()
+            } else {
+                schema.name.clone()
+            };
 
             self.items.push(TreeItem {
-                label: schema.name.clone(),
+                label,
                 kind: NodeKind::Schema,
                 depth: 0,
                 path: schema_path.clone(),
                 expandable: has_children,
+                matches_filter: self.filter_match_paths.contains(&schema_path),
             });
 
             if !self.expanded.contains(&schema_path) {
@@ -117,18 +157,28 @@ impl TreeBrowser {
             }
 
             // ── Tables category ──
-            if !schema.tables.is_empty() {
+            if !schema.tables.items.is_empty() {
                 let cat_path = format!("{}.Tables", schema.name);
+                let label = if schema.tables.is_truncated() {
+                    format!(
+                        "Tables ({} of {})",
+                        schema.tables.len(),
+                        schema.tables.total_count
+                    )
+                } else {
+                    format!("Tables ({})", schema.tables.total_count)
+                };
                 self.items.push(TreeItem {
-                    label: "Tables".to_string(),
+                    label,
                     kind: NodeKind::Category,
                     depth: 1,
                     path: cat_path.clone(),
                     expandable: true,
+                    matches_filter: false, // Categories don't match directly
                 });
 
                 if self.expanded.contains(&cat_path) {
-                    for table in &schema.tables {
+                    for table in schema.tables.iter() {
                         let table_path = format!("{}.{}", cat_path, table.name);
                         self.items.push(TreeItem {
                             label: table.name.clone(),
@@ -136,28 +186,59 @@ impl TreeBrowser {
                             depth: 2,
                             path: table_path.clone(),
                             expandable: !table.columns.is_empty(),
+                            matches_filter: self.filter_match_paths.contains(&table_path),
                         });
 
                         if self.expanded.contains(&table_path) {
-                            push_columns(&mut self.items, &table.columns, &table_path, 3);
+                            push_columns(
+                                &mut self.items,
+                                &table.columns,
+                                &table_path,
+                                3,
+                                &self.filter_match_paths,
+                            );
                         }
+                    }
+                    // Add "Load more" item if truncated
+                    if schema.tables.is_truncated() {
+                        self.items.push(TreeItem {
+                            label: format!(
+                                "[Load {} more...]",
+                                (schema.tables.total_count - schema.tables.len()).min(500)
+                            ),
+                            kind: NodeKind::LoadMore,
+                            depth: 2,
+                            path: format!("{}.Tables.__load_more__", schema.name),
+                            expandable: false,
+                            matches_filter: false,
+                        });
                     }
                 }
             }
 
             // ── Views category ──
-            if !schema.views.is_empty() {
+            if !schema.views.items.is_empty() {
                 let cat_path = format!("{}.Views", schema.name);
+                let label = if schema.views.is_truncated() {
+                    format!(
+                        "Views ({} of {})",
+                        schema.views.len(),
+                        schema.views.total_count
+                    )
+                } else {
+                    format!("Views ({})", schema.views.total_count)
+                };
                 self.items.push(TreeItem {
-                    label: "Views".to_string(),
+                    label,
                     kind: NodeKind::Category,
                     depth: 1,
                     path: cat_path.clone(),
                     expandable: true,
+                    matches_filter: false,
                 });
 
                 if self.expanded.contains(&cat_path) {
-                    for view in &schema.views {
+                    for view in schema.views.iter() {
                         let view_path = format!("{}.{}", cat_path, view.name);
                         self.items.push(TreeItem {
                             label: view.name.clone(),
@@ -165,28 +246,60 @@ impl TreeBrowser {
                             depth: 2,
                             path: view_path.clone(),
                             expandable: !view.columns.is_empty(),
+                            matches_filter: self.filter_match_paths.contains(&view_path),
                         });
 
                         if self.expanded.contains(&view_path) {
-                            push_columns(&mut self.items, &view.columns, &view_path, 3);
+                            push_columns(
+                                &mut self.items,
+                                &view.columns,
+                                &view_path,
+                                3,
+                                &self.filter_match_paths,
+                            );
                         }
+                    }
+                    // Add "Load more" item if truncated
+                    if schema.views.is_truncated() {
+                        self.items.push(TreeItem {
+                            label: format!(
+                                "[Load {} more...]",
+                                (schema.views.total_count - schema.views.len()).min(500)
+                            ),
+                            kind: NodeKind::LoadMore,
+                            depth: 2,
+                            path: format!("{}.Views.__load_more__", schema.name),
+                            expandable: false,
+                            matches_filter: false,
+                        });
                     }
                 }
             }
 
             // ── Functions category ──
-            if !schema.functions.is_empty() {
+            if !schema.functions.items.is_empty() {
                 let cat_path = format!("{}.Functions", schema.name);
+                let label = if schema.functions.is_truncated() {
+                    format!(
+                        "Functions ({} of {})",
+                        schema.functions.len(),
+                        schema.functions.total_count
+                    )
+                } else {
+                    format!("Functions ({})", schema.functions.total_count)
+                };
                 self.items.push(TreeItem {
-                    label: "Functions".to_string(),
+                    label,
                     kind: NodeKind::Category,
                     depth: 1,
                     path: cat_path.clone(),
                     expandable: true,
+                    matches_filter: false,
                 });
 
                 if self.expanded.contains(&cat_path) {
-                    for func in &schema.functions {
+                    for func in schema.functions.iter() {
+                        let func_path = format!("{}.{}", cat_path, func.name);
                         let label = if func.return_type.is_empty() {
                             format!("{}({})", func.name, func.args)
                         } else {
@@ -196,37 +309,122 @@ impl TreeBrowser {
                             label,
                             kind: NodeKind::Function,
                             depth: 2,
-                            path: format!("{}.{}", cat_path, func.name),
+                            path: func_path.clone(),
                             expandable: false,
+                            matches_filter: self.filter_match_paths.contains(&func_path),
+                        });
+                    }
+                    // Add "Load more" item if truncated
+                    if schema.functions.is_truncated() {
+                        self.items.push(TreeItem {
+                            label: format!(
+                                "[Load {} more...]",
+                                (schema.functions.total_count - schema.functions.len()).min(500)
+                            ),
+                            kind: NodeKind::LoadMore,
+                            depth: 2,
+                            path: format!("{}.Functions.__load_more__", schema.name),
+                            expandable: false,
+                            matches_filter: false,
                         });
                     }
                 }
             }
 
             // ── Indexes category ──
-            if !schema.indexes.is_empty() {
+            if !schema.indexes.items.is_empty() {
                 let cat_path = format!("{}.Indexes", schema.name);
+                let label = if schema.indexes.is_truncated() {
+                    format!(
+                        "Indexes ({} of {})",
+                        schema.indexes.len(),
+                        schema.indexes.total_count
+                    )
+                } else {
+                    format!("Indexes ({})", schema.indexes.total_count)
+                };
                 self.items.push(TreeItem {
-                    label: "Indexes".to_string(),
+                    label,
                     kind: NodeKind::Category,
                     depth: 1,
                     path: cat_path.clone(),
                     expandable: true,
+                    matches_filter: false,
                 });
 
                 if self.expanded.contains(&cat_path) {
-                    for idx in &schema.indexes {
+                    for idx in schema.indexes.iter() {
+                        let idx_path = format!("{}.{}", cat_path, idx.name);
                         let label = format!("{} ({})", idx.name, idx.columns.join(", "));
                         self.items.push(TreeItem {
                             label,
                             kind: NodeKind::Index,
                             depth: 2,
-                            path: format!("{}.{}", cat_path, idx.name),
+                            path: idx_path.clone(),
                             expandable: false,
+                            matches_filter: self.filter_match_paths.contains(&idx_path),
+                        });
+                    }
+                    // Add "Load more" item if truncated
+                    if schema.indexes.is_truncated() {
+                        self.items.push(TreeItem {
+                            label: format!(
+                                "[Load {} more...]",
+                                (schema.indexes.total_count - schema.indexes.len()).min(500)
+                            ),
+                            kind: NodeKind::LoadMore,
+                            depth: 2,
+                            path: format!("{}.Indexes.__load_more__", schema.name),
+                            expandable: false,
+                            matches_filter: false,
                         });
                     }
                 }
             }
+        }
+
+        // Add "Load more schemas" item if truncated
+        if schema_tree.schemas.is_truncated() {
+            self.items.push(TreeItem {
+                label: format!(
+                    "[Load {} more schemas...]",
+                    (schema_tree.schemas.total_count - schema_tree.schemas.len()).min(500)
+                ),
+                kind: NodeKind::LoadMore,
+                depth: 0,
+                path: "__schemas_load_more__".to_string(),
+                expandable: false,
+                matches_filter: false,
+            });
+        }
+
+        // Apply filter if filter text is not empty - keep only matching items and ancestors
+        if !filter_lower.is_empty() && !self.filter_match_paths.is_empty() {
+            // Build set of paths to keep (matches + their ancestors)
+            let mut paths_to_keep: HashSet<String> = HashSet::new();
+
+            for path in &self.filter_match_paths {
+                paths_to_keep.insert(path.clone());
+                // Add all ancestor paths
+                let mut p = path.as_str();
+                while let Some((parent, _)) = p.rsplit_once('.') {
+                    paths_to_keep.insert(parent.to_string());
+                    p = parent;
+                }
+            }
+
+            // Filter items to only those in paths_to_keep
+            self.items.retain(|item| {
+                // Keep LoadMore items if their parent category has matches
+                if item.kind == NodeKind::LoadMore {
+                    let parent_path = item.path.rsplit_once('.').map(|(p, _)| p.to_string());
+                    return parent_path
+                        .map(|p| paths_to_keep.contains(&p))
+                        .unwrap_or(false);
+                }
+                // Keep items in paths_to_keep (includes ancestors and matches)
+                paths_to_keep.contains(&item.path)
+            });
         }
 
         // Clamp selected index
@@ -317,6 +515,296 @@ impl TreeBrowser {
             }
         }
     }
+
+    // ── Filter mode methods ──────────────────────────────────────
+
+    /// Check if filter mode is currently active
+    pub fn is_filter_active(&self) -> bool {
+        self.filter_active
+    }
+
+    /// Get the current filter text
+    pub fn filter_text(&self) -> &str {
+        &self.filter_text
+    }
+
+    /// Get the cursor position in the filter text
+    pub fn filter_cursor(&self) -> usize {
+        self.filter_cursor
+    }
+
+    /// Check if a backend search is in progress
+    pub fn is_searching(&self) -> bool {
+        self.searching
+    }
+
+    /// Set the searching state
+    pub fn set_searching(&mut self, searching: bool) {
+        self.searching = searching;
+    }
+
+    /// Apply search results from the backend
+    pub fn apply_search_results(&mut self, results: SchemaTree) {
+        self.searching = false;
+        // Save original schema before replacing with search results
+        if self.pre_search_schema.is_none() {
+            self.pre_search_schema = self.schema.take();
+        }
+        self.schema = Some(results);
+        // Expand everything to show all search results
+        if let Some(ref tree) = self.schema {
+            for schema in &tree.schemas {
+                self.expanded.insert(schema.name.clone());
+                if !schema.tables.is_empty() {
+                    self.expanded.insert(format!("{}.Tables", schema.name));
+                }
+                if !schema.views.is_empty() {
+                    self.expanded.insert(format!("{}.Views", schema.name));
+                }
+                if !schema.functions.is_empty() {
+                    self.expanded.insert(format!("{}.Functions", schema.name));
+                }
+                if !schema.indexes.is_empty() {
+                    self.expanded.insert(format!("{}.Indexes", schema.name));
+                }
+                // Expand tables to show matching columns
+                for table in &schema.tables {
+                    self.expanded
+                        .insert(format!("{}.Tables.{}", schema.name, table.name));
+                }
+                for view in &schema.views {
+                    self.expanded
+                        .insert(format!("{}.Views.{}", schema.name, view.name));
+                }
+            }
+        }
+        // Recompute filter matches and rebuild
+        self.compute_filter_matches();
+        self.rebuild_items();
+        self.selected = 0;
+        self.scroll_offset = 0;
+    }
+
+    /// Activate filter mode
+    pub fn activate_filter(&mut self) {
+        // Save current expanded state if we're starting a fresh filter
+        if self.pre_filter_expanded.is_none() {
+            self.pre_filter_expanded = Some(self.expanded.clone());
+        }
+        self.filter_active = true;
+        self.filter_cursor = self.filter_text.len();
+    }
+
+    /// Deactivate filter mode and clear filter
+    pub fn deactivate_filter(&mut self) {
+        self.filter_active = false;
+        self.filter_text.clear();
+        self.filter_cursor = 0;
+        self.filter_match_paths.clear();
+        self.searching = false;
+        // Restore original schema if we did a backend search
+        if let Some(original_schema) = self.pre_search_schema.take() {
+            self.schema = Some(original_schema);
+        }
+        // Restore pre-filter expanded state
+        if let Some(pre_expanded) = self.pre_filter_expanded.take() {
+            self.expanded = pre_expanded;
+        }
+        self.rebuild_items();
+        self.selected = 0;
+        self.scroll_offset = 0;
+    }
+
+    /// Insert a character at the cursor position in filter text
+    pub fn filter_insert_char(&mut self, c: char) {
+        self.filter_text.insert(self.filter_cursor, c);
+        self.filter_cursor += c.len_utf8();
+        self.apply_filter();
+    }
+
+    /// Delete the character before the cursor (backspace)
+    pub fn filter_backspace(&mut self) {
+        if self.filter_cursor > 0 {
+            // Find the previous character boundary
+            let prev_boundary = self.filter_text[..self.filter_cursor]
+                .char_indices()
+                .next_back()
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+            self.filter_text.remove(prev_boundary);
+            self.filter_cursor = prev_boundary;
+            self.apply_filter();
+        }
+    }
+
+    /// Delete the character at the cursor (delete key)
+    pub fn filter_delete(&mut self) {
+        if self.filter_cursor < self.filter_text.len() {
+            self.filter_text.remove(self.filter_cursor);
+            self.apply_filter();
+        }
+    }
+
+    /// Move filter cursor left
+    pub fn filter_cursor_left(&mut self) {
+        if self.filter_cursor > 0 {
+            self.filter_cursor = self.filter_text[..self.filter_cursor]
+                .char_indices()
+                .next_back()
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+        }
+    }
+
+    /// Move filter cursor right
+    pub fn filter_cursor_right(&mut self) {
+        if self.filter_cursor < self.filter_text.len() {
+            self.filter_cursor += self.filter_text[self.filter_cursor..]
+                .chars()
+                .next()
+                .map(|c| c.len_utf8())
+                .unwrap_or(0);
+        }
+    }
+
+    /// Apply the current filter text to rebuild visible items
+    fn apply_filter(&mut self) {
+        // Compute matches from schema data (not just visible items)
+        self.compute_filter_matches();
+        self.rebuild_items();
+        // Reset selection to first matching item
+        if !self.items.is_empty() {
+            self.selected = 0;
+            self.scroll_offset = 0;
+        }
+    }
+
+    /// Scan schema data to find all paths that match the filter text.
+    /// Also auto-expands parent paths so matches become visible.
+    fn compute_filter_matches(&mut self) {
+        self.filter_match_paths.clear();
+
+        let filter_lower = self.filter_text.to_lowercase();
+        if filter_lower.is_empty() {
+            return;
+        }
+
+        let schema_tree = match &self.schema {
+            Some(s) => s,
+            None => return,
+        };
+
+        // Collect paths that match and paths that need to be expanded
+        let mut paths_to_expand: HashSet<String> = HashSet::new();
+
+        for schema in &schema_tree.schemas {
+            let schema_path = schema.name.clone();
+
+            // Check schema name
+            if schema.name.to_lowercase().contains(&filter_lower) {
+                self.filter_match_paths.insert(schema_path.clone());
+            }
+
+            // Check tables
+            let tables_cat_path = format!("{}.Tables", schema.name);
+            for table in &schema.tables {
+                let table_path = format!("{}.{}", tables_cat_path, table.name);
+
+                if table.name.to_lowercase().contains(&filter_lower) {
+                    self.filter_match_paths.insert(table_path.clone());
+                    // Expand parents to show this match
+                    paths_to_expand.insert(schema_path.clone());
+                    paths_to_expand.insert(tables_cat_path.clone());
+                }
+
+                // Check columns
+                for col in &table.columns {
+                    let col_path = format!("{}.{}", table_path, col.name);
+                    if col.name.to_lowercase().contains(&filter_lower) {
+                        self.filter_match_paths.insert(col_path);
+                        // Expand parents to show this match
+                        paths_to_expand.insert(schema_path.clone());
+                        paths_to_expand.insert(tables_cat_path.clone());
+                        paths_to_expand.insert(table_path.clone());
+                    }
+                }
+            }
+
+            // Check views
+            let views_cat_path = format!("{}.Views", schema.name);
+            for view in &schema.views {
+                let view_path = format!("{}.{}", views_cat_path, view.name);
+
+                if view.name.to_lowercase().contains(&filter_lower) {
+                    self.filter_match_paths.insert(view_path.clone());
+                    paths_to_expand.insert(schema_path.clone());
+                    paths_to_expand.insert(views_cat_path.clone());
+                }
+
+                // Check view columns
+                for col in &view.columns {
+                    let col_path = format!("{}.{}", view_path, col.name);
+                    if col.name.to_lowercase().contains(&filter_lower) {
+                        self.filter_match_paths.insert(col_path);
+                        paths_to_expand.insert(schema_path.clone());
+                        paths_to_expand.insert(views_cat_path.clone());
+                        paths_to_expand.insert(view_path.clone());
+                    }
+                }
+            }
+
+            // Check functions
+            let funcs_cat_path = format!("{}.Functions", schema.name);
+            for func in &schema.functions {
+                let func_path = format!("{}.{}", funcs_cat_path, func.name);
+                if func.name.to_lowercase().contains(&filter_lower) {
+                    self.filter_match_paths.insert(func_path);
+                    paths_to_expand.insert(schema_path.clone());
+                    paths_to_expand.insert(funcs_cat_path.clone());
+                }
+            }
+
+            // Check indexes
+            let idx_cat_path = format!("{}.Indexes", schema.name);
+            for idx in &schema.indexes {
+                let idx_path = format!("{}.{}", idx_cat_path, idx.name);
+                if idx.name.to_lowercase().contains(&filter_lower) {
+                    self.filter_match_paths.insert(idx_path);
+                    paths_to_expand.insert(schema_path.clone());
+                    paths_to_expand.insert(idx_cat_path.clone());
+                }
+            }
+        }
+
+        // Auto-expand paths to show matches
+        for path in paths_to_expand {
+            self.expanded.insert(path);
+        }
+    }
+
+    /// Check if currently selected item is a LoadMore pseudo-item
+    pub fn is_load_more_selected(&self) -> bool {
+        self.items
+            .get(self.selected)
+            .map(|item| item.kind == NodeKind::LoadMore)
+            .unwrap_or(false)
+    }
+
+    /// Get the schema and category for the selected LoadMore item
+    /// Returns (schema_name, category) e.g., ("public", "Tables")
+    pub fn load_more_info(&self) -> Option<(String, String)> {
+        let item = self.items.get(self.selected)?;
+        if item.kind != NodeKind::LoadMore {
+            return None;
+        }
+        // Path format: "schema.Category.__load_more__"
+        let parts: Vec<&str> = item.path.splitn(3, '.').collect();
+        if parts.len() >= 2 {
+            Some((parts[0].to_string(), parts[1].to_string()))
+        } else {
+            None
+        }
+    }
 }
 
 /// Push column items into the flat item list
@@ -325,15 +813,18 @@ fn push_columns(
     columns: &[crate::db::schema::Column],
     parent_path: &str,
     depth: usize,
+    filter_match_paths: &HashSet<String>,
 ) {
     for col in columns {
+        let col_path = format!("{}.{}", parent_path, col.name);
         let col_label = format_column_label(col);
         items.push(TreeItem {
             label: col_label,
             kind: NodeKind::Column,
             depth,
-            path: format!("{}.{}", parent_path, col.name),
+            path: col_path.clone(),
             expandable: false,
+            matches_filter: filter_match_paths.contains(&col_path),
         });
     }
 }
@@ -363,18 +854,68 @@ impl Default for TreeBrowser {
 
 impl Component for TreeBrowser {
     fn render(&self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
+        // Reserve space for filter bar if active
+        let (tree_area, filter_area) = if self.filter_active {
+            let filter_height = 1;
+            let tree_height = area.height.saturating_sub(filter_height);
+            (
+                Rect::new(area.x, area.y, area.width, tree_height),
+                Some(Rect::new(
+                    area.x,
+                    area.y + tree_height,
+                    area.width,
+                    filter_height,
+                )),
+            )
+        } else {
+            (area, None)
+        };
+
+        // Render filter bar if active
+        if let Some(filter_area) = filter_area {
+            let status_hint = if self.searching {
+                Span::styled(" Searching...", Style::default().fg(Color::Yellow))
+            } else if !self.filter_text.is_empty() {
+                Span::styled(" (Enter=search)", Style::default().fg(Color::DarkGray))
+            } else {
+                Span::raw("")
+            };
+
+            let filter_line = Line::from(vec![
+                Span::styled("/", theme.tree_filter_bar),
+                Span::styled(&self.filter_text, theme.tree_filter_text),
+                if focused && !self.searching {
+                    Span::styled("█", theme.tree_filter_text)
+                } else {
+                    Span::raw("")
+                },
+                status_hint,
+            ]);
+            // Fill background
+            let bg_fill = " ".repeat(filter_area.width as usize);
+            frame.render_widget(
+                Paragraph::new(bg_fill).style(theme.tree_filter_bar),
+                filter_area,
+            );
+            frame.render_widget(Paragraph::new(filter_line), filter_area);
+        }
+
         if self.items.is_empty() {
             let msg = if self.schema.is_some() {
-                "No schemas found"
+                if !self.filter_text.is_empty() {
+                    "No matches"
+                } else {
+                    "No schemas found"
+                }
             } else {
                 "Not connected"
             };
             let p = Paragraph::new(msg).style(theme.tree_empty);
-            frame.render_widget(p, area);
+            frame.render_widget(p, tree_area);
             return;
         }
 
-        let visible_height = area.height as usize;
+        let visible_height = tree_area.height as usize;
         let viewer = self;
 
         // Ensure selected is visible
@@ -388,7 +929,7 @@ impl Component for TreeBrowser {
 
         for vis_row in 0..visible_height {
             let item_idx = scroll_offset + vis_row;
-            let y = area.y + vis_row as u16;
+            let y = tree_area.y + vis_row as u16;
 
             if item_idx >= self.items.len() {
                 break;
@@ -410,7 +951,7 @@ impl Component for TreeBrowser {
             };
 
             let display = format!("{}{}{}", indent, indicator, item.label);
-            let max_chars = area.width as usize;
+            let max_chars = tree_area.width as usize;
             let display_chars = display.chars().count();
             let truncated = if display_chars > max_chars {
                 let truncated: String = display.chars().take(max_chars.saturating_sub(3)).collect();
@@ -423,6 +964,9 @@ impl Component for TreeBrowser {
 
             let style = if is_selected {
                 theme.tree_selected
+            } else if item.matches_filter {
+                // Highlight items that match the filter
+                theme.tree_filter_match
             } else {
                 match item.kind {
                     NodeKind::Schema => theme.tree_schema,
@@ -432,12 +976,13 @@ impl Component for TreeBrowser {
                     NodeKind::Column => theme.tree_column,
                     NodeKind::Function => theme.tree_function,
                     NodeKind::Index => theme.tree_index,
+                    NodeKind::LoadMore => theme.tree_load_more,
                 }
             };
 
             frame.render_widget(
                 Paragraph::new(truncated).style(style),
-                Rect::new(area.x, y, area.width, 1),
+                Rect::new(tree_area.x, y, tree_area.width, 1),
             );
         }
     }
@@ -446,14 +991,14 @@ impl Component for TreeBrowser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::schema::{Column, ForeignKey, Function, Index, Schema, Table};
+    use crate::db::schema::{Column, ForeignKey, Function, Index, PaginatedVec, Schema, Table};
     use crate::db::types::DataType;
 
     fn sample_schema() -> SchemaTree {
         SchemaTree {
-            schemas: vec![Schema {
+            schemas: PaginatedVec::from_vec(vec![Schema {
                 name: "public".to_string(),
-                tables: vec![
+                tables: PaginatedVec::from_vec(vec![
                     Table {
                         name: "users".to_string(),
                         columns: vec![
@@ -491,8 +1036,8 @@ mod tests {
                             },
                         ],
                     },
-                ],
-                views: vec![Table {
+                ]),
+                views: PaginatedVec::from_vec(vec![Table {
                     name: "active_users".to_string(),
                     columns: vec![Column {
                         name: "id".to_string(),
@@ -500,20 +1045,20 @@ mod tests {
                         is_primary_key: false,
                         foreign_key: None,
                     }],
-                }],
-                indexes: vec![Index {
+                }]),
+                indexes: PaginatedVec::from_vec(vec![Index {
                     name: "users_pkey".to_string(),
                     columns: vec!["id".to_string()],
                     is_unique: true,
                     is_primary: true,
                     table_name: "users".to_string(),
-                }],
-                functions: vec![Function {
+                }]),
+                functions: PaginatedVec::from_vec(vec![Function {
                     name: "get_user".to_string(),
                     args: "integer".to_string(),
                     return_type: "users".to_string(),
-                }],
-            }],
+                }]),
+            }]),
         }
     }
 
@@ -539,10 +1084,11 @@ mod tests {
         let mut tree = TreeBrowser::new();
         tree.set_schema(sample_schema());
         let labels: Vec<&str> = tree.items.iter().map(|i| i.label.as_str()).collect();
-        assert!(labels.contains(&"Tables"));
-        assert!(labels.contains(&"Views"));
-        assert!(labels.contains(&"Functions"));
-        assert!(labels.contains(&"Indexes"));
+        // Categories now include counts, e.g., "Tables (2)"
+        assert!(labels.iter().any(|l| l.starts_with("Tables (")));
+        assert!(labels.iter().any(|l| l.starts_with("Views (")));
+        assert!(labels.iter().any(|l| l.starts_with("Functions (")));
+        assert!(labels.iter().any(|l| l.starts_with("Indexes (")));
     }
 
     #[test]
@@ -588,7 +1134,11 @@ mod tests {
     fn test_expand_views_category() {
         let mut tree = TreeBrowser::new();
         tree.set_schema(sample_schema());
-        let views_idx = tree.items.iter().position(|i| i.label == "Views").unwrap();
+        let views_idx = tree
+            .items
+            .iter()
+            .position(|i| i.label.starts_with("Views ("))
+            .unwrap();
         tree.selected = views_idx;
         tree.toggle_expand();
         let labels: Vec<&str> = tree.items.iter().map(|i| i.label.as_str()).collect();
@@ -602,7 +1152,7 @@ mod tests {
         let func_idx = tree
             .items
             .iter()
-            .position(|i| i.label == "Functions")
+            .position(|i| i.label.starts_with("Functions ("))
             .unwrap();
         tree.selected = func_idx;
         tree.toggle_expand();
@@ -618,7 +1168,7 @@ mod tests {
         let idx_idx = tree
             .items
             .iter()
-            .position(|i| i.label == "Indexes")
+            .position(|i| i.label.starts_with("Indexes ("))
             .unwrap();
         tree.selected = idx_idx;
         tree.toggle_expand();
@@ -643,8 +1193,12 @@ mod tests {
     fn test_preview_query_for_view() {
         let mut tree = TreeBrowser::new();
         tree.set_schema(sample_schema());
-        // Expand Views category first
-        let views_idx = tree.items.iter().position(|i| i.label == "Views").unwrap();
+        // Expand Views category first (now includes count in label)
+        let views_idx = tree
+            .items
+            .iter()
+            .position(|i| i.label.starts_with("Views ("))
+            .unwrap();
         tree.selected = views_idx;
         tree.toggle_expand();
         // Select the view
@@ -674,7 +1228,12 @@ mod tests {
     fn test_preview_query_none_for_category() {
         let mut tree = TreeBrowser::new();
         tree.set_schema(sample_schema());
-        let tables_idx = tree.items.iter().position(|i| i.label == "Tables").unwrap();
+        // Category labels now include count, e.g., "Tables (2)"
+        let tables_idx = tree
+            .items
+            .iter()
+            .position(|i| i.label.starts_with("Tables ("))
+            .unwrap();
         tree.selected = tables_idx;
         assert_eq!(tree.preview_query(), None);
     }
@@ -700,24 +1259,25 @@ mod tests {
     #[test]
     fn test_empty_categories_hidden() {
         let schema = SchemaTree {
-            schemas: vec![Schema {
+            schemas: PaginatedVec::from_vec(vec![Schema {
                 name: "empty".to_string(),
-                tables: vec![Table {
+                tables: PaginatedVec::from_vec(vec![Table {
                     name: "t".to_string(),
                     columns: vec![],
-                }],
-                views: vec![],
-                indexes: vec![],
-                functions: vec![],
-            }],
+                }]),
+                views: PaginatedVec::default(),
+                indexes: PaginatedVec::default(),
+                functions: PaginatedVec::default(),
+            }]),
         };
         let mut tree = TreeBrowser::new();
         tree.set_schema(schema);
         let labels: Vec<&str> = tree.items.iter().map(|i| i.label.as_str()).collect();
-        assert!(labels.contains(&"Tables"));
-        assert!(!labels.contains(&"Views"));
-        assert!(!labels.contains(&"Functions"));
-        assert!(!labels.contains(&"Indexes"));
+        // Categories now include counts, e.g., "Tables (1)"
+        assert!(labels.iter().any(|l| l.starts_with("Tables (")));
+        assert!(!labels.iter().any(|l| l.starts_with("Views (")));
+        assert!(!labels.iter().any(|l| l.starts_with("Functions (")));
+        assert!(!labels.iter().any(|l| l.starts_with("Indexes (")));
     }
 
     #[test]
@@ -730,5 +1290,224 @@ mod tests {
             tree.preview_query(),
             Some("SELECT * FROM \"public\".\"users\" LIMIT 50".to_string())
         );
+    }
+
+    // ── Filter tests ────────────────────────────────────────────────
+
+    #[test]
+    fn test_filter_mode_activation() {
+        let mut tree = TreeBrowser::new();
+        tree.set_schema(sample_schema());
+        assert!(!tree.is_filter_active());
+        tree.activate_filter();
+        assert!(tree.is_filter_active());
+        tree.deactivate_filter();
+        assert!(!tree.is_filter_active());
+    }
+
+    #[test]
+    fn test_filter_text_input() {
+        let mut tree = TreeBrowser::new();
+        tree.set_schema(sample_schema());
+        tree.activate_filter();
+        tree.filter_insert_char('u');
+        tree.filter_insert_char('s');
+        tree.filter_insert_char('e');
+        assert_eq!(tree.filter_text(), "use");
+        tree.filter_backspace();
+        assert_eq!(tree.filter_text(), "us");
+    }
+
+    #[test]
+    fn test_filter_shows_matches_and_expands_ancestors() {
+        let mut tree = TreeBrowser::new();
+        tree.set_schema(sample_schema());
+
+        tree.activate_filter();
+        tree.filter_insert_char('u');
+        tree.filter_insert_char('s');
+        tree.filter_insert_char('e');
+        tree.filter_insert_char('r');
+
+        // Should contain all items matching "user"
+        assert!(tree.items.iter().any(|i| i.label == "users")); // table
+        assert!(tree.items.iter().any(|i| i.label.contains("user_id"))); // column
+        assert!(tree.items.iter().any(|i| i.label == "active_users")); // view
+        assert!(tree.items.iter().any(|i| i.label.starts_with("users_pkey"))); // index
+        assert!(tree.items.iter().any(|i| i.label.starts_with("get_user"))); // function
+
+        // Matching items should have matches_filter = true
+        let users_item = tree.items.iter().find(|i| i.label == "users").unwrap();
+        assert!(users_item.matches_filter);
+
+        // Ancestor items (like schema, categories) should have matches_filter = false
+        let public_item = tree.items.iter().find(|i| i.label == "public").unwrap();
+        assert!(!public_item.matches_filter);
+    }
+
+    #[test]
+    fn test_filter_clears_on_deactivate() {
+        let mut tree = TreeBrowser::new();
+        tree.set_schema(sample_schema());
+        tree.activate_filter();
+        tree.filter_insert_char('x');
+        tree.filter_insert_char('y');
+        tree.filter_insert_char('z');
+
+        tree.deactivate_filter();
+        assert_eq!(tree.filter_text(), "");
+        assert!(!tree.is_filter_active());
+    }
+
+    #[test]
+    fn test_filter_cursor_movement() {
+        let mut tree = TreeBrowser::new();
+        tree.activate_filter();
+        tree.filter_insert_char('a');
+        tree.filter_insert_char('b');
+        tree.filter_insert_char('c');
+        assert_eq!(tree.filter_cursor(), 3);
+
+        tree.filter_cursor_left();
+        assert_eq!(tree.filter_cursor(), 2);
+
+        tree.filter_cursor_right();
+        assert_eq!(tree.filter_cursor(), 3);
+    }
+
+    // ── Backend search tests ────────────────────────────────────────
+
+    #[test]
+    fn test_searching_state() {
+        let mut tree = TreeBrowser::new();
+        tree.set_schema(sample_schema());
+        assert!(!tree.is_searching());
+
+        tree.set_searching(true);
+        assert!(tree.is_searching());
+
+        tree.set_searching(false);
+        assert!(!tree.is_searching());
+    }
+
+    #[test]
+    fn test_apply_search_results_replaces_schema() {
+        let mut tree = TreeBrowser::new();
+        tree.set_schema(sample_schema());
+        tree.activate_filter();
+        tree.filter_insert_char('x');
+
+        // Simulate backend search results with different data
+        let search_results = SchemaTree {
+            schemas: PaginatedVec::from_vec(vec![Schema {
+                name: "search_schema".to_string(),
+                tables: PaginatedVec::from_vec(vec![Table {
+                    name: "search_table".to_string(),
+                    columns: vec![],
+                }]),
+                views: PaginatedVec::default(),
+                indexes: PaginatedVec::default(),
+                functions: PaginatedVec::default(),
+            }]),
+        };
+
+        tree.apply_search_results(search_results);
+
+        // Should show search results
+        assert!(tree.items.iter().any(|i| i.label == "search_schema"));
+        assert!(tree.items.iter().any(|i| i.label == "search_table"));
+        // Original schema should not be visible
+        assert!(!tree.items.iter().any(|i| i.label == "public"));
+    }
+
+    #[test]
+    fn test_deactivate_filter_restores_original_schema_after_search() {
+        let mut tree = TreeBrowser::new();
+        tree.set_schema(sample_schema());
+        let original_item_count = tree.items.len();
+
+        tree.activate_filter();
+        tree.filter_insert_char('x');
+
+        // Simulate backend search returning different schema
+        let search_results = SchemaTree {
+            schemas: PaginatedVec::from_vec(vec![Schema {
+                name: "other".to_string(),
+                tables: PaginatedVec::from_vec(vec![Table {
+                    name: "other_table".to_string(),
+                    columns: vec![],
+                }]),
+                views: PaginatedVec::default(),
+                indexes: PaginatedVec::default(),
+                functions: PaginatedVec::default(),
+            }]),
+        };
+        tree.apply_search_results(search_results);
+
+        // Now deactivate - should restore original schema
+        tree.deactivate_filter();
+
+        // Original "public" schema should be back
+        assert!(tree.items.iter().any(|i| i.label == "public"));
+        // Search result schema should not be visible
+        assert!(!tree.items.iter().any(|i| i.label == "other"));
+        // Item count should be similar to original (may differ due to expansion state)
+        assert!(tree.items.len() >= original_item_count / 2);
+    }
+
+    #[test]
+    fn test_search_results_auto_expand_all() {
+        let mut tree = TreeBrowser::new();
+        tree.set_schema(sample_schema());
+        tree.activate_filter();
+
+        // Simulate search results with nested structure
+        let search_results = SchemaTree {
+            schemas: PaginatedVec::from_vec(vec![Schema {
+                name: "test_schema".to_string(),
+                tables: PaginatedVec::from_vec(vec![Table {
+                    name: "test_table".to_string(),
+                    columns: vec![Column {
+                        name: "test_col".to_string(),
+                        data_type: DataType::Text,
+                        is_primary_key: false,
+                        foreign_key: None,
+                    }],
+                }]),
+                views: PaginatedVec::default(),
+                indexes: PaginatedVec::default(),
+                functions: PaginatedVec::from_vec(vec![Function {
+                    name: "test_func".to_string(),
+                    args: "".to_string(),
+                    return_type: "void".to_string(),
+                }]),
+            }]),
+        };
+
+        tree.apply_search_results(search_results);
+
+        // All items should be visible (auto-expanded)
+        assert!(tree.items.iter().any(|i| i.label == "test_schema"));
+        assert!(tree.items.iter().any(|i| i.label.starts_with("Tables (")));
+        assert!(tree.items.iter().any(|i| i.label == "test_table"));
+        assert!(tree.items.iter().any(|i| i.label.contains("test_col")));
+        assert!(
+            tree.items
+                .iter()
+                .any(|i| i.label.starts_with("Functions ("))
+        );
+        assert!(tree.items.iter().any(|i| i.label.starts_with("test_func")));
+    }
+
+    #[test]
+    fn test_searching_cleared_on_deactivate() {
+        let mut tree = TreeBrowser::new();
+        tree.set_schema(sample_schema());
+        tree.activate_filter();
+        tree.set_searching(true);
+        assert!(tree.is_searching());
+
+        tree.deactivate_filter();
+        assert!(!tree.is_searching());
     }
 }

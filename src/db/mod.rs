@@ -22,6 +22,12 @@ pub trait Database: Send + Sync {
         max_rows: usize,
     ) -> impl std::future::Future<Output = DbResult<QueryResults>> + Send;
     fn get_schema(&self) -> impl std::future::Future<Output = DbResult<SchemaTree>> + Send;
+    /// Search schema objects by name pattern (case-insensitive substring match).
+    /// Returns a SchemaTree containing only matching objects and their containers.
+    fn search_schema(
+        &self,
+        pattern: &str,
+    ) -> impl std::future::Future<Output = DbResult<SchemaTree>> + Send;
 }
 
 // Compile-time assertion: PostgresProvider must implement Database + Send + Sync

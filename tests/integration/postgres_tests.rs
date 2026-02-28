@@ -517,3 +517,111 @@ async fn test_row_limiting_zero_means_unlimited() {
         "Unlimited query should never be truncated"
     );
 }
+
+#[tokio::test]
+async fn test_search_schema_finds_tables() {
+    let config = test_config();
+    let provider = match PostgresProvider::connect(&config).await {
+        Ok((p, _)) => p,
+        Err(_) => {
+            eprintln!("Skipping test: Database not available");
+            return;
+        }
+    };
+
+    // Search for "user" should find the users table
+    let results = provider.search_schema("user").await;
+    assert!(
+        results.is_ok(),
+        "Search should succeed: {:?}",
+        results.err()
+    );
+
+    let schema_tree = results.unwrap();
+    assert!(
+        !schema_tree.schemas.is_empty(),
+        "Should find matching schemas"
+    );
+
+    // Find public schema
+    let public = schema_tree.schemas.iter().find(|s| s.name == "public");
+    assert!(public.is_some(), "Should find public schema");
+
+    let public = public.unwrap();
+    // Should find 'users' table
+    assert!(
+        public.tables.iter().any(|t| t.name == "users"),
+        "Should find users table"
+    );
+}
+
+#[tokio::test]
+async fn test_search_schema_finds_columns() {
+    let config = test_config();
+    let provider = match PostgresProvider::connect(&config).await {
+        Ok((p, _)) => p,
+        Err(_) => {
+            eprintln!("Skipping test: Database not available");
+            return;
+        }
+    };
+
+    // Search for "email" should find tables with email columns
+    let results = provider.search_schema("email").await;
+    assert!(results.is_ok(), "Search should succeed");
+
+    let schema_tree = results.unwrap();
+    // Should find tables that have 'email' column
+    let has_email_col = schema_tree.schemas.iter().any(|s| {
+        s.tables.iter().any(|t| {
+            t.columns
+                .iter()
+                .any(|c| c.name.to_lowercase().contains("email"))
+        })
+    });
+    assert!(has_email_col, "Should find tables with email column");
+}
+
+#[tokio::test]
+async fn test_search_schema_no_results() {
+    let config = test_config();
+    let provider = match PostgresProvider::connect(&config).await {
+        Ok((p, _)) => p,
+        Err(_) => {
+            eprintln!("Skipping test: Database not available");
+            return;
+        }
+    };
+
+    // Search for something that doesn't exist
+    let results = provider.search_schema("xyzzyznonexistent12345").await;
+    assert!(
+        results.is_ok(),
+        "Search should succeed even with no results"
+    );
+
+    let schema_tree = results.unwrap();
+    assert!(
+        schema_tree.schemas.is_empty(),
+        "Should find no matching schemas"
+    );
+}
+
+#[tokio::test]
+async fn test_search_schema_special_characters() {
+    let config = test_config();
+    let provider = match PostgresProvider::connect(&config).await {
+        Ok((p, _)) => p,
+        Err(_) => {
+            eprintln!("Skipping test: Database not available");
+            return;
+        }
+    };
+
+    // Search with special LIKE characters should not cause errors
+    let results = provider.search_schema("%_\\").await;
+    assert!(
+        results.is_ok(),
+        "Search with special chars should not error"
+    );
+}
