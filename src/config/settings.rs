@@ -27,6 +27,8 @@ pub struct SettingsInner {
     pub max_tabs: usize,
     #[serde(default = "default_history_size")]
     pub history_size: usize,
+    #[serde(default = "default_query_timeout_ms")]
+    pub query_timeout_ms: u64,
 }
 
 /// Keybinding overrides organized by panel context
@@ -54,12 +56,17 @@ fn default_history_size() -> usize {
     500
 }
 
+fn default_query_timeout_ms() -> u64 {
+    30000 // 30 seconds, 0 = disabled
+}
+
 impl Default for SettingsInner {
     fn default() -> Self {
         Self {
             preview_rows: default_preview_rows(),
             max_tabs: default_max_tabs(),
             history_size: default_history_size(),
+            query_timeout_ms: default_query_timeout_ms(),
         }
     }
 }
@@ -131,6 +138,7 @@ const DEFAULT_CONFIG_TEMPLATE: &str = r#"# vizgres configuration
 # preview_rows = 100
 # max_tabs = 5
 # history_size = 500
+# query_timeout_ms = 30000  # 30 seconds, 0 = disabled
 
 [keybindings.global]
 # "ctrl+q" = "quit"
@@ -179,6 +187,7 @@ mod tests {
         assert_eq!(settings.settings.preview_rows, 100);
         assert_eq!(settings.settings.max_tabs, 5);
         assert_eq!(settings.settings.history_size, 500);
+        assert_eq!(settings.settings.query_timeout_ms, 30000);
         assert!(settings.keybindings.global.is_empty());
         assert!(settings.keybindings.editor.is_empty());
         assert!(settings.keybindings.results.is_empty());
@@ -203,6 +212,7 @@ preview_rows = 50
         assert_eq!(settings.settings.preview_rows, 100);
         assert_eq!(settings.settings.max_tabs, 5);
         assert_eq!(settings.settings.history_size, 500);
+        assert_eq!(settings.settings.query_timeout_ms, 30000);
     }
 
     #[test]
@@ -247,5 +257,25 @@ history_size = 1000
         // The template with comments should be parseable (comments are ignored)
         let result: Result<Settings, _> = toml::from_str(DEFAULT_CONFIG_TEMPLATE);
         assert!(result.is_ok(), "Template should be valid TOML");
+    }
+
+    #[test]
+    fn test_custom_query_timeout() {
+        let toml_str = r#"
+[settings]
+query_timeout_ms = 5000
+"#;
+        let settings: Settings = toml::from_str(toml_str).unwrap();
+        assert_eq!(settings.settings.query_timeout_ms, 5000);
+    }
+
+    #[test]
+    fn test_zero_query_timeout_disables() {
+        let toml_str = r#"
+[settings]
+query_timeout_ms = 0
+"#;
+        let settings: Settings = toml::from_str(toml_str).unwrap();
+        assert_eq!(settings.settings.query_timeout_ms, 0);
     }
 }

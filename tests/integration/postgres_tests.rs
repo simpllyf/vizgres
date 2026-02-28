@@ -56,7 +56,7 @@ async fn test_execute_simple_query() {
     };
 
     let results = provider
-        .execute_query("SELECT 1 as num, 'hello' as msg")
+        .execute_query("SELECT 1 as num, 'hello' as msg", 0)
         .await;
     assert!(results.is_ok(), "Query should succeed");
 
@@ -91,7 +91,7 @@ async fn test_query_users_table() {
     };
 
     let results = provider
-        .execute_query("SELECT id, name, email, active FROM users ORDER BY id")
+        .execute_query("SELECT id, name, email, active FROM users ORDER BY id", 0)
         .await;
     assert!(results.is_ok(), "Query should succeed: {:?}", results.err());
 
@@ -123,7 +123,10 @@ async fn test_query_json_data() {
     };
 
     let results = provider
-        .execute_query("SELECT name, metadata FROM users WHERE metadata IS NOT NULL ORDER BY id")
+        .execute_query(
+            "SELECT name, metadata FROM users WHERE metadata IS NOT NULL ORDER BY id",
+            0,
+        )
         .await;
     assert!(results.is_ok(), "Query should succeed");
 
@@ -152,7 +155,7 @@ async fn test_query_null_values() {
     };
 
     let results = provider
-        .execute_query("SELECT name, metadata FROM users WHERE metadata IS NULL")
+        .execute_query("SELECT name, metadata FROM users WHERE metadata IS NULL", 0)
         .await;
     assert!(results.is_ok(), "Query should succeed");
 
@@ -178,7 +181,7 @@ async fn test_query_numeric_types() {
     };
 
     let results = provider
-        .execute_query("SELECT id, amount FROM orders ORDER BY id LIMIT 1")
+        .execute_query("SELECT id, amount FROM orders ORDER BY id LIMIT 1", 0)
         .await;
     assert!(results.is_ok(), "Query should succeed");
 
@@ -215,7 +218,7 @@ async fn test_query_timestamps() {
     };
 
     let results = provider
-        .execute_query("SELECT created_at FROM users LIMIT 1")
+        .execute_query("SELECT created_at FROM users LIMIT 1", 0)
         .await;
     assert!(results.is_ok(), "Query should succeed");
 
@@ -299,7 +302,7 @@ async fn test_invalid_query() {
     };
 
     let results = provider
-        .execute_query("SELECT * FROM nonexistent_table")
+        .execute_query("SELECT * FROM nonexistent_table", 0)
         .await;
     assert!(results.is_err(), "Invalid query should return error");
 }
@@ -361,7 +364,10 @@ async fn test_query_array_types() {
     };
 
     let results = provider
-        .execute_query("SELECT name, tags FROM products WHERE tags IS NOT NULL ORDER BY id LIMIT 1")
+        .execute_query(
+            "SELECT name, tags FROM products WHERE tags IS NOT NULL ORDER BY id LIMIT 1",
+            0,
+        )
         .await;
     assert!(results.is_ok(), "Query should succeed: {:?}", results.err());
 
@@ -391,7 +397,7 @@ async fn test_query_aggregation_numeric() {
     };
 
     let results = provider
-        .execute_query("SELECT SUM(amount) as total FROM orders")
+        .execute_query("SELECT SUM(amount) as total FROM orders", 0)
         .await;
     assert!(
         results.is_ok(),

@@ -36,8 +36,8 @@
 //! // Connect to database
 //! let (provider, _conn_err_rx) = PostgresProvider::connect(&config).await?;
 //!
-//! // Execute a query
-//! let results = provider.execute_query("SELECT * FROM users").await?;
+//! // Execute a query (0 = no timeout)
+//! let results = provider.execute_query("SELECT * FROM users", 0).await?;
 //! println!("Got {} rows", results.row_count);
 //!
 //! // Load schema

@@ -53,10 +53,9 @@ pub enum DbError {
     #[error("Not connected to database")]
     NotConnected,
 
-    /// Operation timed out (reserved for future use)
-    #[allow(dead_code)]
-    #[error("Operation timed out")]
-    Timeout,
+    /// Query timed out after configured duration (stores milliseconds)
+    #[error("Query timed out after {0}ms")]
+    Timeout(u64),
 
     /// Type conversion error (reserved for future use)
     #[allow(dead_code)]
