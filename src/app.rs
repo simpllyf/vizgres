@@ -166,6 +166,8 @@ pub enum Action {
     CancelQuery,
     LoadSchema,
     Connect(ConnectionConfig),
+    /// Signal to clear provider and show reconnect dialog (on connection loss)
+    Disconnect,
     Quit,
     None,
 }
@@ -298,8 +300,9 @@ impl App {
                 Ok(Action::None)
             }
             AppEvent::ConnectionLost(msg) => {
-                self.set_status(msg, StatusLevel::Error);
-                Ok(Action::None)
+                self.set_status(format!("Connection lost: {}", msg), StatusLevel::Error);
+                self.show_connection_dialog();
+                Ok(Action::Disconnect)
             }
         }
     }
@@ -1077,15 +1080,92 @@ mod tests {
     #[test]
     fn test_connection_lost_event() {
         let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+
         let action = app
-            .handle_event(AppEvent::ConnectionLost(
-                "Connection lost: server closed".to_string(),
-            ))
+            .handle_event(AppEvent::ConnectionLost("server closed".to_string()))
             .unwrap();
-        assert!(matches!(action, Action::None));
+
+        // Should return Disconnect action
+        assert!(matches!(action, Action::Disconnect));
+
+        // Connection dialog should be shown
+        assert!(app.connection_dialog.is_visible());
+        assert_eq!(app.focus, PanelFocus::ConnectionDialog);
+
+        // Status message should be set with "Connection lost:" prefix
         let msg = &app.status_message.as_ref().unwrap();
-        assert!(msg.message.contains("Connection lost"));
+        assert!(msg.message.contains("Connection lost:"));
+        assert!(msg.message.contains("server closed"));
         assert_eq!(msg.level, StatusLevel::Error);
+    }
+
+    #[test]
+    fn test_connection_lost_preserves_previous_focus() {
+        let mut app = App::new();
+        app.focus = PanelFocus::ResultsViewer;
+
+        app.handle_event(AppEvent::ConnectionLost("timeout".to_string()))
+            .unwrap();
+
+        // previous_focus should be preserved for when dialog is dismissed
+        assert_eq!(app.previous_focus, PanelFocus::ResultsViewer);
+        assert_eq!(app.focus, PanelFocus::ConnectionDialog);
+    }
+
+    #[test]
+    fn test_connection_lost_while_query_running() {
+        let mut app = App::new();
+        app.tabs[0].query_running = true;
+
+        let action = app
+            .handle_event(AppEvent::ConnectionLost("connection reset".to_string()))
+            .unwrap();
+
+        // Should still return Disconnect and show dialog
+        assert!(matches!(action, Action::Disconnect));
+        assert!(app.connection_dialog.is_visible());
+
+        // Query running flag should still be true (will be cleared when query fails)
+        assert!(app.tabs[0].query_running);
+    }
+
+    #[test]
+    fn test_connection_lost_idempotent() {
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+
+        // First connection loss
+        app.handle_event(AppEvent::ConnectionLost("first error".to_string()))
+            .unwrap();
+        assert!(app.connection_dialog.is_visible());
+        assert_eq!(app.focus, PanelFocus::ConnectionDialog);
+
+        // Second connection loss (should be idempotent)
+        let action = app
+            .handle_event(AppEvent::ConnectionLost("second error".to_string()))
+            .unwrap();
+
+        // Should still work without panic
+        assert!(matches!(action, Action::Disconnect));
+        assert!(app.connection_dialog.is_visible());
+
+        // Status message should reflect the latest error
+        let msg = &app.status_message.as_ref().unwrap();
+        assert!(msg.message.contains("second error"));
+    }
+
+    #[test]
+    fn test_connection_lost_from_tree_browser() {
+        let mut app = App::new();
+        app.focus = PanelFocus::TreeBrowser;
+
+        app.handle_event(AppEvent::ConnectionLost("server shutdown".to_string()))
+            .unwrap();
+
+        assert!(app.connection_dialog.is_visible());
+        assert_eq!(app.focus, PanelFocus::ConnectionDialog);
+        assert_eq!(app.previous_focus, PanelFocus::TreeBrowser);
     }
 
     #[test]
