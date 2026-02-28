@@ -38,8 +38,11 @@ pub enum DbError {
     ConnectionFailed(String),
 
     /// Query execution failed
-    #[error("Query execution failed: {0}")]
-    QueryFailed(String),
+    #[error("Query execution failed: {message}")]
+    QueryFailed {
+        message: String,
+        position: Option<u32>, // byte offset in query
+    },
 
     /// Schema introspection failed
     #[error("Schema loading failed: {0}")]

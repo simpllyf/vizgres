@@ -138,7 +138,11 @@ pub enum AppEvent {
         tab_id: usize,
     },
     /// Query execution failed
-    QueryFailed { error: String, tab_id: usize },
+    QueryFailed {
+        error: String,
+        position: Option<u32>, // byte offset in query
+        tab_id: usize,
+    },
     /// Schema loaded successfully
     SchemaLoaded(SchemaTree),
     /// Schema loading failed
@@ -238,11 +242,23 @@ impl App {
                 );
                 Ok(Action::None)
             }
-            AppEvent::QueryFailed { error, tab_id } => {
+            AppEvent::QueryFailed {
+                error,
+                position,
+                tab_id,
+            } => {
                 let cancelled = error.contains("canceling statement due to user request");
                 if let Some(idx) = self.tab_index_by_id(tab_id) {
                     self.tabs[idx].query_running = false;
                     self.tabs[idx].results_viewer.set_error(error);
+
+                    // Jump cursor to error position if available
+                    if let Some(pos) = position {
+                        let content = self.tabs[idx].editor.get_content();
+                        let (line, col) = byte_offset_to_position(&content, pos);
+                        self.tabs[idx].editor.set_cursor_position(line, col);
+                    }
+
                     if idx == self.active_tab {
                         self.focus = PanelFocus::ResultsViewer;
                     }
@@ -955,6 +971,26 @@ impl Default for App {
     }
 }
 
+/// Convert a 1-based byte offset (from PostgreSQL error) to (line, col) position.
+/// PostgreSQL positions are 1-indexed, so we subtract 1 to get 0-indexed offset.
+fn byte_offset_to_position(content: &str, offset: u32) -> (usize, usize) {
+    let offset = (offset.saturating_sub(1)) as usize; // Convert 1-indexed to 0-indexed
+    let mut line = 0;
+    let mut col = 0;
+    for (i, ch) in content.char_indices() {
+        if i >= offset {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            col = 0;
+        } else {
+            col += 1;
+        }
+    }
+    (line, col)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1190,6 +1226,7 @@ mod tests {
 
         app.handle_event(AppEvent::QueryFailed {
             error: "some error".to_string(),
+            position: None,
             tab_id: 0,
         })
         .unwrap();
@@ -1203,6 +1240,7 @@ mod tests {
 
         app.handle_event(AppEvent::QueryFailed {
             error: "ERROR: canceling statement due to user request".to_string(),
+            position: None,
             tab_id: 0,
         })
         .unwrap();
@@ -1817,5 +1855,87 @@ mod tests {
         assert!(matches!(action, Action::None));
         // Still in ConnectionDialog focus
         assert_eq!(app.focus, PanelFocus::ConnectionDialog);
+    }
+
+    // ── byte_offset_to_position tests ───────────────────────────
+
+    #[test]
+    fn test_byte_offset_single_line() {
+        // PostgreSQL positions are 1-indexed, offset 6 points to char index 5
+        let content = "SELECT * FROM foo";
+        let (line, col) = super::byte_offset_to_position(content, 6);
+        assert_eq!((line, col), (0, 5));
+    }
+
+    #[test]
+    fn test_byte_offset_multiline() {
+        // "SELECT\nFROM" - offset 8 (1-indexed) is 'F' in FROM
+        let content = "SELECT\nFROM";
+        let (line, col) = super::byte_offset_to_position(content, 8);
+        assert_eq!((line, col), (1, 0));
+    }
+
+    #[test]
+    fn test_byte_offset_at_newline() {
+        // offset 7 (1-indexed) is the newline character itself
+        let content = "SELECT\nFROM";
+        let (line, col) = super::byte_offset_to_position(content, 7);
+        assert_eq!((line, col), (0, 6));
+    }
+
+    #[test]
+    fn test_byte_offset_beyond_content() {
+        // offset beyond content length should clamp to end
+        let content = "SELECT";
+        let (line, col) = super::byte_offset_to_position(content, 100);
+        assert_eq!((line, col), (0, 6));
+    }
+
+    #[test]
+    fn test_byte_offset_at_start() {
+        // offset 1 (1-indexed) is the first character
+        let content = "SELECT";
+        let (line, col) = super::byte_offset_to_position(content, 1);
+        assert_eq!((line, col), (0, 0));
+    }
+
+    #[test]
+    fn test_query_failed_with_position_moves_cursor() {
+        let mut app = App::new();
+        app.tabs[0]
+            .editor
+            .set_content("SELEC * FROM foo".to_string());
+        app.tabs[0].query_running = true;
+
+        // Position 6 (1-indexed) points to the space after "SELEC"
+        app.handle_event(AppEvent::QueryFailed {
+            error: "syntax error".to_string(),
+            position: Some(6),
+            tab_id: 0,
+        })
+        .unwrap();
+
+        assert_eq!(app.tabs[0].editor.cursor(), (0, 5));
+    }
+
+    #[test]
+    fn test_query_failed_without_position_no_cursor_move() {
+        let mut app = App::new();
+        app.tabs[0]
+            .editor
+            .set_content("SELECT * FROM foo".to_string());
+        // Move cursor to end
+        app.tabs[0].editor.set_cursor_position(0, 17);
+        app.tabs[0].query_running = true;
+
+        app.handle_event(AppEvent::QueryFailed {
+            error: "connection error".to_string(),
+            position: None,
+            tab_id: 0,
+        })
+        .unwrap();
+
+        // Cursor should remain at end
+        assert_eq!(app.tabs[0].editor.cursor(), (0, 17));
     }
 }
