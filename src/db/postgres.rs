@@ -478,7 +478,10 @@ impl PostgresProvider {
         &self,
         schema_name: &str,
         table_names: &[String],
-    ) -> DbResult<(HashSet<(String, String)>, HashMap<(String, String), ForeignKey>)> {
+    ) -> DbResult<(
+        HashSet<(String, String)>,
+        HashMap<(String, String), ForeignKey>,
+    )> {
         let map_err =
             |e: tokio_postgres::Error| crate::error::DbError::SchemaLoadFailed(e.to_string());
 
@@ -965,16 +968,28 @@ impl PostgresProvider {
         limit: usize,
     ) -> DbResult<Vec<Table>> {
         // Phase 1: Get table names with offset/limit
-        let table_names = self.load_relation_names(schema_name, "r", offset, limit).await?;
+        let table_names = self
+            .load_relation_names(schema_name, "r", offset, limit)
+            .await?;
         if table_names.is_empty() {
             return Ok(Vec::new());
         }
 
         // Phase 2: Get columns and constraints for those tables
-        let columns = self.load_columns_for_relations(schema_name, &table_names).await?;
-        let (pk_set, fk_map) = self.load_constraints_for_tables(schema_name, &table_names).await?;
+        let columns = self
+            .load_columns_for_relations(schema_name, &table_names)
+            .await?;
+        let (pk_set, fk_map) = self
+            .load_constraints_for_tables(schema_name, &table_names)
+            .await?;
 
-        Ok(assemble_tables(schema_name, table_names, columns, pk_set, fk_map))
+        Ok(assemble_tables(
+            schema_name,
+            table_names,
+            columns,
+            pk_set,
+            fk_map,
+        ))
     }
 
     /// Load more views for a specific schema with offset and limit.
@@ -986,13 +1001,17 @@ impl PostgresProvider {
         limit: usize,
     ) -> DbResult<Vec<Table>> {
         // Phase 1: Get view names with offset/limit
-        let view_names = self.load_relation_names(schema_name, "v,m", offset, limit).await?;
+        let view_names = self
+            .load_relation_names(schema_name, "v,m", offset, limit)
+            .await?;
         if view_names.is_empty() {
             return Ok(Vec::new());
         }
 
         // Phase 2: Get columns for those views (views don't have PK/FK)
-        let columns = self.load_columns_for_relations(schema_name, &view_names).await?;
+        let columns = self
+            .load_columns_for_relations(schema_name, &view_names)
+            .await?;
 
         Ok(assemble_tables(
             schema_name,
@@ -1011,7 +1030,8 @@ impl PostgresProvider {
         offset: usize,
         limit: usize,
     ) -> DbResult<Vec<Function>> {
-        self.load_functions_limited(schema_name, offset, limit).await
+        self.load_functions_limited(schema_name, offset, limit)
+            .await
     }
 
     /// Load more indexes for a specific schema with offset and limit.
