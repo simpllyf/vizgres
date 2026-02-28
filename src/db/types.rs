@@ -16,6 +16,8 @@ pub struct QueryResults {
     pub execution_time: Duration,
     /// Total row count (may differ from rows.len() if limited)
     pub row_count: usize,
+    /// Whether results were truncated due to row limit
+    pub truncated: bool,
 }
 
 impl QueryResults {
@@ -36,6 +38,29 @@ impl QueryResults {
             rows,
             execution_time,
             row_count,
+            truncated: false,
+        }
+    }
+
+    /// Create a new QueryResults with truncation flag.
+    pub fn new_truncated(
+        columns: Vec<ColumnDef>,
+        rows: Vec<Row>,
+        execution_time: Duration,
+        row_count: usize,
+        truncated: bool,
+    ) -> Self {
+        debug_assert!(
+            rows.iter().all(|r| r.values.len() == columns.len()),
+            "every row must have exactly as many values as there are columns ({} columns)",
+            columns.len(),
+        );
+        Self {
+            columns,
+            rows,
+            execution_time,
+            row_count,
+            truncated,
         }
     }
 }
