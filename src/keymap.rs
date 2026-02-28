@@ -77,6 +77,7 @@ pub enum KeyAction {
     ToggleExpand,
     Expand,
     Collapse,
+    FilterTree,
 
     // Completion
     NextCompletion,
@@ -317,6 +318,7 @@ pub fn parse_key_action(s: &str) -> Result<KeyAction, String> {
         "toggle_expand" => Ok(KeyAction::ToggleExpand),
         "expand" => Ok(KeyAction::Expand),
         "collapse" => Ok(KeyAction::Collapse),
+        "filter_tree" => Ok(KeyAction::FilterTree),
         "next_completion" => Ok(KeyAction::NextCompletion),
         "prev_completion" => Ok(KeyAction::PrevCompletion),
         "show_help" => Ok(KeyAction::ShowHelp),
@@ -640,6 +642,13 @@ impl Default for KeyMap {
             },
             KeyAction::ShowHelp,
         );
+        tree.insert(
+            KeyBind {
+                code: KeyCode::Char('/'),
+                modifiers: KeyModifiers::NONE,
+            },
+            KeyAction::FilterTree,
+        );
         panels.insert(PanelFocus::TreeBrowser, tree);
 
         // ── Inspector ────────────────────────────────────────────
@@ -943,6 +952,7 @@ mod tests {
         let space = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
         let h = KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE);
         let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        let slash = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE);
         assert_eq!(
             km.resolve(PanelFocus::TreeBrowser, space),
             Some(KeyAction::ToggleExpand)
@@ -954,6 +964,10 @@ mod tests {
         assert_eq!(
             km.resolve(PanelFocus::TreeBrowser, enter),
             Some(KeyAction::Expand)
+        );
+        assert_eq!(
+            km.resolve(PanelFocus::TreeBrowser, slash),
+            Some(KeyAction::FilterTree)
         );
     }
 
