@@ -7,7 +7,7 @@ use crate::completer::{self, Completer};
 use crate::config::ConnectionConfig;
 use crate::config::settings::Settings;
 use crate::db::QueryResults;
-use crate::db::schema::SchemaTree;
+use crate::db::schema::{Function, Index, SchemaTree, Table};
 use crate::error::Result;
 use crate::export::ExportFormat;
 use crate::history::QueryHistory;
@@ -160,10 +160,27 @@ pub enum AppEvent {
     SchemaSearchCompleted(SchemaTree),
     /// Schema search failed
     SchemaSearchFailed(String),
+    /// Load more items completed
+    LoadMoreCompleted {
+        schema_name: String,
+        category: String,
+        items: LoadMoreItems,
+    },
+    /// Load more items failed
+    LoadMoreFailed(String),
     /// Bracketed paste event
     Paste(String),
     /// Background database connection lost
     ConnectionLost(String),
+}
+
+/// Items loaded by load_more operations
+#[derive(Debug)]
+pub enum LoadMoreItems {
+    Tables(Vec<Table>),
+    Views(Vec<Table>),
+    Functions(Vec<Function>),
+    Indexes(Vec<Index>),
 }
 
 /// Actions returned by event handlers for the main loop to execute
@@ -178,6 +195,12 @@ pub enum Action {
     LoadSchema,
     SearchSchema {
         pattern: String,
+    },
+    LoadMoreCategory {
+        schema_name: String,
+        category: String,
+        offset: usize,
+        limit: usize,
     },
     Connect(ConnectionConfig),
     /// Signal to clear provider and show reconnect dialog (on connection loss)
@@ -202,7 +225,10 @@ impl App {
             connection_name: None,
             focus: PanelFocus::QueryEditor,
             previous_focus: PanelFocus::QueryEditor,
-            tree_browser: TreeBrowser::with_preview_rows(settings.settings.preview_rows),
+            tree_browser: TreeBrowser::with_settings(
+                settings.settings.preview_rows,
+                settings.settings.tree_category_limit,
+            ),
             command_bar: CommandBar::new(),
             inspector: Inspector::new(),
             help: HelpOverlay::new(),
@@ -354,6 +380,52 @@ impl App {
             AppEvent::SchemaSearchFailed(err) => {
                 self.tree_browser.set_searching(false);
                 self.set_status(format!("Search failed: {}", err), StatusLevel::Error);
+                Ok(Action::None)
+            }
+            AppEvent::LoadMoreCompleted {
+                schema_name,
+                category,
+                items,
+            } => {
+                match items {
+                    LoadMoreItems::Tables(tables) => {
+                        let count = tables.len();
+                        self.tree_browser.extend_tables(&schema_name, tables);
+                        self.set_status(
+                            format!("Loaded {} more tables", count),
+                            StatusLevel::Success,
+                        );
+                    }
+                    LoadMoreItems::Views(views) => {
+                        let count = views.len();
+                        self.tree_browser.extend_views(&schema_name, views);
+                        self.set_status(
+                            format!("Loaded {} more views", count),
+                            StatusLevel::Success,
+                        );
+                    }
+                    LoadMoreItems::Functions(functions) => {
+                        let count = functions.len();
+                        self.tree_browser.extend_functions(&schema_name, functions);
+                        self.set_status(
+                            format!("Loaded {} more functions", count),
+                            StatusLevel::Success,
+                        );
+                    }
+                    LoadMoreItems::Indexes(indexes) => {
+                        let count = indexes.len();
+                        self.tree_browser.extend_indexes(&schema_name, indexes);
+                        self.set_status(
+                            format!("Loaded {} more indexes", count),
+                            StatusLevel::Success,
+                        );
+                    }
+                }
+                let _ = category; // Used implicitly via items variant
+                Ok(Action::None)
+            }
+            AppEvent::LoadMoreFailed(err) => {
+                self.set_status(format!("Load more failed: {}", err), StatusLevel::Error);
                 Ok(Action::None)
             }
             AppEvent::ConnectionLost(msg) => {
@@ -728,22 +800,40 @@ impl App {
                 Action::None
             }
             KeyAction::Expand => {
-                if self.focus == PanelFocus::TreeBrowser
-                    && let Some(sql) = self.tree_browser.preview_query()
-                {
-                    let tab_id = self.tab().id;
-                    let timeout_ms = self.query_timeout_ms;
-                    let max_rows = self.max_result_rows;
-                    self.tab_mut().editor.set_content(sql.clone());
-                    self.tab_mut().query_running = true;
-                    self.tab_mut().query_start = Some(std::time::Instant::now());
-                    self.set_status("Executing query...".to_string(), StatusLevel::Info);
-                    return Action::ExecuteQuery {
-                        sql,
-                        tab_id,
-                        timeout_ms,
-                        max_rows,
-                    };
+                if self.focus == PanelFocus::TreeBrowser {
+                    // Check if LoadMore is selected - trigger loading more items
+                    if self.tree_browser.is_load_more_selected()
+                        && let Some((schema_name, category)) = self.tree_browser.load_more_info()
+                    {
+                        let offset = self.tree_browser.loaded_count(&schema_name, &category);
+                        let limit = self.tree_browser.category_limit();
+                        self.set_status(
+                            format!("Loading more {}...", category.to_lowercase()),
+                            StatusLevel::Info,
+                        );
+                        return Action::LoadMoreCategory {
+                            schema_name,
+                            category,
+                            offset,
+                            limit,
+                        };
+                    }
+                    // Check if table/view is selected - run preview query
+                    if let Some(sql) = self.tree_browser.preview_query() {
+                        let tab_id = self.tab().id;
+                        let timeout_ms = self.query_timeout_ms;
+                        let max_rows = self.max_result_rows;
+                        self.tab_mut().editor.set_content(sql.clone());
+                        self.tab_mut().query_running = true;
+                        self.tab_mut().query_start = Some(std::time::Instant::now());
+                        self.set_status("Executing query...".to_string(), StatusLevel::Info);
+                        return Action::ExecuteQuery {
+                            sql,
+                            tab_id,
+                            timeout_ms,
+                            max_rows,
+                        };
+                    }
                 }
                 self.tree_browser.expand_current();
                 Action::None
