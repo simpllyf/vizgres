@@ -93,7 +93,13 @@ impl PostgresProvider {
     }
 
     /// Inner query execution logic (without timeout wrapper)
-    async fn execute_query_inner(&self, sql: &str) -> DbResult<QueryResults> {
+    ///
+    /// If `max_rows` is 0, all rows are returned. Otherwise, results are
+    /// limited to `max_rows` and the `truncated` flag is set if more rows
+    /// were available.
+    async fn execute_query_inner(&self, sql: &str, max_rows: usize) -> DbResult<QueryResults> {
+        use futures::TryStreamExt;
+
         let start = std::time::Instant::now();
 
         let stmt = self
@@ -112,25 +118,53 @@ impl PostgresProvider {
             })
             .collect();
 
-        let pg_rows = self
+        // Use streaming to limit memory when max_rows is set
+        let row_stream = self
             .client
-            .query(&stmt, &[])
+            .query_raw(&stmt, std::iter::empty::<i32>())
             .await
             .map_err(extract_query_error)?;
 
-        let row_count = pg_rows.len();
-        let mut rows = Vec::with_capacity(row_count);
+        let mut rows = Vec::new();
+        let mut truncated = false;
 
-        for pg_row in &pg_rows {
+        // Fetch max_rows + 1 to detect if there are more rows
+        let fetch_limit = if max_rows > 0 {
+            max_rows + 1
+        } else {
+            usize::MAX
+        };
+
+        futures::pin_mut!(row_stream);
+        while let Some(pg_row) = row_stream.try_next().await.map_err(extract_query_error)? {
+            if rows.len() >= fetch_limit {
+                // We've fetched enough to know there are more rows
+                truncated = true;
+                break;
+            }
+
             let mut values = Vec::with_capacity(columns.len());
             for (i, col_def) in columns.iter().enumerate() {
-                let value = extract_cell_value(pg_row, i, &col_def.data_type);
+                let value = extract_cell_value(&pg_row, i, &col_def.data_type);
                 values.push(value);
             }
             rows.push(Row { values });
         }
 
-        Ok(QueryResults::new(columns, rows, start.elapsed(), row_count))
+        // If we fetched max_rows + 1, truncate to max_rows
+        if max_rows > 0 && rows.len() > max_rows {
+            truncated = true;
+            rows.truncate(max_rows);
+        }
+
+        let row_count = rows.len();
+        Ok(QueryResults::new_truncated(
+            columns,
+            rows,
+            start.elapsed(),
+            row_count,
+            truncated,
+        ))
     }
 
     /// Inner schema loading logic
@@ -378,8 +412,13 @@ impl PostgresProvider {
 }
 
 impl Database for PostgresProvider {
-    async fn execute_query(&self, sql: &str, timeout_ms: u64) -> DbResult<QueryResults> {
-        let query_future = self.execute_query_inner(sql);
+    async fn execute_query(
+        &self,
+        sql: &str,
+        timeout_ms: u64,
+        max_rows: usize,
+    ) -> DbResult<QueryResults> {
+        let query_future = self.execute_query_inner(sql, max_rows);
 
         if timeout_ms == 0 {
             query_future.await

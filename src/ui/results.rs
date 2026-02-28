@@ -339,10 +339,12 @@ impl Component for ResultsViewer {
 
         // Footer with row count and timing
         let footer_y = area.y + area.height - 1;
+        let truncated_suffix = if results.truncated { "+" } else { "" };
         let footer = format!(
-            "Row {}/{} | Col {}/{} | {:.1}ms",
+            "Row {}/{}{} | Col {}/{} | {:.1}ms",
             viewer.selected_row + 1,
             results.row_count,
+            truncated_suffix,
             viewer.selected_col + 1,
             results.columns.len(),
             results.execution_time.as_secs_f64() * 1000.0,

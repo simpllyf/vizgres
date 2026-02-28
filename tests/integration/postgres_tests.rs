@@ -56,7 +56,7 @@ async fn test_execute_simple_query() {
     };
 
     let results = provider
-        .execute_query("SELECT 1 as num, 'hello' as msg", 0)
+        .execute_query("SELECT 1 as num, 'hello' as msg", 0, 0)
         .await;
     assert!(results.is_ok(), "Query should succeed");
 
@@ -91,7 +91,11 @@ async fn test_query_users_table() {
     };
 
     let results = provider
-        .execute_query("SELECT id, name, email, active FROM users ORDER BY id", 0)
+        .execute_query(
+            "SELECT id, name, email, active FROM users ORDER BY id",
+            0,
+            0,
+        )
         .await;
     assert!(results.is_ok(), "Query should succeed: {:?}", results.err());
 
@@ -126,6 +130,7 @@ async fn test_query_json_data() {
         .execute_query(
             "SELECT name, metadata FROM users WHERE metadata IS NOT NULL ORDER BY id",
             0,
+            0,
         )
         .await;
     assert!(results.is_ok(), "Query should succeed");
@@ -155,7 +160,11 @@ async fn test_query_null_values() {
     };
 
     let results = provider
-        .execute_query("SELECT name, metadata FROM users WHERE metadata IS NULL", 0)
+        .execute_query(
+            "SELECT name, metadata FROM users WHERE metadata IS NULL",
+            0,
+            0,
+        )
         .await;
     assert!(results.is_ok(), "Query should succeed");
 
@@ -181,7 +190,7 @@ async fn test_query_numeric_types() {
     };
 
     let results = provider
-        .execute_query("SELECT id, amount FROM orders ORDER BY id LIMIT 1", 0)
+        .execute_query("SELECT id, amount FROM orders ORDER BY id LIMIT 1", 0, 0)
         .await;
     assert!(results.is_ok(), "Query should succeed");
 
@@ -218,7 +227,7 @@ async fn test_query_timestamps() {
     };
 
     let results = provider
-        .execute_query("SELECT created_at FROM users LIMIT 1", 0)
+        .execute_query("SELECT created_at FROM users LIMIT 1", 0, 0)
         .await;
     assert!(results.is_ok(), "Query should succeed");
 
@@ -302,7 +311,7 @@ async fn test_invalid_query() {
     };
 
     let results = provider
-        .execute_query("SELECT * FROM nonexistent_table", 0)
+        .execute_query("SELECT * FROM nonexistent_table", 0, 0)
         .await;
     assert!(results.is_err(), "Invalid query should return error");
 }
@@ -367,6 +376,7 @@ async fn test_query_array_types() {
         .execute_query(
             "SELECT name, tags FROM products WHERE tags IS NOT NULL ORDER BY id LIMIT 1",
             0,
+            0,
         )
         .await;
     assert!(results.is_ok(), "Query should succeed: {:?}", results.err());
@@ -397,7 +407,7 @@ async fn test_query_aggregation_numeric() {
     };
 
     let results = provider
-        .execute_query("SELECT SUM(amount) as total FROM orders", 0)
+        .execute_query("SELECT SUM(amount) as total FROM orders", 0, 0)
         .await;
     assert!(
         results.is_ok(),
@@ -418,4 +428,92 @@ async fn test_query_aggregation_numeric() {
         }
         other => panic!("Expected Text for SUM(numeric), got {:?}", other),
     }
+}
+
+#[tokio::test]
+async fn test_row_limiting_truncates_results() {
+    let config = test_config();
+    let provider = match PostgresProvider::connect(&config).await {
+        Ok((p, _)) => p,
+        Err(_) => {
+            eprintln!("Skipping test: Database not available");
+            return;
+        }
+    };
+
+    // First, get all users to know the total count
+    let all_results = provider
+        .execute_query("SELECT id FROM users ORDER BY id", 0, 0)
+        .await
+        .unwrap();
+    let total_users = all_results.row_count;
+    assert!(
+        total_users >= 4,
+        "Should have at least 4 users for this test"
+    );
+    assert!(
+        !all_results.truncated,
+        "Unlimited query should not be truncated"
+    );
+
+    // Now query with a limit smaller than total users
+    let limited_results = provider
+        .execute_query("SELECT id FROM users ORDER BY id", 0, 2)
+        .await
+        .unwrap();
+
+    assert_eq!(limited_results.row_count, 2, "Should return exactly 2 rows");
+    assert_eq!(limited_results.rows.len(), 2, "Should have 2 rows in vec");
+    assert!(
+        limited_results.truncated,
+        "Results should be marked as truncated"
+    );
+}
+
+#[tokio::test]
+async fn test_row_limiting_no_truncation_when_within_limit() {
+    let config = test_config();
+    let provider = match PostgresProvider::connect(&config).await {
+        Ok((p, _)) => p,
+        Err(_) => {
+            eprintln!("Skipping test: Database not available");
+            return;
+        }
+    };
+
+    // Query with a limit larger than expected results
+    let results = provider
+        .execute_query("SELECT id FROM users ORDER BY id LIMIT 2", 0, 1000)
+        .await
+        .unwrap();
+
+    assert_eq!(results.row_count, 2, "Should return 2 rows");
+    assert!(
+        !results.truncated,
+        "Results should not be truncated when within limit"
+    );
+}
+
+#[tokio::test]
+async fn test_row_limiting_zero_means_unlimited() {
+    let config = test_config();
+    let provider = match PostgresProvider::connect(&config).await {
+        Ok((p, _)) => p,
+        Err(_) => {
+            eprintln!("Skipping test: Database not available");
+            return;
+        }
+    };
+
+    // Query all users with max_rows=0 (unlimited)
+    let results = provider
+        .execute_query("SELECT id FROM users", 0, 0)
+        .await
+        .unwrap();
+
+    assert!(results.row_count >= 4, "Should have all users");
+    assert!(
+        !results.truncated,
+        "Unlimited query should never be truncated"
+    );
 }

@@ -208,6 +208,15 @@ fn print_config_list() -> Result<()> {
             defaults.settings.query_timeout_ms
         ),
     );
+    println!(
+        "  {:<20} {:<8} {}",
+        "max_result_rows",
+        settings.settings.max_result_rows,
+        default_tag(
+            settings.settings.max_result_rows,
+            defaults.settings.max_result_rows
+        ),
+    );
 
     // Keybinding overrides
     let total_overrides = settings.keybindings.global.len()
@@ -392,12 +401,13 @@ async fn run_app(
                 sql,
                 tab_id,
                 timeout_ms,
+                max_rows,
             } => {
                 if let Some(prov) = provider.as_ref() {
                     let db = Arc::clone(prov);
                     let tx = event_tx.clone();
                     tokio::spawn(async move {
-                        match db.execute_query(&sql, timeout_ms).await {
+                        match db.execute_query(&sql, timeout_ms, max_rows).await {
                             Ok(results) => {
                                 let _ = tx.send(AppEvent::QueryCompleted { results, tab_id });
                             }

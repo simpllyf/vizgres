@@ -29,6 +29,8 @@ pub struct SettingsInner {
     pub history_size: usize,
     #[serde(default = "default_query_timeout_ms")]
     pub query_timeout_ms: u64,
+    #[serde(default = "default_max_result_rows")]
+    pub max_result_rows: usize,
 }
 
 /// Keybinding overrides organized by panel context
@@ -60,6 +62,10 @@ fn default_query_timeout_ms() -> u64 {
     30000 // 30 seconds, 0 = disabled
 }
 
+fn default_max_result_rows() -> usize {
+    1000 // 0 = unlimited
+}
+
 impl Default for SettingsInner {
     fn default() -> Self {
         Self {
@@ -67,6 +73,7 @@ impl Default for SettingsInner {
             max_tabs: default_max_tabs(),
             history_size: default_history_size(),
             query_timeout_ms: default_query_timeout_ms(),
+            max_result_rows: default_max_result_rows(),
         }
     }
 }
@@ -139,6 +146,7 @@ const DEFAULT_CONFIG_TEMPLATE: &str = r#"# vizgres configuration
 # max_tabs = 5
 # history_size = 500
 # query_timeout_ms = 30000  # 30 seconds, 0 = disabled
+# max_result_rows = 1000    # row limit for query results, 0 = unlimited
 
 [keybindings.global]
 # "ctrl+q" = "quit"
@@ -188,6 +196,7 @@ mod tests {
         assert_eq!(settings.settings.max_tabs, 5);
         assert_eq!(settings.settings.history_size, 500);
         assert_eq!(settings.settings.query_timeout_ms, 30000);
+        assert_eq!(settings.settings.max_result_rows, 1000);
         assert!(settings.keybindings.global.is_empty());
         assert!(settings.keybindings.editor.is_empty());
         assert!(settings.keybindings.results.is_empty());
@@ -213,6 +222,7 @@ preview_rows = 50
         assert_eq!(settings.settings.max_tabs, 5);
         assert_eq!(settings.settings.history_size, 500);
         assert_eq!(settings.settings.query_timeout_ms, 30000);
+        assert_eq!(settings.settings.max_result_rows, 1000);
     }
 
     #[test]
@@ -277,5 +287,25 @@ query_timeout_ms = 0
 "#;
         let settings: Settings = toml::from_str(toml_str).unwrap();
         assert_eq!(settings.settings.query_timeout_ms, 0);
+    }
+
+    #[test]
+    fn test_custom_max_result_rows() {
+        let toml_str = r#"
+[settings]
+max_result_rows = 5000
+"#;
+        let settings: Settings = toml::from_str(toml_str).unwrap();
+        assert_eq!(settings.settings.max_result_rows, 5000);
+    }
+
+    #[test]
+    fn test_zero_max_result_rows_unlimited() {
+        let toml_str = r#"
+[settings]
+max_result_rows = 0
+"#;
+        let settings: Settings = toml::from_str(toml_str).unwrap();
+        assert_eq!(settings.settings.max_result_rows, 0);
     }
 }

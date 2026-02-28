@@ -90,6 +90,9 @@ pub struct App {
     /// Query timeout in milliseconds (0 = disabled)
     query_timeout_ms: u64,
 
+    /// Maximum result rows (0 = unlimited)
+    max_result_rows: usize,
+
     /// Status message to display
     pub status_message: Option<StatusMessage>,
 
@@ -162,6 +165,7 @@ pub enum Action {
         sql: String,
         tab_id: usize,
         timeout_ms: u64,
+        max_rows: usize,
     },
     CancelQuery,
     LoadSchema,
@@ -202,6 +206,7 @@ impl App {
             keymap,
             theme: Theme::default(),
             query_timeout_ms: settings.settings.query_timeout_ms,
+            max_result_rows: settings.settings.max_result_rows,
             status_message: None,
             clipboard,
             clipboard_error,
@@ -239,6 +244,7 @@ impl App {
             AppEvent::QueryCompleted { results, tab_id } => {
                 let count = results.row_count;
                 let time = results.execution_time;
+                let truncated = results.truncated;
                 if let Some(idx) = self.tab_index_by_id(tab_id) {
                     self.tabs[idx].query_running = false;
                     self.tabs[idx].results_viewer.set_results(results);
@@ -246,10 +252,21 @@ impl App {
                         self.focus = PanelFocus::ResultsViewer;
                     }
                 }
-                self.set_status(
-                    format!("{} rows in {:.1}ms", count, time.as_secs_f64() * 1000.0),
-                    StatusLevel::Success,
-                );
+                if truncated {
+                    self.set_status(
+                        format!(
+                            "{} rows (truncated) in {:.1}ms - increase max_result_rows to see more",
+                            count,
+                            time.as_secs_f64() * 1000.0
+                        ),
+                        StatusLevel::Warning,
+                    );
+                } else {
+                    self.set_status(
+                        format!("{} rows in {:.1}ms", count, time.as_secs_f64() * 1000.0),
+                        StatusLevel::Success,
+                    );
+                }
                 Ok(Action::None)
             }
             AppEvent::QueryFailed {
@@ -510,6 +527,7 @@ impl App {
                 if !sql.trim().is_empty() {
                     let tab_id = self.tab().id;
                     let timeout_ms = self.query_timeout_ms;
+                    let max_rows = self.max_result_rows;
                     self.tab_mut().query_running = true;
                     self.history.push(&sql);
                     self.set_status("Executing query...".to_string(), StatusLevel::Info);
@@ -517,6 +535,7 @@ impl App {
                         sql,
                         tab_id,
                         timeout_ms,
+                        max_rows,
                     }
                 } else {
                     Action::None
@@ -527,6 +546,7 @@ impl App {
                 if !sql.trim().is_empty() {
                     let tab_id = self.tab().id;
                     let timeout_ms = self.query_timeout_ms;
+                    let max_rows = self.max_result_rows;
                     let explain = format!("EXPLAIN ANALYZE {}", sql.trim());
                     self.tab_mut().query_running = true;
                     self.history.push(&sql);
@@ -535,6 +555,7 @@ impl App {
                         sql: explain,
                         tab_id,
                         timeout_ms,
+                        max_rows,
                     }
                 } else {
                     Action::None
@@ -665,6 +686,7 @@ impl App {
                 {
                     let tab_id = self.tab().id;
                     let timeout_ms = self.query_timeout_ms;
+                    let max_rows = self.max_result_rows;
                     self.tab_mut().editor.set_content(sql.clone());
                     self.tab_mut().query_running = true;
                     self.set_status("Executing query...".to_string(), StatusLevel::Info);
@@ -672,6 +694,7 @@ impl App {
                         sql,
                         tab_id,
                         timeout_ms,
+                        max_rows,
                     };
                 }
                 self.tree_browser.expand_current();
@@ -1317,6 +1340,58 @@ mod tests {
         app.handle_event(AppEvent::QueryCompleted { results, tab_id: 0 })
             .unwrap();
         assert!(!app.tabs[0].query_running);
+    }
+
+    #[test]
+    fn test_query_completed_truncated_shows_warning() {
+        let mut app = App::new();
+        app.tabs[0].query_running = true;
+
+        // Create truncated results
+        let results = crate::db::types::QueryResults::new_truncated(
+            vec![],
+            vec![],
+            std::time::Duration::from_millis(10),
+            1000,
+            true,
+        );
+        app.handle_event(AppEvent::QueryCompleted { results, tab_id: 0 })
+            .unwrap();
+
+        let msg = app.status_message.as_ref().unwrap();
+        assert!(
+            msg.message.contains("truncated"),
+            "Should contain 'truncated'"
+        );
+        assert!(
+            msg.message.contains("max_result_rows"),
+            "Should mention how to see more"
+        );
+        assert_eq!(msg.level, StatusLevel::Warning);
+    }
+
+    #[test]
+    fn test_query_completed_not_truncated_shows_success() {
+        let mut app = App::new();
+        app.tabs[0].query_running = true;
+
+        // Create non-truncated results
+        let results = crate::db::types::QueryResults::new_truncated(
+            vec![],
+            vec![],
+            std::time::Duration::from_millis(10),
+            50,
+            false,
+        );
+        app.handle_event(AppEvent::QueryCompleted { results, tab_id: 0 })
+            .unwrap();
+
+        let msg = app.status_message.as_ref().unwrap();
+        assert!(
+            !msg.message.contains("truncated"),
+            "Should not contain 'truncated'"
+        );
+        assert_eq!(msg.level, StatusLevel::Success);
     }
 
     #[test]
