@@ -31,6 +31,8 @@ pub struct SettingsInner {
     pub query_timeout_ms: u64,
     #[serde(default = "default_max_result_rows")]
     pub max_result_rows: usize,
+    #[serde(default = "default_tree_category_limit")]
+    pub tree_category_limit: usize,
 }
 
 /// Keybinding overrides organized by panel context
@@ -66,6 +68,10 @@ fn default_max_result_rows() -> usize {
     1000 // 0 = unlimited
 }
 
+fn default_tree_category_limit() -> usize {
+    500 // Items per category before pagination, 0 = unlimited
+}
+
 impl Default for SettingsInner {
     fn default() -> Self {
         Self {
@@ -74,6 +80,7 @@ impl Default for SettingsInner {
             history_size: default_history_size(),
             query_timeout_ms: default_query_timeout_ms(),
             max_result_rows: default_max_result_rows(),
+            tree_category_limit: default_tree_category_limit(),
         }
     }
 }
@@ -147,6 +154,7 @@ const DEFAULT_CONFIG_TEMPLATE: &str = r#"# vizgres configuration
 # history_size = 500
 # query_timeout_ms = 30000  # 30 seconds, 0 = disabled
 # max_result_rows = 1000    # row limit for query results, 0 = unlimited
+# tree_category_limit = 500 # items per category before pagination, 0 = unlimited
 
 [keybindings.global]
 # "ctrl+q" = "quit"
@@ -197,6 +205,7 @@ mod tests {
         assert_eq!(settings.settings.history_size, 500);
         assert_eq!(settings.settings.query_timeout_ms, 30000);
         assert_eq!(settings.settings.max_result_rows, 1000);
+        assert_eq!(settings.settings.tree_category_limit, 500);
         assert!(settings.keybindings.global.is_empty());
         assert!(settings.keybindings.editor.is_empty());
         assert!(settings.keybindings.results.is_empty());
@@ -223,6 +232,7 @@ preview_rows = 50
         assert_eq!(settings.settings.history_size, 500);
         assert_eq!(settings.settings.query_timeout_ms, 30000);
         assert_eq!(settings.settings.max_result_rows, 1000);
+        assert_eq!(settings.settings.tree_category_limit, 500);
     }
 
     #[test]
@@ -307,5 +317,25 @@ max_result_rows = 0
 "#;
         let settings: Settings = toml::from_str(toml_str).unwrap();
         assert_eq!(settings.settings.max_result_rows, 0);
+    }
+
+    #[test]
+    fn test_custom_tree_category_limit() {
+        let toml_str = r#"
+[settings]
+tree_category_limit = 200
+"#;
+        let settings: Settings = toml::from_str(toml_str).unwrap();
+        assert_eq!(settings.settings.tree_category_limit, 200);
+    }
+
+    #[test]
+    fn test_zero_tree_category_limit_unlimited() {
+        let toml_str = r#"
+[settings]
+tree_category_limit = 0
+"#;
+        let settings: Settings = toml::from_str(toml_str).unwrap();
+        assert_eq!(settings.settings.tree_category_limit, 0);
     }
 }
