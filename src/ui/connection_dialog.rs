@@ -365,8 +365,10 @@ impl ConnectionDialog {
         // Error message (if any)
         if let Some(ref err) = self.error {
             y += 1;
-            let msg = if err.len() > inner_width as usize {
-                format!("{}...", &err[..inner_width as usize - 3])
+            let max_chars = inner_width as usize;
+            let msg = if err.chars().count() > max_chars {
+                let truncated: String = err.chars().take(max_chars.saturating_sub(3)).collect();
+                format!("{}...", truncated)
             } else {
                 err.clone()
             };
@@ -502,24 +504,39 @@ struct VisibleSlice {
 
 /// Get the visible portion of a string that fits within `width`, keeping
 /// the cursor visible. Returns the display text and cursor offset within it.
+/// Note: cursor is a byte index, width is character count.
 fn visible_slice(input: &str, cursor: usize, width: usize) -> VisibleSlice {
-    if input.len() <= width {
+    let char_count = input.chars().count();
+    if char_count <= width {
+        // Convert byte cursor to character offset
+        let cursor_char = input[..cursor].chars().count();
         return VisibleSlice {
             text: input.to_string(),
-            cursor_offset: cursor,
+            cursor_offset: cursor_char,
         };
     }
 
-    // Scroll to keep cursor visible
-    let start = if cursor > width.saturating_sub(1) {
-        cursor - width + 1
+    // Convert byte cursor to character position
+    let cursor_char = input[..cursor].chars().count();
+
+    // Scroll to keep cursor visible (all in character units now)
+    let start_char = if cursor_char >= width {
+        cursor_char - width + 1
     } else {
         0
     };
-    let end = (start + width).min(input.len());
+    let end_char = (start_char + width).min(char_count);
+
+    // Extract the visible slice by characters
+    let text: String = input
+        .chars()
+        .skip(start_char)
+        .take(end_char - start_char)
+        .collect();
+
     VisibleSlice {
-        text: input[start..end].to_string(),
-        cursor_offset: cursor - start,
+        text,
+        cursor_offset: cursor_char - start_char,
     }
 }
 
@@ -829,5 +846,131 @@ mod tests {
             }
             _ => panic!("Expected Connect action"),
         }
+    }
+
+    // UTF-8 visible_slice tests
+    // Note: cursor parameter is a BYTE index, not character index
+    #[test]
+    fn test_visible_slice_utf8_short_input() {
+        // "café" = c(1)+a(1)+f(1)+é(2) = 5 bytes, 4 chars
+        let input = "café";
+        let result = visible_slice(input, input.len(), 20); // cursor at end (byte 5)
+        assert_eq!(result.text, "café");
+        assert_eq!(result.cursor_offset, 4); // 4 characters
+    }
+
+    #[test]
+    fn test_visible_slice_utf8_cursor_at_multibyte() {
+        // "café" with cursor before é (byte 3)
+        let result = visible_slice("café", 3, 20);
+        assert_eq!(result.text, "café");
+        assert_eq!(result.cursor_offset, 3); // cursor at char position 3
+    }
+
+    #[test]
+    fn test_visible_slice_utf8_scrolled() {
+        // Long UTF-8 string that needs scrolling
+        // "日本語テスト文字列" = 9 chars, each 3 bytes = 27 bytes
+        let input = "日本語テスト文字列";
+        let cursor = input.len(); // cursor at end (byte 27)
+        let result = visible_slice(input, cursor, 5);
+        // When cursor at end (char 9), width 5:
+        // start_char = 9 - 5 + 1 = 5, end_char = min(10, 9) = 9
+        // Shows chars 5..9 = ト文字列 (4 chars, not 5 because we're at the end)
+        assert_eq!(result.text.chars().count(), 4);
+        assert_eq!(result.cursor_offset, 4); // cursor at position 4 (end of slice)
+    }
+
+    #[test]
+    fn test_visible_slice_emoji() {
+        // "a☕b☕c" = a(1)+☕(3)+b(1)+☕(3)+c(1) = 9 bytes, 5 chars
+        let input = "a☕b☕c";
+        let result = visible_slice(input, input.len(), 10);
+        assert_eq!(result.text, "a☕b☕c");
+        assert_eq!(result.cursor_offset, 5); // 5 characters
+    }
+
+    #[test]
+    fn test_visible_slice_emoji_scrolled() {
+        // "☕☕☕☕☕☕☕☕" = 8 emoji, each 3 bytes = 24 bytes
+        let input = "☕☕☕☕☕☕☕☕";
+        let cursor = input.len(); // byte 24
+        let result = visible_slice(input, cursor, 4);
+        // When cursor at char 8, width 4:
+        // start_char = 8 - 4 + 1 = 5, end_char = min(9, 8) = 8
+        // Shows chars 5..8 = 3 emoji (not 4 because we're at the end)
+        assert_eq!(result.text.chars().count(), 3);
+        assert_eq!(result.cursor_offset, 3); // cursor at end
+    }
+
+    #[test]
+    fn test_visible_slice_mixed_utf8() {
+        // "café☕日本語" = c(1)+a(1)+f(1)+é(2)+☕(3)+日(3)+本(3)+語(3) = 17 bytes, 8 chars
+        let input = "café☕日本語";
+        let result = visible_slice(input, input.len(), 20);
+        assert_eq!(result.text, input);
+        assert_eq!(result.cursor_offset, 8); // 8 chars
+    }
+
+    // UTF-8 text input tests
+    #[test]
+    fn test_dialog_utf8_text_input() {
+        let mut dialog = ConnectionDialog::new();
+        dialog.show();
+
+        // Type UTF-8 characters
+        for c in "café".chars() {
+            dialog.handle_key(char_key(c));
+        }
+        assert_eq!(dialog.url_input, "café");
+        assert_eq!(dialog.url_cursor, 5); // byte position: c(1)+a(1)+f(1)+é(2) = 5
+
+        // Backspace should delete the multi-byte é correctly
+        dialog.handle_key(key(KeyCode::Backspace));
+        assert_eq!(dialog.url_input, "caf");
+        assert_eq!(dialog.url_cursor, 3);
+    }
+
+    #[test]
+    fn test_dialog_emoji_input() {
+        let mut dialog = ConnectionDialog::new();
+        dialog.show();
+
+        // Type emoji
+        dialog.handle_key(char_key('☕'));
+        assert_eq!(dialog.url_input, "☕");
+        assert_eq!(dialog.url_cursor, 3); // ☕ is 3 bytes
+
+        dialog.handle_key(char_key('🔥'));
+        assert_eq!(dialog.url_input, "☕🔥");
+        // ☕(3) + 🔥(4) = 7 bytes
+        assert_eq!(dialog.url_cursor, 7);
+
+        // Delete emoji with backspace
+        dialog.handle_key(key(KeyCode::Backspace));
+        assert_eq!(dialog.url_input, "☕");
+        assert_eq!(dialog.url_cursor, 3);
+    }
+
+    #[test]
+    fn test_dialog_utf8_cursor_movement() {
+        let mut dialog = ConnectionDialog::new();
+        dialog.show();
+
+        for c in "日本語".chars() {
+            dialog.handle_key(char_key(c));
+        }
+        // Each character is 3 bytes: 日(3)+本(3)+語(3) = 9 bytes
+        assert_eq!(dialog.url_cursor, 9);
+
+        // Move left once should move past one character
+        dialog.handle_key(key(KeyCode::Left));
+        assert_eq!(dialog.url_cursor, 6); // now after 本
+
+        dialog.handle_key(key(KeyCode::Left));
+        assert_eq!(dialog.url_cursor, 3); // now after 日
+
+        dialog.handle_key(key(KeyCode::Left));
+        assert_eq!(dialog.url_cursor, 0); // at start
     }
 }

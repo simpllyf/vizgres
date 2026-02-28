@@ -381,13 +381,16 @@ fn compute_column_widths(results: &QueryResults) -> Vec<u16> {
     widths
 }
 
+/// Truncate a string to max characters (not bytes), adding "..." if truncated.
 fn truncate_str(s: &str, max: usize) -> String {
-    if s.len() <= max {
+    let char_count = s.chars().count();
+    if char_count <= max {
         s.to_string()
     } else if max > 3 {
-        format!("{}...", &s[..max - 3])
+        let truncated: String = s.chars().take(max - 3).collect();
+        format!("{}...", truncated)
     } else {
-        s[..max].to_string()
+        s.chars().take(max).collect()
     }
 }
 
@@ -561,5 +564,60 @@ mod tests {
         viewer.go_to_home();
         assert_eq!(viewer.selected_col, 0);
         assert_eq!(viewer.h_scroll_offset, 0);
+    }
+
+    // UTF-8 truncation tests
+    #[test]
+    fn test_truncate_str_ascii_no_truncation() {
+        assert_eq!(truncate_str("hello", 10), "hello");
+        assert_eq!(truncate_str("hello", 5), "hello");
+    }
+
+    #[test]
+    fn test_truncate_str_ascii_truncation() {
+        assert_eq!(truncate_str("hello world", 8), "hello...");
+        assert_eq!(truncate_str("hello world", 5), "he...");
+    }
+
+    #[test]
+    fn test_truncate_str_utf8_no_truncation() {
+        // Multi-byte characters should count as 1 each
+        assert_eq!(truncate_str("café", 10), "café");
+        assert_eq!(truncate_str("café", 4), "café");
+        assert_eq!(truncate_str("日本語", 5), "日本語");
+        assert_eq!(truncate_str("日本語", 3), "日本語");
+    }
+
+    #[test]
+    fn test_truncate_str_utf8_truncation() {
+        // Should not panic on multi-byte chars
+        // "café au lait" = 12 chars, max=7, take 4 chars + "..." = "café..."
+        assert_eq!(truncate_str("café au lait", 7), "café...");
+        // "日本語テスト" = 6 chars, max=5, take 2 chars + "..." = "日本..."
+        assert_eq!(truncate_str("日本語テスト", 5), "日本...");
+        // Mixed emoji and text: "hello☕world" = 11 chars, max=8, take 5 chars = "hello..."
+        assert_eq!(truncate_str("hello☕world", 8), "hello...");
+    }
+
+    #[test]
+    fn test_truncate_str_emoji() {
+        // Emoji are typically 3-4 bytes but 1 character
+        assert_eq!(truncate_str("☕☕☕", 3), "☕☕☕"); // exactly fits
+        // max=3 but 4 chars: max is not > 3, so take first 3 chars (no room for ellipsis)
+        assert_eq!(truncate_str("☕☕☕☕", 3), "☕☕☕");
+        // "test☕☕" = 6 chars, max=5, take 2 chars + "..." = "te..."
+        assert_eq!(truncate_str("test☕☕", 5), "te...");
+    }
+
+    #[test]
+    fn test_truncate_str_edge_cases() {
+        // Empty string
+        assert_eq!(truncate_str("", 5), "");
+        // Single character
+        assert_eq!(truncate_str("x", 5), "x");
+        // Max <= 3 (no room for ellipsis)
+        assert_eq!(truncate_str("hello", 3), "hel");
+        assert_eq!(truncate_str("hello", 2), "he");
+        assert_eq!(truncate_str("日本語", 2), "日本");
     }
 }
