@@ -14,6 +14,7 @@ use tokio::sync::mpsc;
 use vizgres::app::{Action, App, AppEvent, StatusLevel};
 use vizgres::config::{self, ConnectionConfig, Settings};
 use vizgres::db::{self, Database};
+use vizgres::error::DbError;
 
 /// A fast, keyboard-driven PostgreSQL client for the terminal
 #[derive(Parser)]
@@ -387,8 +388,15 @@ async fn run_app(
                                 let _ = tx.send(AppEvent::QueryCompleted { results, tab_id });
                             }
                             Err(e) => {
+                                let (error, position) = match e {
+                                    DbError::QueryFailed { message, position } => {
+                                        (message, position)
+                                    }
+                                    other => (other.to_string(), None),
+                                };
                                 let _ = tx.send(AppEvent::QueryFailed {
-                                    error: e.to_string(),
+                                    error,
+                                    position,
                                     tab_id,
                                 });
                             }

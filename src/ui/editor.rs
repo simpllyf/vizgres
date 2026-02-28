@@ -307,6 +307,14 @@ impl QueryEditor {
         self.cursor
     }
 
+    /// Set cursor position, clamping to valid bounds.
+    pub fn set_cursor_position(&mut self, line: usize, col: usize) {
+        let line = line.min(self.lines.len().saturating_sub(1));
+        let col = col.min(self.lines[line].len());
+        self.cursor = (line, col);
+        self.ensure_cursor_visible();
+    }
+
     /// Get a line by index.
     pub fn line(&self, idx: usize) -> Option<&str> {
         self.lines.get(idx).map(|s| s.as_str())
@@ -901,5 +909,42 @@ mod tests {
         assert_eq!(editor.get_content(), "SELECT");
         editor.undo();
         assert_eq!(editor.get_content(), "SEL");
+    }
+
+    // ── set_cursor_position tests ───────────────────────────────
+
+    #[test]
+    fn test_set_cursor_position_valid() {
+        let mut editor = QueryEditor::new();
+        editor.set_content("SELECT *\nFROM users".to_string());
+        editor.set_cursor_position(1, 5);
+        assert_eq!(editor.cursor(), (1, 5));
+    }
+
+    #[test]
+    fn test_set_cursor_position_clamps_line() {
+        let mut editor = QueryEditor::new();
+        editor.set_content("SELECT *\nFROM users".to_string());
+        editor.set_cursor_position(10, 0);
+        // Should clamp to last line (1)
+        assert_eq!(editor.cursor(), (1, 0));
+    }
+
+    #[test]
+    fn test_set_cursor_position_clamps_column() {
+        let mut editor = QueryEditor::new();
+        editor.set_content("SELECT *\nFROM users".to_string());
+        editor.set_cursor_position(0, 100);
+        // Should clamp to line length (8)
+        assert_eq!(editor.cursor(), (0, 8));
+    }
+
+    #[test]
+    fn test_set_cursor_position_empty_line() {
+        let mut editor = QueryEditor::new();
+        editor.set_content("SELECT\n\nFROM".to_string());
+        editor.set_cursor_position(1, 5);
+        // Empty line has length 0, should clamp to 0
+        assert_eq!(editor.cursor(), (1, 0));
     }
 }

@@ -85,7 +85,10 @@ impl PostgresProvider {
                 self.cancel_token.cancel_query(tls).await
             }
         }
-        .map_err(|e| crate::error::DbError::QueryFailed(format!("Cancel failed: {}", e)))
+        .map_err(|e| crate::error::DbError::QueryFailed {
+            message: format!("Cancel failed: {}", e),
+            position: None,
+        })
     }
 }
 
@@ -97,7 +100,7 @@ impl Database for PostgresProvider {
             .client
             .prepare(sql)
             .await
-            .map_err(|e| crate::error::DbError::QueryFailed(e.to_string()))?;
+            .map_err(extract_query_error)?;
 
         let columns: Vec<ColumnDef> = stmt
             .columns()
@@ -113,7 +116,7 @@ impl Database for PostgresProvider {
             .client
             .query(&stmt, &[])
             .await
-            .map_err(|e| crate::error::DbError::QueryFailed(e.to_string()))?;
+            .map_err(extract_query_error)?;
 
         let row_count = pg_rows.len();
         let mut rows = Vec::with_capacity(row_count);
@@ -460,6 +463,25 @@ fn datatype_from_format_type(type_name: &str) -> DataType {
         "uuid" => DataType::Uuid,
         "ARRAY" => DataType::Array(Box::new(DataType::Unknown("array".to_string()))),
         other => DataType::Unknown(other.to_string()),
+    }
+}
+
+/// Extract error information from a tokio_postgres error, preserving position if available.
+fn extract_query_error(e: tokio_postgres::Error) -> crate::error::DbError {
+    if let Some(db_err) = e.as_db_error() {
+        let position = match db_err.position() {
+            Some(tokio_postgres::error::ErrorPosition::Original(p)) => Some(*p),
+            _ => None,
+        };
+        crate::error::DbError::QueryFailed {
+            message: db_err.message().to_string(),
+            position,
+        }
+    } else {
+        crate::error::DbError::QueryFailed {
+            message: e.to_string(),
+            position: None,
+        }
     }
 }
 
