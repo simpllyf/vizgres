@@ -169,8 +169,8 @@ impl PostgresProvider {
         ))
     }
 
-    /// Inner schema loading logic
-    async fn get_schema_inner(&self) -> DbResult<SchemaTree> {
+    /// Inner schema loading logic. Pass limit=0 for unlimited.
+    async fn get_schema_inner(&self, limit: usize) -> DbResult<SchemaTree> {
         let map_err =
             |e: tokio_postgres::Error| crate::error::DbError::SchemaLoadFailed(e.to_string());
 
@@ -188,6 +188,100 @@ impl PostgresProvider {
             .map_err(&map_err)?;
 
         let schema_names: Vec<String> = schema_rows.iter().map(|r| r.get(0)).collect();
+
+        // Count queries for pagination metadata (only if limit > 0)
+        let table_counts: HashMap<String, i64>;
+        let view_counts: HashMap<String, i64>;
+        let func_counts: HashMap<String, i64>;
+        let index_counts: HashMap<String, i64>;
+
+        if limit > 0 {
+            // Count tables per schema
+            let table_count_rows = self
+                .client
+                .query(
+                    "SELECT n.nspname, COUNT(DISTINCT c.oid)::bigint
+                     FROM pg_class c
+                     JOIN pg_namespace n ON n.oid = c.relnamespace
+                     WHERE c.relkind = 'r'
+                       AND n.nspname NOT LIKE 'pg_%'
+                       AND n.nspname != 'information_schema'
+                     GROUP BY n.nspname",
+                    &[],
+                )
+                .await
+                .map_err(&map_err)?;
+            table_counts = table_count_rows
+                .iter()
+                .map(|r| (r.get::<_, String>(0), r.get::<_, i64>(1)))
+                .collect();
+
+            // Count views per schema
+            let view_count_rows = self
+                .client
+                .query(
+                    "SELECT n.nspname, COUNT(DISTINCT c.oid)::bigint
+                     FROM pg_class c
+                     JOIN pg_namespace n ON n.oid = c.relnamespace
+                     WHERE c.relkind IN ('v', 'm')
+                       AND n.nspname NOT LIKE 'pg_%'
+                       AND n.nspname != 'information_schema'
+                     GROUP BY n.nspname",
+                    &[],
+                )
+                .await
+                .map_err(&map_err)?;
+            view_counts = view_count_rows
+                .iter()
+                .map(|r| (r.get::<_, String>(0), r.get::<_, i64>(1)))
+                .collect();
+
+            // Count functions per schema
+            let func_count_rows = self
+                .client
+                .query(
+                    "SELECT n.nspname, COUNT(*)::bigint
+                     FROM pg_proc p
+                     JOIN pg_namespace n ON n.oid = p.pronamespace
+                     WHERE n.nspname NOT LIKE 'pg_%'
+                       AND n.nspname != 'information_schema'
+                       AND p.prokind IN ('f', 'p')
+                     GROUP BY n.nspname",
+                    &[],
+                )
+                .await
+                .map_err(&map_err)?;
+            func_counts = func_count_rows
+                .iter()
+                .map(|r| (r.get::<_, String>(0), r.get::<_, i64>(1)))
+                .collect();
+
+            // Count indexes per schema
+            let index_count_rows = self
+                .client
+                .query(
+                    "SELECT n.nspname, COUNT(DISTINCT ci.oid)::bigint
+                     FROM pg_index ix
+                     JOIN pg_class ci ON ci.oid = ix.indexrelid
+                     JOIN pg_class ct ON ct.oid = ix.indrelid
+                     JOIN pg_namespace n ON n.oid = ct.relnamespace
+                     WHERE n.nspname NOT LIKE 'pg_%'
+                       AND n.nspname != 'information_schema'
+                     GROUP BY n.nspname",
+                    &[],
+                )
+                .await
+                .map_err(&map_err)?;
+            index_counts = index_count_rows
+                .iter()
+                .map(|r| (r.get::<_, String>(0), r.get::<_, i64>(1)))
+                .collect();
+        } else {
+            table_counts = HashMap::new();
+            view_counts = HashMap::new();
+            func_counts = HashMap::new();
+            index_counts = HashMap::new();
+        }
 
         // Query 2: Tables + views + columns (relkind: r=table, v=view, m=materialized view)
         let rel_rows = self
@@ -392,20 +486,59 @@ impl PostgresProvider {
                             columns,
                         };
                         match relkind.as_str() {
-                            "r" => tables.push(table),
-                            "v" | "m" => views.push(table),
+                            "r" => {
+                                // Apply limit during assembly
+                                if limit == 0 || tables.len() < limit {
+                                    tables.push(table);
+                                }
+                            }
+                            "v" | "m" => {
+                                if limit == 0 || views.len() < limit {
+                                    views.push(table);
+                                }
+                            }
                             _ => {}
                         }
                     }
                 }
             }
 
+            // Get total counts (from COUNT queries if limit > 0, else from vec length)
+            let table_total = if limit > 0 {
+                *table_counts.get(schema_name).unwrap_or(&0) as usize
+            } else {
+                tables.len()
+            };
+            let view_total = if limit > 0 {
+                *view_counts.get(schema_name).unwrap_or(&0) as usize
+            } else {
+                views.len()
+            };
+
+            let mut indexes = index_map.remove(schema_name).unwrap_or_default();
+            let index_total = if limit > 0 {
+                let total = *index_counts.get(schema_name).unwrap_or(&0) as usize;
+                indexes.truncate(limit);
+                total
+            } else {
+                indexes.len()
+            };
+
+            let mut functions = func_map.remove(schema_name).unwrap_or_default();
+            let func_total = if limit > 0 {
+                let total = *func_counts.get(schema_name).unwrap_or(&0) as usize;
+                functions.truncate(limit);
+                total
+            } else {
+                functions.len()
+            };
+
             schemas.push(Schema {
                 name: schema_name.clone(),
-                tables: PaginatedVec::from_vec(tables),
-                views: PaginatedVec::from_vec(views),
-                indexes: PaginatedVec::from_vec(index_map.remove(schema_name).unwrap_or_default()),
-                functions: PaginatedVec::from_vec(func_map.remove(schema_name).unwrap_or_default()),
+                tables: PaginatedVec::new(tables, table_total),
+                views: PaginatedVec::new(views, view_total),
+                indexes: PaginatedVec::new(indexes, index_total),
+                functions: PaginatedVec::new(functions, func_total),
             });
         }
 
@@ -715,6 +848,289 @@ impl PostgresProvider {
             schemas: PaginatedVec::from_vec(schemas),
         })
     }
+
+    /// Load more tables for a specific schema with offset and limit
+    async fn load_more_tables_inner(
+        &self,
+        schema_name: &str,
+        offset: usize,
+        limit: usize,
+    ) -> DbResult<Vec<Table>> {
+        let map_err =
+            |e: tokio_postgres::Error| crate::error::DbError::SchemaLoadFailed(e.to_string());
+
+        // Get table names with offset/limit
+        let table_names_rows = self
+            .client
+            .query(
+                "SELECT c.relname
+                 FROM pg_class c
+                 JOIN pg_namespace n ON n.oid = c.relnamespace
+                 WHERE c.relkind = 'r'
+                   AND n.nspname = $1
+                 ORDER BY c.relname
+                 OFFSET $2 LIMIT $3",
+                &[&schema_name, &(offset as i64), &(limit as i64)],
+            )
+            .await
+            .map_err(&map_err)?;
+
+        let table_names: Vec<String> = table_names_rows.iter().map(|r| r.get(0)).collect();
+        if table_names.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Get columns for those tables
+        let col_rows = self
+            .client
+            .query(
+                "SELECT c.relname, a.attname, format_type(a.atttypid, a.atttypmod), a.attnum
+                 FROM pg_class c
+                 JOIN pg_namespace n ON n.oid = c.relnamespace
+                 JOIN pg_attribute a ON a.attrelid = c.oid
+                 WHERE c.relkind = 'r'
+                   AND n.nspname = $1
+                   AND c.relname = ANY($2)
+                   AND a.attnum > 0 AND NOT a.attisdropped
+                 ORDER BY c.relname, a.attnum",
+                &[&schema_name, &table_names],
+            )
+            .await
+            .map_err(&map_err)?;
+
+        // Get PK/FK constraints for those tables
+        let constraint_rows = self
+            .client
+            .query(
+                "SELECT c.relname, con.contype::text, a.attname,
+                        fn.nspname AS fk_schema, fc.relname AS fk_table, fa.attname AS fk_col
+                 FROM pg_constraint con
+                 JOIN pg_class c ON c.oid = con.conrelid
+                 JOIN pg_namespace n ON n.oid = c.relnamespace
+                 JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS u(attnum, ord) ON true
+                 JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = u.attnum
+                 LEFT JOIN pg_class fc ON fc.oid = con.confrelid
+                 LEFT JOIN pg_namespace fn ON fn.oid = fc.relnamespace
+                 LEFT JOIN LATERAL unnest(con.confkey) WITH ORDINALITY AS fu(attnum, ord) ON fu.ord = u.ord
+                 LEFT JOIN pg_attribute fa ON fa.attrelid = fc.oid AND fa.attnum = fu.attnum
+                 WHERE con.contype IN ('p', 'f')
+                   AND n.nspname = $1
+                   AND c.relname = ANY($2)
+                 ORDER BY c.relname, con.contype, u.ord",
+                &[&schema_name, &table_names],
+            )
+            .await
+            .map_err(&map_err)?;
+
+        // Build PK/FK sets
+        let mut pk_set: HashSet<(String, String)> = HashSet::new();
+        let mut fk_map: HashMap<(String, String), ForeignKey> = HashMap::new();
+        for row in &constraint_rows {
+            let table: String = row.get(0);
+            let contype: String = row.get(1);
+            let col: String = row.get(2);
+
+            if contype == "p" {
+                pk_set.insert((table, col));
+            } else if contype == "f" {
+                let fk_schema: Option<String> = row.get(3);
+                let fk_table: String = row.get(4);
+                let fk_col: String = row.get(5);
+                let target_table = match fk_schema {
+                    Some(ref s) if s != schema_name => format!("{}.{}", s, fk_table),
+                    _ => fk_table,
+                };
+                fk_map.insert(
+                    (table, col),
+                    ForeignKey {
+                        target_table,
+                        target_column: fk_col,
+                    },
+                );
+            }
+        }
+
+        // Assemble tables
+        let mut table_map: HashMap<String, Vec<Column>> = HashMap::new();
+        for row in &col_rows {
+            let table: String = row.get(0);
+            let col_name: String = row.get(1);
+            let type_name: String = row.get(2);
+
+            let is_pk = pk_set.contains(&(table.clone(), col_name.clone()));
+            let fk = fk_map.remove(&(table.clone(), col_name.clone()));
+
+            table_map.entry(table).or_default().push(Column {
+                name: col_name,
+                data_type: datatype_from_format_type(&type_name),
+                is_primary_key: is_pk,
+                foreign_key: fk,
+            });
+        }
+
+        // Return tables in order
+        Ok(table_names
+            .into_iter()
+            .map(|name| Table {
+                columns: table_map.remove(&name).unwrap_or_default(),
+                name,
+            })
+            .collect())
+    }
+
+    /// Load more views for a specific schema with offset and limit
+    async fn load_more_views_inner(
+        &self,
+        schema_name: &str,
+        offset: usize,
+        limit: usize,
+    ) -> DbResult<Vec<Table>> {
+        let map_err =
+            |e: tokio_postgres::Error| crate::error::DbError::SchemaLoadFailed(e.to_string());
+
+        // Get view names with offset/limit
+        let view_names_rows = self
+            .client
+            .query(
+                "SELECT c.relname
+                 FROM pg_class c
+                 JOIN pg_namespace n ON n.oid = c.relnamespace
+                 WHERE c.relkind IN ('v', 'm')
+                   AND n.nspname = $1
+                 ORDER BY c.relname
+                 OFFSET $2 LIMIT $3",
+                &[&schema_name, &(offset as i64), &(limit as i64)],
+            )
+            .await
+            .map_err(&map_err)?;
+
+        let view_names: Vec<String> = view_names_rows.iter().map(|r| r.get(0)).collect();
+        if view_names.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Get columns for those views
+        let col_rows = self
+            .client
+            .query(
+                "SELECT c.relname, a.attname, format_type(a.atttypid, a.atttypmod), a.attnum
+                 FROM pg_class c
+                 JOIN pg_namespace n ON n.oid = c.relnamespace
+                 JOIN pg_attribute a ON a.attrelid = c.oid
+                 WHERE c.relkind IN ('v', 'm')
+                   AND n.nspname = $1
+                   AND c.relname = ANY($2)
+                   AND a.attnum > 0 AND NOT a.attisdropped
+                 ORDER BY c.relname, a.attnum",
+                &[&schema_name, &view_names],
+            )
+            .await
+            .map_err(&map_err)?;
+
+        // Assemble views (views don't have PK/FK)
+        let mut view_map: HashMap<String, Vec<Column>> = HashMap::new();
+        for row in &col_rows {
+            let view: String = row.get(0);
+            let col_name: String = row.get(1);
+            let type_name: String = row.get(2);
+
+            view_map.entry(view).or_default().push(Column {
+                name: col_name,
+                data_type: datatype_from_format_type(&type_name),
+                is_primary_key: false,
+                foreign_key: None,
+            });
+        }
+
+        Ok(view_names
+            .into_iter()
+            .map(|name| Table {
+                columns: view_map.remove(&name).unwrap_or_default(),
+                name,
+            })
+            .collect())
+    }
+
+    /// Load more functions for a specific schema with offset and limit
+    async fn load_more_functions_inner(
+        &self,
+        schema_name: &str,
+        offset: usize,
+        limit: usize,
+    ) -> DbResult<Vec<Function>> {
+        let map_err =
+            |e: tokio_postgres::Error| crate::error::DbError::SchemaLoadFailed(e.to_string());
+
+        let func_rows = self
+            .client
+            .query(
+                "SELECT p.proname,
+                        pg_get_function_identity_arguments(p.oid) AS args,
+                        pg_get_function_result(p.oid) AS return_type
+                 FROM pg_proc p
+                 JOIN pg_namespace n ON n.oid = p.pronamespace
+                 WHERE n.nspname = $1
+                   AND p.prokind IN ('f', 'p')
+                 ORDER BY p.proname
+                 OFFSET $2 LIMIT $3",
+                &[&schema_name, &(offset as i64), &(limit as i64)],
+            )
+            .await
+            .map_err(&map_err)?;
+
+        Ok(func_rows
+            .iter()
+            .map(|row| Function {
+                name: row.get(0),
+                args: row.get(1),
+                return_type: row.get::<_, Option<String>>(2).unwrap_or_default(),
+            })
+            .collect())
+    }
+
+    /// Load more indexes for a specific schema with offset and limit
+    async fn load_more_indexes_inner(
+        &self,
+        schema_name: &str,
+        offset: usize,
+        limit: usize,
+    ) -> DbResult<Vec<Index>> {
+        let map_err =
+            |e: tokio_postgres::Error| crate::error::DbError::SchemaLoadFailed(e.to_string());
+
+        let index_rows = self
+            .client
+            .query(
+                "SELECT ct.relname AS table_name, ci.relname AS index_name,
+                        ix.indisunique, ix.indisprimary,
+                        array_agg(a.attname ORDER BY k.ord) AS columns
+                 FROM pg_index ix
+                 JOIN pg_class ci ON ci.oid = ix.indexrelid
+                 JOIN pg_class ct ON ct.oid = ix.indrelid
+                 JOIN pg_namespace n ON n.oid = ct.relnamespace
+                 JOIN LATERAL unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ord) ON true
+                 JOIN pg_attribute a ON a.attrelid = ct.oid AND a.attnum = k.attnum
+                 WHERE n.nspname = $1
+                   AND a.attnum > 0
+                 GROUP BY ct.relname, ci.relname, ix.indisunique, ix.indisprimary
+                 ORDER BY ci.relname
+                 OFFSET $2 LIMIT $3",
+                &[&schema_name, &(offset as i64), &(limit as i64)],
+            )
+            .await
+            .map_err(&map_err)?;
+
+        Ok(index_rows
+            .iter()
+            .map(|row| Index {
+                table_name: row.get(0),
+                name: row.get(1),
+                is_unique: row.get(2),
+                is_primary: row.get(3),
+                columns: row.get(4),
+            })
+            .collect())
+    }
 }
 
 impl Database for PostgresProvider {
@@ -740,12 +1156,51 @@ impl Database for PostgresProvider {
         }
     }
 
-    async fn get_schema(&self) -> DbResult<SchemaTree> {
-        self.get_schema_inner().await
+    async fn get_schema(&self, limit: usize) -> DbResult<SchemaTree> {
+        self.get_schema_inner(limit).await
     }
 
     async fn search_schema(&self, pattern: &str) -> DbResult<SchemaTree> {
         self.search_schema_inner(pattern).await
+    }
+
+    async fn load_more_tables(
+        &self,
+        schema_name: &str,
+        offset: usize,
+        limit: usize,
+    ) -> DbResult<Vec<Table>> {
+        self.load_more_tables_inner(schema_name, offset, limit)
+            .await
+    }
+
+    async fn load_more_views(
+        &self,
+        schema_name: &str,
+        offset: usize,
+        limit: usize,
+    ) -> DbResult<Vec<Table>> {
+        self.load_more_views_inner(schema_name, offset, limit).await
+    }
+
+    async fn load_more_functions(
+        &self,
+        schema_name: &str,
+        offset: usize,
+        limit: usize,
+    ) -> DbResult<Vec<Function>> {
+        self.load_more_functions_inner(schema_name, offset, limit)
+            .await
+    }
+
+    async fn load_more_indexes(
+        &self,
+        schema_name: &str,
+        offset: usize,
+        limit: usize,
+    ) -> DbResult<Vec<Index>> {
+        self.load_more_indexes_inner(schema_name, offset, limit)
+            .await
     }
 }
 
