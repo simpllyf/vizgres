@@ -74,10 +74,10 @@ impl Completer {
 
                 SqlContext::Table => {
                     for s in &tree.schemas {
-                        for table in &s.tables {
+                        for table in s.tables.iter() {
                             self.try_push(&table.name, &prefix_lower, prefix);
                         }
-                        for view in &s.views {
+                        for view in s.views.iter() {
                             self.try_push(&view.name, &prefix_lower, prefix);
                         }
                     }
@@ -85,17 +85,17 @@ impl Completer {
 
                 SqlContext::ColumnOrFunction => {
                     for s in &tree.schemas {
-                        for table in &s.tables {
+                        for table in s.tables.iter() {
                             for col in &table.columns {
                                 self.try_push(&col.name, &prefix_lower, prefix);
                             }
                         }
-                        for view in &s.views {
+                        for view in s.views.iter() {
                             for col in &view.columns {
                                 self.try_push(&col.name, &prefix_lower, prefix);
                             }
                         }
-                        for func in &s.functions {
+                        for func in s.functions.iter() {
                             self.try_push(&func.name, &prefix_lower, prefix);
                         }
                     }
@@ -103,12 +103,12 @@ impl Completer {
 
                 SqlContext::Column => {
                     for s in &tree.schemas {
-                        for table in &s.tables {
+                        for table in s.tables.iter() {
                             for col in &table.columns {
                                 self.try_push(&col.name, &prefix_lower, prefix);
                             }
                         }
-                        for view in &s.views {
+                        for view in s.views.iter() {
                             for col in &view.columns {
                                 self.try_push(&col.name, &prefix_lower, prefix);
                             }
@@ -133,10 +133,10 @@ impl Completer {
                     let schema_lower = schema_name.to_ascii_lowercase();
                     for s in &tree.schemas {
                         if s.name.to_ascii_lowercase() == schema_lower {
-                            for table in &s.tables {
+                            for table in s.tables.iter() {
                                 self.try_push_dot(&table.name, &prefix_lower);
                             }
-                            for view in &s.views {
+                            for view in s.views.iter() {
                                 self.try_push_dot(&view.name, &prefix_lower);
                             }
                         }
@@ -611,10 +611,11 @@ mod tests {
     // ── Schema objects with context filtering ────────────────
 
     fn sample_schema() -> SchemaTree {
+        use crate::db::schema::PaginatedVec;
         SchemaTree {
-            schemas: vec![Schema {
+            schemas: PaginatedVec::from_vec(vec![Schema {
                 name: "public".to_string(),
-                tables: vec![Table {
+                tables: PaginatedVec::from_vec(vec![Table {
                     name: "users".to_string(),
                     columns: vec![Column {
                         name: "username".to_string(),
@@ -622,15 +623,15 @@ mod tests {
                         is_primary_key: false,
                         foreign_key: None,
                     }],
-                }],
-                views: vec![],
-                indexes: vec![],
-                functions: vec![Function {
+                }]),
+                views: PaginatedVec::default(),
+                indexes: PaginatedVec::default(),
+                functions: PaginatedVec::from_vec(vec![Function {
                     name: "update_stats".to_string(),
                     args: "".to_string(),
                     return_type: "void".to_string(),
-                }],
-            }],
+                }]),
+            }]),
         }
     }
 
