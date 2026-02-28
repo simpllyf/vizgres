@@ -140,9 +140,12 @@ pub fn highlight_sql(line: &str, in_block_comment: bool) -> (Vec<(TokenKind, Ran
             continue;
         }
 
-        // ── Everything else: operators, whitespace, etc. ─────
-        tokens.push((TokenKind::Normal, i..i + 1));
-        i += 1;
+        // ── Everything else: operators, whitespace, UTF-8 chars, etc. ─────
+        // Consume one full UTF-8 character to avoid splitting multi-byte chars
+        let rest = &line[i..];
+        let ch_len = rest.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+        tokens.push((TokenKind::Normal, i..i + ch_len));
+        i += ch_len;
     }
 
     (tokens, in_bc)
@@ -509,5 +512,60 @@ mod tests {
             .map(|(_, t)| *t)
             .collect();
         assert_eq!(comment_texts, vec!["-- filter"]);
+    }
+
+    // ── UTF-8 handling ───────────────────────────────────────
+
+    #[test]
+    fn utf8_multibyte_characters() {
+        // Test that multi-byte UTF-8 characters don't cause panics
+        // and produce valid token ranges
+        let result = kinds("SELECT café☕");
+        assert!(!result.is_empty());
+        // "SELECT" should be a keyword
+        assert_eq!(result[0], (TokenKind::Keyword, "SELECT"));
+        // The rest should be tokenized without panic
+        let texts: Vec<&str> = result.iter().map(|(_, t)| *t).collect();
+        assert!(texts.contains(&"caf"));
+        // Multi-byte chars should each be their own token
+        assert!(texts.contains(&"é"));
+        assert!(texts.contains(&"☕"));
+    }
+
+    #[test]
+    fn utf8_only_multibyte() {
+        // Test string with only multi-byte characters
+        let result = kinds("日本語");
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0].1, "日");
+        assert_eq!(result[1].1, "本");
+        assert_eq!(result[2].1, "語");
+    }
+
+    #[test]
+    fn utf8_in_string_literal() {
+        // UTF-8 inside string literals should work
+        let result = kinds("'café'");
+        assert_eq!(result, vec![(TokenKind::String, "'café'")]);
+    }
+
+    #[test]
+    fn utf8_mixed_with_sql() {
+        // Real-world case: UTF-8 in identifiers/values mixed with SQL
+        let result = kinds("SELECT * FROM café WHERE name = '日本'");
+        let kws: Vec<&str> = result
+            .iter()
+            .filter(|(k, _)| *k == TokenKind::Keyword)
+            .map(|(_, t)| *t)
+            .collect();
+        assert!(kws.contains(&"SELECT"));
+        assert!(kws.contains(&"FROM"));
+        assert!(kws.contains(&"WHERE"));
+        let strings: Vec<&str> = result
+            .iter()
+            .filter(|(k, _)| *k == TokenKind::String)
+            .map(|(_, t)| *t)
+            .collect();
+        assert_eq!(strings, vec!["'日本'"]);
     }
 }
