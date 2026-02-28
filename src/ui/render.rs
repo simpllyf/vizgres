@@ -329,6 +329,25 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         return;
     }
 
+    // Show live elapsed time when query is running
+    let active_tab = &app.tabs[app.active_tab];
+    if active_tab.query_running
+        && let Some(start) = active_tab.query_start
+    {
+        let elapsed = start.elapsed();
+        let cancel_key = key_hint(&app.keymap, None, KeyAction::CancelQuery);
+        let msg = format!(
+            "Executing... ({:.1}s) - {} to cancel",
+            elapsed.as_secs_f64(),
+            cancel_key
+        );
+        frame.render_widget(
+            Paragraph::new(msg).style(theme.status_info),
+            Rect::new(area.x, area.y, max_left_width, 1),
+        );
+        return;
+    }
+
     if let Some(ref status) = app.status_message {
         let style = match status.level {
             StatusLevel::Info => theme.status_info,

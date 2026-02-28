@@ -282,8 +282,10 @@ impl Component for ResultsViewer {
             } else {
                 theme.results_header
             };
-            let name = truncate_str(&col_def.name, w as usize);
-            let padded = format!("{:<width$}", name, width = w as usize);
+            // Show "name: type" in header for better context
+            let header_text = format!("{}: {}", col_def.name, col_def.data_type.display_name());
+            let header = truncate_str(&header_text, w as usize);
+            let padded = format!("{:<width$}", header, width = w as usize);
             frame.render_widget(
                 Paragraph::new(padded).style(style),
                 Rect::new(x, header_y, w, 1),
