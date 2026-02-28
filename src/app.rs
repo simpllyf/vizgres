@@ -33,6 +33,8 @@ pub struct Tab {
     completer: Completer,
     /// Whether this tab has a query in flight
     pub query_running: bool,
+    /// When the current query started (for elapsed time display)
+    pub query_start: Option<std::time::Instant>,
 }
 
 impl Tab {
@@ -43,6 +45,7 @@ impl Tab {
             results_viewer: ResultsViewer::new(),
             completer: Completer::new(),
             query_running: false,
+            query_start: None,
         }
     }
 }
@@ -247,6 +250,7 @@ impl App {
                 let truncated = results.truncated;
                 if let Some(idx) = self.tab_index_by_id(tab_id) {
                     self.tabs[idx].query_running = false;
+                    self.tabs[idx].query_start = None;
                     self.tabs[idx].results_viewer.set_results(results);
                     if idx == self.active_tab {
                         self.focus = PanelFocus::ResultsViewer;
@@ -277,6 +281,7 @@ impl App {
                 let cancelled = error.contains("canceling statement due to user request");
                 if let Some(idx) = self.tab_index_by_id(tab_id) {
                     self.tabs[idx].query_running = false;
+                    self.tabs[idx].query_start = None;
                     self.tabs[idx].results_viewer.set_error(error);
 
                     // Jump cursor to error position if available
@@ -529,6 +534,7 @@ impl App {
                     let timeout_ms = self.query_timeout_ms;
                     let max_rows = self.max_result_rows;
                     self.tab_mut().query_running = true;
+                    self.tab_mut().query_start = Some(std::time::Instant::now());
                     self.history.push(&sql);
                     self.set_status("Executing query...".to_string(), StatusLevel::Info);
                     Action::ExecuteQuery {
@@ -549,6 +555,7 @@ impl App {
                     let max_rows = self.max_result_rows;
                     let explain = format!("EXPLAIN ANALYZE {}", sql.trim());
                     self.tab_mut().query_running = true;
+                    self.tab_mut().query_start = Some(std::time::Instant::now());
                     self.history.push(&sql);
                     self.set_status("Running EXPLAIN ANALYZE...".to_string(), StatusLevel::Info);
                     Action::ExecuteQuery {
@@ -689,6 +696,7 @@ impl App {
                     let max_rows = self.max_result_rows;
                     self.tab_mut().editor.set_content(sql.clone());
                     self.tab_mut().query_running = true;
+                    self.tab_mut().query_start = Some(std::time::Instant::now());
                     self.set_status("Executing query...".to_string(), StatusLevel::Info);
                     return Action::ExecuteQuery {
                         sql,
