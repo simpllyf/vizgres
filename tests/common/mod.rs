@@ -4,7 +4,7 @@
 
 use vizgres::config::ConnectionConfig;
 use vizgres::config::connections::SslMode;
-use vizgres::db::schema::{Column, Schema, SchemaTree, Table};
+use vizgres::db::schema::{Column, PaginatedVec, Schema, SchemaTree, Table};
 use vizgres::db::types::DataType;
 
 /// Create a standard test schema for consistent testing
@@ -12,25 +12,33 @@ pub fn test_schema() -> SchemaTree {
     SchemaTree {
         schemas: vec![Schema {
             name: "public".to_string(),
-            tables: vec![
+            tables: PaginatedVec::from_vec(vec![
                 Table {
                     name: "users".to_string(),
                     columns: vec![
                         Column {
                             name: "id".to_string(),
                             data_type: DataType::Integer,
+                            is_primary_key: true,
+                            foreign_key: None,
                         },
                         Column {
                             name: "name".to_string(),
                             data_type: DataType::Text,
+                            is_primary_key: false,
+                            foreign_key: None,
                         },
                         Column {
                             name: "email".to_string(),
                             data_type: DataType::Varchar(Some(255)),
+                            is_primary_key: false,
+                            foreign_key: None,
                         },
                         Column {
                             name: "active".to_string(),
                             data_type: DataType::Boolean,
+                            is_primary_key: false,
+                            foreign_key: None,
                         },
                     ],
                 },
@@ -40,14 +48,21 @@ pub fn test_schema() -> SchemaTree {
                         Column {
                             name: "id".to_string(),
                             data_type: DataType::Integer,
+                            is_primary_key: true,
+                            foreign_key: None,
                         },
                         Column {
                             name: "user_id".to_string(),
                             data_type: DataType::Integer,
+                            is_primary_key: false,
+                            foreign_key: None,
                         },
                     ],
                 },
-            ],
+            ]),
+            views: PaginatedVec::default(),
+            indexes: PaginatedVec::default(),
+            functions: PaginatedVec::default(),
         }],
     }
 }
@@ -74,6 +89,7 @@ mod tests {
         let schema = test_schema();
         assert_eq!(schema.schemas.len(), 1);
         assert_eq!(schema.schemas[0].tables.len(), 2);
+        assert!(!schema.schemas[0].tables.is_truncated());
     }
 
     #[test]
