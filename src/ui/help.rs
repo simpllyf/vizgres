@@ -296,6 +296,17 @@ impl HelpOverlay {
                 key,
                 desc,
             ),
+            help_line(
+                &format!(
+                    "  {}",
+                    fmt(Some(PanelFocus::TreeBrowser), KeyAction::FilterTree)
+                ),
+                "Filter (type to search locally)",
+                key,
+                desc,
+            ),
+            help_line("  Enter", "Search database / Load more", key, desc),
+            help_line("  Esc", "Clear filter and restore tree", key, desc),
             blank.clone(),
             Line::from(Span::styled("Inspector", section)),
             help_line("  j/k  \u{2191}/\u{2193}", "Scroll", key, desc),
