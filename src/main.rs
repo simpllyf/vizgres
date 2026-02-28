@@ -198,6 +198,16 @@ fn print_config_list() -> Result<()> {
             defaults.settings.history_size
         ),
     );
+    let timeout_default = |val: u64, def: u64| if val == def { "(default)" } else { "" };
+    println!(
+        "  {:<20} {:<8} {}",
+        "query_timeout_ms",
+        settings.settings.query_timeout_ms,
+        timeout_default(
+            settings.settings.query_timeout_ms,
+            defaults.settings.query_timeout_ms
+        ),
+    );
 
     // Keybinding overrides
     let total_overrides = settings.keybindings.global.len()
@@ -378,12 +388,16 @@ async fn run_app(
                     }
                 }
             }
-            Action::ExecuteQuery { sql, tab_id } => {
+            Action::ExecuteQuery {
+                sql,
+                tab_id,
+                timeout_ms,
+            } => {
                 if let Some(prov) = provider.as_ref() {
                     let db = Arc::clone(prov);
                     let tx = event_tx.clone();
                     tokio::spawn(async move {
-                        match db.execute_query(&sql).await {
+                        match db.execute_query(&sql, timeout_ms).await {
                             Ok(results) => {
                                 let _ = tx.send(AppEvent::QueryCompleted { results, tab_id });
                             }
@@ -391,6 +405,14 @@ async fn run_app(
                                 let (error, position) = match e {
                                     DbError::QueryFailed { message, position } => {
                                         (message, position)
+                                    }
+                                    DbError::Timeout(ms) => {
+                                        let msg = if ms >= 1000 {
+                                            format!("Query timed out after {}s", ms / 1000)
+                                        } else {
+                                            format!("Query timed out after {}ms", ms)
+                                        };
+                                        (msg, None)
                                     }
                                     other => (other.to_string(), None),
                                 };

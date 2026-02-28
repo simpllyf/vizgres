@@ -7,10 +7,11 @@ use crate::config::connections::SslMode;
 use crate::db::Database;
 use crate::db::schema::{Column, ForeignKey, Function, Index, Schema, SchemaTree, Table};
 use crate::db::types::{CellValue, ColumnDef, DataType, QueryResults, Row};
-use crate::error::DbResult;
+use crate::error::{DbError, DbResult};
 use rust_decimal::Decimal;
 use std::collections::{HashMap, HashSet};
 use tokio::sync::mpsc;
+use tokio::time::{Duration, timeout};
 use tokio_postgres::Client;
 use tokio_postgres::types::Type;
 
@@ -90,10 +91,9 @@ impl PostgresProvider {
             position: None,
         })
     }
-}
 
-impl Database for PostgresProvider {
-    async fn execute_query(&self, sql: &str) -> DbResult<QueryResults> {
+    /// Inner query execution logic (without timeout wrapper)
+    async fn execute_query_inner(&self, sql: &str) -> DbResult<QueryResults> {
         let start = std::time::Instant::now();
 
         let stmt = self
@@ -133,7 +133,8 @@ impl Database for PostgresProvider {
         Ok(QueryResults::new(columns, rows, start.elapsed(), row_count))
     }
 
-    async fn get_schema(&self) -> DbResult<SchemaTree> {
+    /// Inner schema loading logic
+    async fn get_schema_inner(&self) -> DbResult<SchemaTree> {
         let map_err =
             |e: tokio_postgres::Error| crate::error::DbError::SchemaLoadFailed(e.to_string());
 
@@ -373,6 +374,29 @@ impl Database for PostgresProvider {
         }
 
         Ok(SchemaTree { schemas })
+    }
+}
+
+impl Database for PostgresProvider {
+    async fn execute_query(&self, sql: &str, timeout_ms: u64) -> DbResult<QueryResults> {
+        let query_future = self.execute_query_inner(sql);
+
+        if timeout_ms == 0 {
+            query_future.await
+        } else {
+            match timeout(Duration::from_millis(timeout_ms), query_future).await {
+                Ok(result) => result,
+                Err(_) => {
+                    // Timeout elapsed - cancel the backend query
+                    let _ = self.cancel_query().await;
+                    Err(DbError::Timeout(timeout_ms))
+                }
+            }
+        }
+    }
+
+    async fn get_schema(&self) -> DbResult<SchemaTree> {
+        self.get_schema_inner().await
     }
 }
 

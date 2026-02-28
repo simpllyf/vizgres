@@ -87,6 +87,9 @@ pub struct App {
     /// UI theme (created once, reused every frame)
     pub theme: Theme,
 
+    /// Query timeout in milliseconds (0 = disabled)
+    query_timeout_ms: u64,
+
     /// Status message to display
     pub status_message: Option<StatusMessage>,
 
@@ -155,7 +158,11 @@ pub enum AppEvent {
 
 /// Actions returned by event handlers for the main loop to execute
 pub enum Action {
-    ExecuteQuery { sql: String, tab_id: usize },
+    ExecuteQuery {
+        sql: String,
+        tab_id: usize,
+        timeout_ms: u64,
+    },
     CancelQuery,
     LoadSchema,
     Connect(ConnectionConfig),
@@ -192,6 +199,7 @@ impl App {
             max_tabs: settings.settings.max_tabs,
             keymap,
             theme: Theme::default(),
+            query_timeout_ms: settings.settings.query_timeout_ms,
             status_message: None,
             clipboard,
             clipboard_error,
@@ -498,10 +506,15 @@ impl App {
                 let sql = self.tab().editor.get_content();
                 if !sql.trim().is_empty() {
                     let tab_id = self.tab().id;
+                    let timeout_ms = self.query_timeout_ms;
                     self.tab_mut().query_running = true;
                     self.history.push(&sql);
                     self.set_status("Executing query...".to_string(), StatusLevel::Info);
-                    Action::ExecuteQuery { sql, tab_id }
+                    Action::ExecuteQuery {
+                        sql,
+                        tab_id,
+                        timeout_ms,
+                    }
                 } else {
                     Action::None
                 }
@@ -510,6 +523,7 @@ impl App {
                 let sql = self.tab().editor.get_content();
                 if !sql.trim().is_empty() {
                     let tab_id = self.tab().id;
+                    let timeout_ms = self.query_timeout_ms;
                     let explain = format!("EXPLAIN ANALYZE {}", sql.trim());
                     self.tab_mut().query_running = true;
                     self.history.push(&sql);
@@ -517,6 +531,7 @@ impl App {
                     Action::ExecuteQuery {
                         sql: explain,
                         tab_id,
+                        timeout_ms,
                     }
                 } else {
                     Action::None
@@ -646,10 +661,15 @@ impl App {
                     && let Some(sql) = self.tree_browser.preview_query()
                 {
                     let tab_id = self.tab().id;
+                    let timeout_ms = self.query_timeout_ms;
                     self.tab_mut().editor.set_content(sql.clone());
                     self.tab_mut().query_running = true;
                     self.set_status("Executing query...".to_string(), StatusLevel::Info);
-                    return Action::ExecuteQuery { sql, tab_id };
+                    return Action::ExecuteQuery {
+                        sql,
+                        tab_id,
+                        timeout_ms,
+                    };
                 }
                 self.tree_browser.expand_current();
                 Action::None
@@ -1937,5 +1957,141 @@ mod tests {
 
         // Cursor should remain at end
         assert_eq!(app.tabs[0].editor.cursor(), (0, 17));
+    }
+
+    // ── Query timeout tests ─────────────────────────────────────
+
+    #[test]
+    fn test_execute_query_includes_timeout() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+        app.tabs[0].editor.set_content("SELECT 1".to_string());
+
+        let f5 = KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE);
+        let action = app.handle_key(f5);
+
+        match action {
+            Action::ExecuteQuery { timeout_ms, .. } => {
+                // Default timeout is 30000ms
+                assert_eq!(timeout_ms, 30000);
+            }
+            other => panic!(
+                "Expected ExecuteQuery, got {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+    }
+
+    #[test]
+    fn test_custom_timeout_from_settings() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut settings = Settings::default();
+        settings.settings.query_timeout_ms = 5000;
+        let mut app = App::new_with_settings(&settings);
+        app.focus = PanelFocus::QueryEditor;
+        app.tabs[0].editor.set_content("SELECT 1".to_string());
+
+        let f5 = KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE);
+        let action = app.handle_key(f5);
+
+        match action {
+            Action::ExecuteQuery { timeout_ms, .. } => {
+                assert_eq!(timeout_ms, 5000);
+            }
+            other => panic!(
+                "Expected ExecuteQuery, got {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+    }
+
+    #[test]
+    fn test_zero_timeout_disables_timeout() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut settings = Settings::default();
+        settings.settings.query_timeout_ms = 0;
+        let mut app = App::new_with_settings(&settings);
+        app.focus = PanelFocus::QueryEditor;
+        app.tabs[0].editor.set_content("SELECT 1".to_string());
+
+        let f5 = KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE);
+        let action = app.handle_key(f5);
+
+        match action {
+            Action::ExecuteQuery { timeout_ms, .. } => {
+                assert_eq!(timeout_ms, 0);
+            }
+            other => panic!(
+                "Expected ExecuteQuery, got {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+    }
+
+    #[test]
+    fn test_explain_query_includes_timeout() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+        app.tabs[0].editor.set_content("SELECT 1".to_string());
+
+        let ctrl_e = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL);
+        let action = app.handle_key(ctrl_e);
+
+        match action {
+            Action::ExecuteQuery {
+                timeout_ms, sql, ..
+            } => {
+                assert!(sql.starts_with("EXPLAIN ANALYZE"));
+                assert_eq!(timeout_ms, 30000);
+            }
+            other => panic!(
+                "Expected ExecuteQuery, got {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+    }
+
+    #[test]
+    fn test_tree_preview_includes_timeout() {
+        use crate::db::schema::{Schema, SchemaTree, Table};
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let schema = SchemaTree {
+            schemas: vec![Schema {
+                name: "public".to_string(),
+                tables: vec![Table {
+                    name: "users".to_string(),
+                    columns: vec![],
+                }],
+                views: vec![],
+                indexes: vec![],
+                functions: vec![],
+            }],
+        };
+        let mut app = App::with_connection("test".to_string(), schema, &Settings::default());
+        app.focus = PanelFocus::TreeBrowser;
+
+        // Navigate to users table
+        app.tree_browser.move_down(); // → Tables
+        app.tree_browser.move_down(); // → users
+
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        let action = app.handle_key(enter);
+
+        match action {
+            Action::ExecuteQuery { timeout_ms, .. } => {
+                assert_eq!(timeout_ms, 30000);
+            }
+            other => panic!(
+                "Expected ExecuteQuery, got {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
     }
 }

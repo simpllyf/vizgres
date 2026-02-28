@@ -18,6 +18,7 @@ pub trait Database: Send + Sync {
     fn execute_query(
         &self,
         sql: &str,
+        timeout_ms: u64,
     ) -> impl std::future::Future<Output = DbResult<QueryResults>> + Send;
     fn get_schema(&self) -> impl std::future::Future<Output = DbResult<SchemaTree>> + Send;
 }
