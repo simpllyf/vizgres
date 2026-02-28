@@ -5,7 +5,9 @@
 use crate::config::ConnectionConfig;
 use crate::config::connections::SslMode;
 use crate::db::Database;
-use crate::db::schema::{Column, ForeignKey, Function, Index, Schema, SchemaTree, Table};
+use crate::db::schema::{
+    Column, ForeignKey, Function, Index, PaginatedVec, Schema, SchemaTree, Table,
+};
 use crate::db::types::{CellValue, ColumnDef, DataType, QueryResults, Row};
 use crate::error::{DbError, DbResult};
 use rust_decimal::Decimal;
@@ -400,14 +402,318 @@ impl PostgresProvider {
 
             schemas.push(Schema {
                 name: schema_name.clone(),
-                tables,
-                views,
-                indexes: index_map.remove(schema_name).unwrap_or_default(),
-                functions: func_map.remove(schema_name).unwrap_or_default(),
+                tables: PaginatedVec::from_vec(tables),
+                views: PaginatedVec::from_vec(views),
+                indexes: PaginatedVec::from_vec(index_map.remove(schema_name).unwrap_or_default()),
+                functions: PaginatedVec::from_vec(func_map.remove(schema_name).unwrap_or_default()),
             });
         }
 
-        Ok(SchemaTree { schemas })
+        Ok(SchemaTree {
+            schemas: PaginatedVec::from_vec(schemas),
+        })
+    }
+
+    /// Search schema objects by name pattern (case-insensitive substring match).
+    /// Returns tables, views, functions, indexes, and columns that match the pattern.
+    async fn search_schema_inner(&self, pattern: &str) -> DbResult<SchemaTree> {
+        let map_err = |e: tokio_postgres::Error| DbError::QueryFailed {
+            message: e.to_string(),
+            position: None,
+        };
+
+        // Escape special LIKE characters and create pattern
+        let escaped = pattern
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let like_pattern = format!("%{}%", escaped);
+
+        // Query 1: Get schemas that have matching objects
+        let schema_rows = self
+            .client
+            .query(
+                "SELECT DISTINCT n.nspname
+                 FROM pg_namespace n
+                 WHERE n.nspname NOT LIKE 'pg_%'
+                   AND n.nspname != 'information_schema'
+                   AND (
+                     -- Schema has matching tables/views
+                     EXISTS (
+                       SELECT 1 FROM pg_class c
+                       WHERE c.relnamespace = n.oid
+                         AND c.relkind IN ('r', 'v', 'm')
+                         AND c.relname ILIKE $1
+                     )
+                     -- Or has matching columns
+                     OR EXISTS (
+                       SELECT 1 FROM pg_class c
+                       JOIN pg_attribute a ON a.attrelid = c.oid
+                       WHERE c.relnamespace = n.oid
+                         AND c.relkind IN ('r', 'v', 'm')
+                         AND a.attnum > 0 AND NOT a.attisdropped
+                         AND a.attname ILIKE $1
+                     )
+                     -- Or has matching functions
+                     OR EXISTS (
+                       SELECT 1 FROM pg_proc p
+                       WHERE p.pronamespace = n.oid
+                         AND p.prokind IN ('f', 'p')
+                         AND p.proname ILIKE $1
+                     )
+                     -- Or has matching indexes
+                     OR EXISTS (
+                       SELECT 1 FROM pg_index ix
+                       JOIN pg_class ci ON ci.oid = ix.indexrelid
+                       JOIN pg_class ct ON ct.oid = ix.indrelid
+                       WHERE ct.relnamespace = n.oid
+                         AND ci.relname ILIKE $1
+                     )
+                   )
+                 ORDER BY n.nspname",
+                &[&like_pattern],
+            )
+            .await
+            .map_err(&map_err)?;
+
+        let schema_names: Vec<String> = schema_rows.iter().map(|r| r.get(0)).collect();
+
+        if schema_names.is_empty() {
+            return Ok(SchemaTree {
+                schemas: PaginatedVec::from_vec(vec![]),
+            });
+        }
+
+        // Query 2: Get matching tables/views with their columns
+        // Include tables that match OR have matching columns
+        let rel_rows = self
+            .client
+            .query(
+                "SELECT n.nspname, c.relname, c.relkind::text, a.attname,
+                        format_type(a.atttypid, a.atttypmod) AS formatted_type,
+                        c.relname ILIKE $1 AS table_matches,
+                        a.attname ILIKE $1 AS col_matches
+                 FROM pg_class c
+                 JOIN pg_namespace n ON n.oid = c.relnamespace
+                 JOIN pg_attribute a ON a.attrelid = c.oid
+                 WHERE c.relkind IN ('r', 'v', 'm')
+                   AND n.nspname NOT LIKE 'pg_%'
+                   AND n.nspname != 'information_schema'
+                   AND a.attnum > 0 AND NOT a.attisdropped
+                   AND (c.relname ILIKE $1 OR a.attname ILIKE $1)
+                 ORDER BY n.nspname, c.relname, a.attnum",
+                &[&like_pattern],
+            )
+            .await
+            .map_err(&map_err)?;
+
+        // Query 3: PK + FK constraints for matching tables
+        let constraint_rows = self
+            .client
+            .query(
+                "SELECT n.nspname, c.relname, con.contype::text,
+                        a.attname,
+                        fn.nspname AS fk_schema, fc.relname AS fk_table, fa.attname AS fk_col
+                 FROM pg_constraint con
+                 JOIN pg_class c ON c.oid = con.conrelid
+                 JOIN pg_namespace n ON n.oid = c.relnamespace
+                 JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS u(attnum, ord) ON true
+                 JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = u.attnum
+                 LEFT JOIN pg_class fc ON fc.oid = con.confrelid
+                 LEFT JOIN pg_namespace fn ON fn.oid = fc.relnamespace
+                 LEFT JOIN LATERAL unnest(con.confkey) WITH ORDINALITY AS fu(attnum, ord) ON fu.ord = u.ord
+                 LEFT JOIN pg_attribute fa ON fa.attrelid = fc.oid AND fa.attnum = fu.attnum
+                 WHERE con.contype IN ('p', 'f')
+                   AND n.nspname NOT LIKE 'pg_%'
+                   AND n.nspname != 'information_schema'
+                   AND (c.relname ILIKE $1 OR EXISTS (
+                     SELECT 1 FROM pg_attribute a2
+                     WHERE a2.attrelid = c.oid AND a2.attnum > 0
+                       AND NOT a2.attisdropped AND a2.attname ILIKE $1
+                   ))
+                 ORDER BY n.nspname, c.relname, con.contype, u.ord",
+                &[&like_pattern],
+            )
+            .await
+            .map_err(&map_err)?;
+
+        // Query 4: Matching indexes
+        let index_rows = self
+            .client
+            .query(
+                "SELECT n.nspname, ct.relname AS table_name, ci.relname AS index_name,
+                        ix.indisunique, ix.indisprimary,
+                        array_agg(a.attname ORDER BY k.ord) AS columns
+                 FROM pg_index ix
+                 JOIN pg_class ci ON ci.oid = ix.indexrelid
+                 JOIN pg_class ct ON ct.oid = ix.indrelid
+                 JOIN pg_namespace n ON n.oid = ct.relnamespace
+                 JOIN LATERAL unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ord) ON true
+                 JOIN pg_attribute a ON a.attrelid = ct.oid AND a.attnum = k.attnum
+                 WHERE n.nspname NOT LIKE 'pg_%'
+                   AND n.nspname != 'information_schema'
+                   AND a.attnum > 0
+                   AND ci.relname ILIKE $1
+                 GROUP BY n.nspname, ct.relname, ci.relname, ix.indisunique, ix.indisprimary
+                 ORDER BY n.nspname, ci.relname",
+                &[&like_pattern],
+            )
+            .await
+            .map_err(&map_err)?;
+
+        // Query 5: Matching functions
+        let func_rows = self
+            .client
+            .query(
+                "SELECT n.nspname, p.proname,
+                        pg_get_function_identity_arguments(p.oid) AS args,
+                        pg_get_function_result(p.oid) AS return_type
+                 FROM pg_proc p
+                 JOIN pg_namespace n ON n.oid = p.pronamespace
+                 WHERE n.nspname NOT LIKE 'pg_%'
+                   AND n.nspname != 'information_schema'
+                   AND p.prokind IN ('f', 'p')
+                   AND p.proname ILIKE $1
+                 ORDER BY n.nspname, p.proname",
+                &[&like_pattern],
+            )
+            .await
+            .map_err(&map_err)?;
+
+        // ── Assembly (similar to get_schema_inner) ────────────────────
+
+        // Build PK set
+        let mut pk_set: HashSet<(String, String, String)> = HashSet::new();
+        let mut fk_map: HashMap<(String, String, String), ForeignKey> = HashMap::new();
+
+        for row in &constraint_rows {
+            let schema: String = row.get(0);
+            let table: String = row.get(1);
+            let contype: String = row.get(2);
+            let col: String = row.get(3);
+
+            if contype == "p" {
+                pk_set.insert((schema, table, col));
+            } else if contype == "f" {
+                let fk_schema: String = row.get(4);
+                let fk_table: String = row.get(5);
+                let fk_col: String = row.get(6);
+                let target_table = if fk_schema == schema {
+                    fk_table
+                } else {
+                    format!("{}.{}", fk_schema, fk_table)
+                };
+                fk_map.insert(
+                    (schema, table, col),
+                    ForeignKey {
+                        target_table,
+                        target_column: fk_col,
+                    },
+                );
+            }
+        }
+
+        // Build indexes per schema
+        let mut index_map: HashMap<String, Vec<Index>> = HashMap::new();
+        for row in &index_rows {
+            let schema: String = row.get(0);
+            let table_name: String = row.get(1);
+            let index_name: String = row.get(2);
+            let is_unique: bool = row.get(3);
+            let is_primary: bool = row.get(4);
+            let columns: Vec<String> = row.get(5);
+
+            index_map.entry(schema).or_default().push(Index {
+                name: index_name,
+                columns,
+                is_unique,
+                is_primary,
+                table_name,
+            });
+        }
+
+        // Build functions per schema
+        let mut func_map: HashMap<String, Vec<Function>> = HashMap::new();
+        for row in &func_rows {
+            let schema: String = row.get(0);
+            let name: String = row.get(1);
+            let args: String = row.get(2);
+            let return_type: Option<String> = row.get(3);
+
+            func_map.entry(schema).or_default().push(Function {
+                name,
+                args,
+                return_type: return_type.unwrap_or_default(),
+            });
+        }
+
+        // Build tables and views from rel_rows
+        let mut rel_map: HashMap<(String, String), (String, Vec<Column>)> = HashMap::new();
+        let mut rel_order: HashMap<String, Vec<String>> = HashMap::new();
+
+        for row in &rel_rows {
+            let schema: String = row.get(0);
+            let relname: String = row.get(1);
+            let relkind: String = row.get(2);
+            let col_name: String = row.get(3);
+            let type_name: String = row.get(4);
+
+            let key = (schema.clone(), relname.clone());
+            let entry = rel_map.entry(key).or_insert_with(|| {
+                rel_order
+                    .entry(schema.clone())
+                    .or_default()
+                    .push(relname.clone());
+                (relkind.clone(), Vec::new())
+            });
+
+            let is_pk = pk_set.contains(&(schema.clone(), relname.clone(), col_name.clone()));
+            let fk = fk_map.remove(&(schema, relname, col_name.clone()));
+
+            entry.1.push(Column {
+                name: col_name,
+                data_type: datatype_from_format_type(&type_name),
+                is_primary_key: is_pk,
+                foreign_key: fk,
+            });
+        }
+
+        // Assemble schemas
+        let mut schemas = Vec::new();
+        for schema_name in &schema_names {
+            let mut tables = Vec::new();
+            let mut views = Vec::new();
+
+            if let Some(rel_names) = rel_order.get(schema_name) {
+                for relname in rel_names {
+                    if let Some((relkind, columns)) =
+                        rel_map.remove(&(schema_name.clone(), relname.clone()))
+                    {
+                        let table = Table {
+                            name: relname.clone(),
+                            columns,
+                        };
+                        match relkind.as_str() {
+                            "r" => tables.push(table),
+                            "v" | "m" => views.push(table),
+                            _ => {}
+                        }
+                    }
+                }
+            }
+
+            schemas.push(Schema {
+                name: schema_name.clone(),
+                tables: PaginatedVec::from_vec(tables),
+                views: PaginatedVec::from_vec(views),
+                indexes: PaginatedVec::from_vec(index_map.remove(schema_name).unwrap_or_default()),
+                functions: PaginatedVec::from_vec(func_map.remove(schema_name).unwrap_or_default()),
+            });
+        }
+
+        Ok(SchemaTree {
+            schemas: PaginatedVec::from_vec(schemas),
+        })
     }
 }
 
@@ -436,6 +742,10 @@ impl Database for PostgresProvider {
 
     async fn get_schema(&self) -> DbResult<SchemaTree> {
         self.get_schema_inner().await
+    }
+
+    async fn search_schema(&self, pattern: &str) -> DbResult<SchemaTree> {
+        self.search_schema_inner(pattern).await
     }
 }
 
