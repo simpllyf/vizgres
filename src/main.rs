@@ -464,6 +464,24 @@ async fn run_app(
                     app.set_status("Not connected".to_string(), StatusLevel::Warning);
                 }
             }
+            Action::SearchSchema { pattern } => {
+                if let Some(prov) = provider.as_ref() {
+                    let db = Arc::clone(prov);
+                    let tx = event_tx.clone();
+                    tokio::spawn(async move {
+                        match db.search_schema(&pattern).await {
+                            Ok(results) => {
+                                let _ = tx.send(AppEvent::SchemaSearchCompleted(results));
+                            }
+                            Err(e) => {
+                                let _ = tx.send(AppEvent::SchemaSearchFailed(e.to_string()));
+                            }
+                        }
+                    });
+                } else {
+                    app.set_status("Not connected".to_string(), StatusLevel::Warning);
+                }
+            }
             Action::Disconnect => {
                 *provider = None;
                 *conn_err_rx = None;

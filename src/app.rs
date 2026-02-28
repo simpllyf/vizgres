@@ -156,6 +156,10 @@ pub enum AppEvent {
     SchemaLoaded(SchemaTree),
     /// Schema loading failed
     SchemaFailed(String),
+    /// Schema search completed successfully
+    SchemaSearchCompleted(SchemaTree),
+    /// Schema search failed
+    SchemaSearchFailed(String),
     /// Bracketed paste event
     Paste(String),
     /// Background database connection lost
@@ -172,6 +176,9 @@ pub enum Action {
     },
     CancelQuery,
     LoadSchema,
+    SearchSchema {
+        pattern: String,
+    },
     Connect(ConnectionConfig),
     /// Signal to clear provider and show reconnect dialog (on connection loss)
     Disconnect,
@@ -321,6 +328,34 @@ impl App {
                 );
                 Ok(Action::None)
             }
+            AppEvent::SchemaSearchCompleted(results) => {
+                self.tree_browser.apply_search_results(results);
+                let count = self
+                    .tree_browser
+                    .schema()
+                    .map(|s| {
+                        s.schemas
+                            .iter()
+                            .map(|sc| {
+                                sc.tables.len()
+                                    + sc.views.len()
+                                    + sc.functions.len()
+                                    + sc.indexes.len()
+                            })
+                            .sum::<usize>()
+                    })
+                    .unwrap_or(0);
+                self.set_status(
+                    format!("Found {} matching objects", count),
+                    StatusLevel::Info,
+                );
+                Ok(Action::None)
+            }
+            AppEvent::SchemaSearchFailed(err) => {
+                self.tree_browser.set_searching(false);
+                self.set_status(format!("Search failed: {}", err), StatusLevel::Error);
+                Ok(Action::None)
+            }
             AppEvent::ConnectionLost(msg) => {
                 self.set_status(format!("Connection lost: {}", msg), StatusLevel::Error);
                 self.show_connection_dialog();
@@ -347,6 +382,11 @@ impl App {
                 }
                 DialogAction::Consumed => Action::None,
             };
+        }
+
+        // Tree filter mode intercepts keys when active
+        if self.focus == PanelFocus::TreeBrowser && self.tree_browser.is_filter_active() {
+            return self.handle_tree_filter_key(key);
         }
 
         // Try KeyMap first — global bindings, then panel-specific
@@ -713,6 +753,13 @@ impl App {
                 Action::None
             }
 
+            KeyAction::FilterTree => {
+                if self.focus == PanelFocus::TreeBrowser {
+                    self.tree_browser.activate_filter();
+                }
+                Action::None
+            }
+
             // ── Modal (inspector, command bar, help) ──────────
             KeyAction::Dismiss => {
                 match self.focus {
@@ -763,6 +810,59 @@ impl App {
                     Action::None
                 }
             }
+        }
+    }
+
+    /// Handle key events when tree filter mode is active
+    fn handle_tree_filter_key(&mut self, key: KeyEvent) -> Action {
+        use crossterm::event::KeyCode;
+
+        match key.code {
+            KeyCode::Esc => {
+                self.tree_browser.deactivate_filter();
+                Action::None
+            }
+            KeyCode::Enter => {
+                // Trigger backend search if there's filter text
+                let pattern = self.tree_browser.filter_text().to_string();
+                if !pattern.is_empty() {
+                    // Keep filter mode active, search will update results
+                    self.tree_browser.set_searching(true);
+                    Action::SearchSchema { pattern }
+                } else {
+                    self.tree_browser.deactivate_filter();
+                    Action::None
+                }
+            }
+            KeyCode::Backspace => {
+                self.tree_browser.filter_backspace();
+                Action::None
+            }
+            KeyCode::Delete => {
+                self.tree_browser.filter_delete();
+                Action::None
+            }
+            KeyCode::Left => {
+                self.tree_browser.filter_cursor_left();
+                Action::None
+            }
+            KeyCode::Right => {
+                self.tree_browser.filter_cursor_right();
+                Action::None
+            }
+            KeyCode::Up => {
+                self.tree_browser.move_up();
+                Action::None
+            }
+            KeyCode::Down => {
+                self.tree_browser.move_down();
+                Action::None
+            }
+            KeyCode::Char(c) => {
+                self.tree_browser.filter_insert_char(c);
+                Action::None
+            }
+            _ => Action::None,
         }
     }
 
@@ -1062,18 +1162,18 @@ mod tests {
 
     #[test]
     fn test_with_connection_constructor() {
-        use crate::db::schema::{Schema, SchemaTree, Table};
+        use crate::db::schema::{PaginatedVec, Schema, SchemaTree, Table};
         let schema = SchemaTree {
-            schemas: vec![Schema {
+            schemas: PaginatedVec::from_vec(vec![Schema {
                 name: "public".to_string(),
-                tables: vec![Table {
+                tables: PaginatedVec::from_vec(vec![Table {
                     name: "users".to_string(),
                     columns: vec![],
-                }],
-                views: vec![],
-                indexes: vec![],
-                functions: vec![],
-            }],
+                }]),
+                views: PaginatedVec::default(),
+                indexes: PaginatedVec::default(),
+                functions: PaginatedVec::default(),
+            }]),
         };
         let app = App::with_connection("test-db".to_string(), schema, &Settings::default());
         assert_eq!(app.connection_name.as_deref(), Some("test-db"));
@@ -1435,20 +1535,20 @@ mod tests {
 
     #[test]
     fn test_enter_on_table_executes_preview_query() {
-        use crate::db::schema::{Schema, SchemaTree, Table};
+        use crate::db::schema::{PaginatedVec, Schema, SchemaTree, Table};
         use crossterm::event::{KeyCode, KeyModifiers};
 
         let schema = SchemaTree {
-            schemas: vec![Schema {
+            schemas: PaginatedVec::from_vec(vec![Schema {
                 name: "public".to_string(),
-                tables: vec![Table {
+                tables: PaginatedVec::from_vec(vec![Table {
                     name: "users".to_string(),
                     columns: vec![],
-                }],
-                views: vec![],
-                indexes: vec![],
-                functions: vec![],
-            }],
+                }]),
+                views: PaginatedVec::default(),
+                indexes: PaginatedVec::default(),
+                functions: PaginatedVec::default(),
+            }]),
         };
         let mut app = App::with_connection("test".to_string(), schema, &Settings::default());
         app.focus = PanelFocus::TreeBrowser;
@@ -1479,32 +1579,32 @@ mod tests {
 
     #[test]
     fn test_enter_on_schema_node_expands() {
-        use crate::db::schema::{Schema, SchemaTree, Table};
+        use crate::db::schema::{PaginatedVec, Schema, SchemaTree, Table};
         use crossterm::event::{KeyCode, KeyModifiers};
 
         let schema = SchemaTree {
-            schemas: vec![
+            schemas: PaginatedVec::from_vec(vec![
                 Schema {
                     name: "public".to_string(),
-                    tables: vec![Table {
+                    tables: PaginatedVec::from_vec(vec![Table {
                         name: "t".to_string(),
                         columns: vec![],
-                    }],
-                    views: vec![],
-                    indexes: vec![],
-                    functions: vec![],
+                    }]),
+                    views: PaginatedVec::default(),
+                    indexes: PaginatedVec::default(),
+                    functions: PaginatedVec::default(),
                 },
                 Schema {
                     name: "other".to_string(),
-                    tables: vec![Table {
+                    tables: PaginatedVec::from_vec(vec![Table {
                         name: "x".to_string(),
                         columns: vec![],
-                    }],
-                    views: vec![],
-                    indexes: vec![],
-                    functions: vec![],
+                    }]),
+                    views: PaginatedVec::default(),
+                    indexes: PaginatedVec::default(),
+                    functions: PaginatedVec::default(),
                 },
-            ],
+            ]),
         };
         let mut app = App::with_connection("test".to_string(), schema, &Settings::default());
         app.focus = PanelFocus::TreeBrowser;
@@ -1996,7 +2096,7 @@ mod tests {
 
     #[test]
     fn test_apply_connection_resets_state() {
-        use crate::db::schema::{Schema, SchemaTree, Table};
+        use crate::db::schema::{PaginatedVec, Schema, SchemaTree, Table};
 
         let mut app = App::new();
         // Simulate having multiple tabs
@@ -2005,16 +2105,16 @@ mod tests {
         assert_eq!(app.tabs.len(), 3);
 
         let schema = SchemaTree {
-            schemas: vec![Schema {
+            schemas: PaginatedVec::from_vec(vec![Schema {
                 name: "public".to_string(),
-                tables: vec![Table {
+                tables: PaginatedVec::from_vec(vec![Table {
                     name: "users".to_string(),
                     columns: vec![],
-                }],
-                views: vec![],
-                indexes: vec![],
-                functions: vec![],
-            }],
+                }]),
+                views: PaginatedVec::default(),
+                indexes: PaginatedVec::default(),
+                functions: PaginatedVec::default(),
+            }]),
         };
 
         app.apply_connection("new-db".to_string(), schema);
@@ -2222,20 +2322,20 @@ mod tests {
 
     #[test]
     fn test_tree_preview_includes_timeout() {
-        use crate::db::schema::{Schema, SchemaTree, Table};
+        use crate::db::schema::{PaginatedVec, Schema, SchemaTree, Table};
         use crossterm::event::{KeyCode, KeyModifiers};
 
         let schema = SchemaTree {
-            schemas: vec![Schema {
+            schemas: PaginatedVec::from_vec(vec![Schema {
                 name: "public".to_string(),
-                tables: vec![Table {
+                tables: PaginatedVec::from_vec(vec![Table {
                     name: "users".to_string(),
                     columns: vec![],
-                }],
-                views: vec![],
-                indexes: vec![],
-                functions: vec![],
-            }],
+                }]),
+                views: PaginatedVec::default(),
+                indexes: PaginatedVec::default(),
+                functions: PaginatedVec::default(),
+            }]),
         };
         let mut app = App::with_connection("test".to_string(), schema, &Settings::default());
         app.focus = PanelFocus::TreeBrowser;
