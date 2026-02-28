@@ -40,8 +40,8 @@
 //! let results = provider.execute_query("SELECT * FROM users", 0, 0).await?;
 //! println!("Got {} rows", results.row_count);
 //!
-//! // Load schema
-//! let schema = provider.get_schema().await?;
+//! // Load schema (0 = no limit / load all)
+//! let schema = provider.get_schema(0).await?;
 //! for s in &schema.schemas {
 //!     println!("Schema: {} ({} tables)", s.name, s.tables.len());
 //! }

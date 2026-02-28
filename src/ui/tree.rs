@@ -1632,10 +1632,7 @@ mod tests {
         tree.expand_current(); // Tables category
 
         // Find and select the LoadMore item
-        let load_more_idx = tree
-            .items
-            .iter()
-            .position(|i| i.kind == NodeKind::LoadMore);
+        let load_more_idx = tree.items.iter().position(|i| i.kind == NodeKind::LoadMore);
         if let Some(idx) = load_more_idx {
             tree.selected = idx;
             assert!(tree.is_load_more_selected());
@@ -1659,10 +1656,7 @@ mod tests {
         };
         tree.extend_tables("public", vec![new_table]);
 
-        assert_eq!(
-            tree.loaded_count("public", "Tables"),
-            initial_count + 1
-        );
+        assert_eq!(tree.loaded_count("public", "Tables"), initial_count + 1);
     }
 
     #[test]
@@ -1686,7 +1680,10 @@ mod tests {
 
         // Should have a LoadMore item
         let has_load_more = tree.items.iter().any(|i| i.kind == NodeKind::LoadMore);
-        assert!(has_load_more, "Truncated category should show Load more item");
+        assert!(
+            has_load_more,
+            "Truncated category should show Load more item"
+        );
 
         // Category label should show counts
         let tables_category = tree
