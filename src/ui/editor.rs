@@ -480,15 +480,16 @@ impl Component for QueryEditor {
 
                 // Highlighted line content
                 let line = &self.lines[line_idx];
-                let max_w = content_width as usize;
+                let max_byte = char_to_byte_idx(line, content_width as usize);
                 let (tokens, next_bc) = highlight::highlight_sql(line, in_block_comment);
                 in_block_comment = next_bc;
 
                 let spans: Vec<Span> = tokens
                     .iter()
                     .filter_map(|(kind, range)| {
-                        let start = range.start.min(max_w);
-                        let end = range.end.min(max_w);
+                        // Clamp byte ranges to visible width (converted to bytes)
+                        let start = range.start.min(max_byte);
+                        let end = range.end.min(max_byte);
                         if start >= end {
                             return None;
                         }

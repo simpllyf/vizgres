@@ -338,8 +338,11 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         };
 
         let msg = &status.message;
-        let display = if msg.len() > max_left_width as usize {
-            format!("{}...", &msg[..max_left_width as usize - 3])
+        let max_chars = max_left_width as usize;
+        let display = if msg.chars().count() > max_chars {
+            // Truncate by characters, not bytes
+            let truncated: String = msg.chars().take(max_chars.saturating_sub(3)).collect();
+            format!("{}...", truncated)
         } else {
             msg.clone()
         };

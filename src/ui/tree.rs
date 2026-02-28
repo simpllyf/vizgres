@@ -410,10 +410,15 @@ impl Component for TreeBrowser {
             };
 
             let display = format!("{}{}{}", indent, indicator, item.label);
-            let truncated = if display.len() > area.width as usize {
-                format!("{}...", &display[..area.width as usize - 3])
+            let max_chars = area.width as usize;
+            let display_chars = display.chars().count();
+            let truncated = if display_chars > max_chars {
+                let truncated: String = display.chars().take(max_chars.saturating_sub(3)).collect();
+                format!("{}...", truncated)
             } else {
-                format!("{:<width$}", display, width = area.width as usize)
+                // Pad with spaces to fill width
+                let padding = max_chars.saturating_sub(display_chars);
+                format!("{}{}", display, " ".repeat(padding))
             };
 
             let style = if is_selected {
