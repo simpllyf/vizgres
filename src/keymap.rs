@@ -78,6 +78,8 @@ pub enum KeyAction {
     Expand,
     Collapse,
     FilterTree,
+    CopyName,
+    ShowDefinition,
 
     // Completion
     NextCompletion,
@@ -319,6 +321,8 @@ pub fn parse_key_action(s: &str) -> Result<KeyAction, String> {
         "expand" => Ok(KeyAction::Expand),
         "collapse" => Ok(KeyAction::Collapse),
         "filter_tree" => Ok(KeyAction::FilterTree),
+        "copy_name" => Ok(KeyAction::CopyName),
+        "show_definition" => Ok(KeyAction::ShowDefinition),
         "next_completion" => Ok(KeyAction::NextCompletion),
         "prev_completion" => Ok(KeyAction::PrevCompletion),
         "show_help" => Ok(KeyAction::ShowHelp),
@@ -648,6 +652,20 @@ impl Default for KeyMap {
                 modifiers: KeyModifiers::NONE,
             },
             KeyAction::FilterTree,
+        );
+        tree.insert(
+            KeyBind {
+                code: KeyCode::Char('y'),
+                modifiers: KeyModifiers::NONE,
+            },
+            KeyAction::CopyName,
+        );
+        tree.insert(
+            KeyBind {
+                code: KeyCode::Char('d'),
+                modifiers: KeyModifiers::NONE,
+            },
+            KeyAction::ShowDefinition,
         );
         panels.insert(PanelFocus::TreeBrowser, tree);
 
