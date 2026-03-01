@@ -499,6 +499,70 @@ impl TreeBrowser {
         }
     }
 
+    /// Return the qualified name of the selected item for copying.
+    /// Returns schema.table, schema.table.column, function name, etc.
+    pub fn selected_qualified_name(&self) -> Option<String> {
+        let item = self.items.get(self.selected)?;
+        match item.kind {
+            NodeKind::Schema => Some(format!("\"{}\"", item.label)),
+            NodeKind::Table | NodeKind::View => {
+                // Path format: "schema.Tables.tablename" or "schema.Views.viewname"
+                let parts: Vec<&str> = item.path.splitn(3, '.').collect();
+                if parts.len() == 3 {
+                    Some(format!("\"{}\".\"{}\"", parts[0], parts[2]))
+                } else {
+                    None
+                }
+            }
+            NodeKind::Column => {
+                // Path format: "schema.Tables.tablename.columnname"
+                let parts: Vec<&str> = item.path.splitn(4, '.').collect();
+                if parts.len() == 4 {
+                    // Return just the column name (most common use case)
+                    // User can copy table separately if they need qualified
+                    Some(format!("\"{}\"", parts[3]))
+                } else {
+                    None
+                }
+            }
+            NodeKind::Function => {
+                // Path format: "schema.Functions.funcname"
+                let parts: Vec<&str> = item.path.splitn(3, '.').collect();
+                if parts.len() == 3 {
+                    Some(format!("\"{}\".\"{}\"", parts[0], parts[2]))
+                } else {
+                    None
+                }
+            }
+            NodeKind::Index => {
+                // Path format: "schema.Indexes.indexname"
+                let parts: Vec<&str> = item.path.splitn(3, '.').collect();
+                if parts.len() == 3 {
+                    Some(format!("\"{}\"", parts[2]))
+                } else {
+                    None
+                }
+            }
+            NodeKind::Category | NodeKind::LoadMore => None,
+        }
+    }
+
+    /// Return schema and table name if a table/view is selected (for DDL lookup).
+    pub fn selected_table_info(&self) -> Option<(String, String)> {
+        let item = self.items.get(self.selected)?;
+        match item.kind {
+            NodeKind::Table | NodeKind::View => {
+                let parts: Vec<&str> = item.path.splitn(3, '.').collect();
+                if parts.len() == 3 {
+                    Some((parts[0].to_string(), parts[2].to_string()))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
     /// Expose the loaded schema tree for use by the completer.
     pub fn schema(&self) -> Option<&SchemaTree> {
         self.schema.as_ref()
@@ -1374,6 +1438,91 @@ mod tests {
             tree.preview_query(),
             Some("SELECT * FROM \"public\".\"users\" LIMIT 50".to_string())
         );
+    }
+
+    #[test]
+    fn test_selected_qualified_name_for_table() {
+        let mut tree = TreeBrowser::new();
+        tree.set_schema(sample_schema());
+        let users_idx = tree.items.iter().position(|i| i.label == "users").unwrap();
+        tree.selected = users_idx;
+        assert_eq!(
+            tree.selected_qualified_name(),
+            Some("\"public\".\"users\"".to_string())
+        );
+    }
+
+    #[test]
+    fn test_selected_qualified_name_for_column() {
+        let mut tree = TreeBrowser::new();
+        tree.set_schema(sample_schema());
+        // Find users table and expand it
+        let users_idx = tree.items.iter().position(|i| i.label == "users").unwrap();
+        tree.selected = users_idx;
+        tree.expand_current();
+        // Find the id column
+        let col_idx = tree
+            .items
+            .iter()
+            .position(|i| i.label.starts_with("* id"))
+            .unwrap();
+        tree.selected = col_idx;
+        assert_eq!(tree.selected_qualified_name(), Some("\"id\"".to_string()));
+    }
+
+    #[test]
+    fn test_selected_qualified_name_for_schema() {
+        let mut tree = TreeBrowser::new();
+        tree.set_schema(sample_schema());
+        tree.selected = 0; // First item is schema
+        assert_eq!(
+            tree.selected_qualified_name(),
+            Some("\"public\"".to_string())
+        );
+    }
+
+    #[test]
+    fn test_selected_qualified_name_none_for_category() {
+        let mut tree = TreeBrowser::new();
+        tree.set_schema(sample_schema());
+        // Expand schema to see categories
+        tree.expand_current();
+        // Find Tables category
+        let cat_idx = tree
+            .items
+            .iter()
+            .position(|i| i.label.starts_with("Tables ("))
+            .unwrap();
+        tree.selected = cat_idx;
+        assert_eq!(tree.selected_qualified_name(), None);
+    }
+
+    #[test]
+    fn test_selected_table_info_for_table() {
+        let mut tree = TreeBrowser::new();
+        tree.set_schema(sample_schema());
+        let users_idx = tree.items.iter().position(|i| i.label == "users").unwrap();
+        tree.selected = users_idx;
+        assert_eq!(
+            tree.selected_table_info(),
+            Some(("public".to_string(), "users".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_selected_table_info_none_for_column() {
+        let mut tree = TreeBrowser::new();
+        tree.set_schema(sample_schema());
+        let users_idx = tree.items.iter().position(|i| i.label == "users").unwrap();
+        tree.selected = users_idx;
+        tree.expand_current();
+        let col_idx = tree
+            .items
+            .iter()
+            .position(|i| i.label.starts_with("* id"))
+            .unwrap();
+        tree.selected = col_idx;
+        assert_eq!(tree.selected_table_info(), None);
     }
 
     // ── Filter tests ────────────────────────────────────────────────

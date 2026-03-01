@@ -850,6 +850,63 @@ impl App {
                 Action::None
             }
 
+            KeyAction::CopyName => {
+                if self.focus == PanelFocus::TreeBrowser
+                    && let Some(name) = self.tree_browser.selected_qualified_name()
+                {
+                    self.copy_to_clipboard(&name);
+                    self.set_status(format!("Copied: {}", name), StatusLevel::Info);
+                }
+                Action::None
+            }
+
+            KeyAction::ShowDefinition => {
+                if self.focus == PanelFocus::TreeBrowser {
+                    if let Some((schema, table)) = self.tree_browser.selected_table_info() {
+                        // Query to get table DDL
+                        let sql = format!(
+                            "SELECT \
+                                'CREATE TABLE ' || quote_ident(n.nspname) || '.' || quote_ident(c.relname) || ' (' || \
+                                string_agg( \
+                                    quote_ident(a.attname) || ' ' || pg_catalog.format_type(a.atttypid, a.atttypmod) || \
+                                    CASE WHEN a.attnotnull THEN ' NOT NULL' ELSE '' END || \
+                                    CASE WHEN ad.adbin IS NOT NULL THEN ' DEFAULT ' || pg_get_expr(ad.adbin, ad.adrelid) ELSE '' END, \
+                                    ', ' ORDER BY a.attnum \
+                                ) || ')' AS ddl \
+                            FROM pg_class c \
+                            JOIN pg_namespace n ON n.oid = c.relnamespace \
+                            JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped \
+                            LEFT JOIN pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum \
+                            WHERE n.nspname = '{}' AND c.relname = '{}' \
+                            GROUP BY n.nspname, c.relname",
+                            schema.replace('\'', "''"),
+                            table.replace('\'', "''")
+                        );
+                        let tab_id = self.tab().id;
+                        let timeout_ms = self.query_timeout_ms;
+                        let max_rows = self.max_result_rows;
+                        self.tab_mut().query_running = true;
+                        self.tab_mut().query_start = Some(std::time::Instant::now());
+                        self.set_status(
+                            format!("Loading definition for {}.{}...", schema, table),
+                            StatusLevel::Info,
+                        );
+                        return Action::ExecuteQuery {
+                            sql,
+                            tab_id,
+                            timeout_ms,
+                            max_rows,
+                        };
+                    } else {
+                        self.set_status(
+                            "Select a table or view to show definition".to_string(),
+                            StatusLevel::Warning,
+                        );
+                    }
+                }
+                Action::None
+            }
+
             // ── Modal (inspector, command bar, help) ──────────
             KeyAction::Dismiss => {
                 match self.focus {
