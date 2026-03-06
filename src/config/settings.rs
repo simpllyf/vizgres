@@ -33,6 +33,11 @@ pub struct SettingsInner {
     pub max_result_rows: usize,
     #[serde(default = "default_tree_category_limit")]
     pub tree_category_limit: usize,
+    /// Server-side statement timeout in milliseconds (0 = disabled).
+    /// This uses PostgreSQL's statement_timeout setting to kill queries
+    /// at the server level, providing a safety net even if the client crashes.
+    #[serde(default = "default_statement_timeout_ms")]
+    pub statement_timeout_ms: u64,
 }
 
 /// Keybinding overrides organized by panel context
@@ -72,6 +77,10 @@ fn default_tree_category_limit() -> usize {
     500 // Items per category before pagination, 0 = unlimited
 }
 
+fn default_statement_timeout_ms() -> u64 {
+    60000 // 60 seconds server-side timeout, 0 = disabled
+}
+
 impl Default for SettingsInner {
     fn default() -> Self {
         Self {
@@ -81,6 +90,7 @@ impl Default for SettingsInner {
             query_timeout_ms: default_query_timeout_ms(),
             max_result_rows: default_max_result_rows(),
             tree_category_limit: default_tree_category_limit(),
+            statement_timeout_ms: default_statement_timeout_ms(),
         }
     }
 }
@@ -152,9 +162,10 @@ const DEFAULT_CONFIG_TEMPLATE: &str = r#"# vizgres configuration
 # preview_rows = 100
 # max_tabs = 5
 # history_size = 500
-# query_timeout_ms = 30000  # 30 seconds, 0 = disabled
+# query_timeout_ms = 30000  # 30 seconds client-side timeout, 0 = disabled
 # max_result_rows = 1000    # row limit for query results, 0 = unlimited
 # tree_category_limit = 500 # items per category before pagination, 0 = unlimited
+# statement_timeout_ms = 60000  # 60 seconds server-side timeout, 0 = disabled
 
 [keybindings.global]
 # "ctrl+q" = "quit"
@@ -206,6 +217,7 @@ mod tests {
         assert_eq!(settings.settings.query_timeout_ms, 30000);
         assert_eq!(settings.settings.max_result_rows, 1000);
         assert_eq!(settings.settings.tree_category_limit, 500);
+        assert_eq!(settings.settings.statement_timeout_ms, 60000);
         assert!(settings.keybindings.global.is_empty());
         assert!(settings.keybindings.editor.is_empty());
         assert!(settings.keybindings.results.is_empty());
@@ -233,6 +245,7 @@ preview_rows = 50
         assert_eq!(settings.settings.query_timeout_ms, 30000);
         assert_eq!(settings.settings.max_result_rows, 1000);
         assert_eq!(settings.settings.tree_category_limit, 500);
+        assert_eq!(settings.settings.statement_timeout_ms, 60000);
     }
 
     #[test]
@@ -337,5 +350,25 @@ tree_category_limit = 0
 "#;
         let settings: Settings = toml::from_str(toml_str).unwrap();
         assert_eq!(settings.settings.tree_category_limit, 0);
+    }
+
+    #[test]
+    fn test_custom_statement_timeout() {
+        let toml_str = r#"
+[settings]
+statement_timeout_ms = 120000
+"#;
+        let settings: Settings = toml::from_str(toml_str).unwrap();
+        assert_eq!(settings.settings.statement_timeout_ms, 120000);
+    }
+
+    #[test]
+    fn test_zero_statement_timeout_disables() {
+        let toml_str = r#"
+[settings]
+statement_timeout_ms = 0
+"#;
+        let settings: Settings = toml::from_str(toml_str).unwrap();
+        assert_eq!(settings.settings.statement_timeout_ms, 0);
     }
 }

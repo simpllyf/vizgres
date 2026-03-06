@@ -124,28 +124,40 @@ impl ConnectionConfig {
         )
     }
 
-    /// Build a full connection string including password.
+    /// Build a full connection string including password and optional statement timeout.
     ///
     /// Passwords are single-quoted per libpq conventions so that
     /// special characters (spaces, quotes, backslashes) are handled correctly.
-    pub fn connection_string_with_password(&self) -> String {
-        let base = self.connection_string();
-        let with_ssl = format!(
-            "{} sslmode={}",
-            base,
+    ///
+    /// If `statement_timeout_ms` > 0, appends `-c statement_timeout=<ms>` via
+    /// the `options` parameter so that PostgreSQL enforces it server-side for
+    /// every query on this connection.
+    pub fn connection_string_with_password(&self, statement_timeout_ms: u64) -> String {
+        let mut parts = vec![self.connection_string()];
+
+        parts.push(format!(
+            "sslmode={}",
             match self.ssl_mode {
                 SslMode::Disable => "disable",
                 SslMode::Prefer => "prefer",
                 SslMode::Require => "require",
             }
-        );
+        ));
+
         if let Some(ref pw) = self.password {
             // Single-quote the password, escaping internal quotes and backslashes
             let escaped = pw.replace('\\', "\\\\").replace('\'', "\\'");
-            format!("{} password='{}'", with_ssl, escaped)
-        } else {
-            with_ssl
+            parts.push(format!("password='{}'", escaped));
         }
+
+        if statement_timeout_ms > 0 {
+            parts.push(format!(
+                "options='-c statement_timeout={}'",
+                statement_timeout_ms
+            ));
+        }
+
+        parts.join(" ")
     }
 
     /// Build a postgres:// URL from this config.
@@ -410,7 +422,7 @@ mod tests {
             ssl_mode: SslMode::Disable,
         };
         assert_eq!(
-            config.connection_string_with_password(),
+            config.connection_string_with_password(0),
             "host=localhost port=5432 dbname=mydb user=user sslmode=disable password='secret'"
         );
     }
@@ -427,8 +439,43 @@ mod tests {
             ssl_mode: SslMode::Disable,
         };
         assert_eq!(
-            config.connection_string_with_password(),
+            config.connection_string_with_password(0),
             r"host=localhost port=5432 dbname=mydb user=user sslmode=disable password='it\'s a p@ss\\word'"
+        );
+    }
+
+    #[test]
+    fn test_connection_string_with_statement_timeout() {
+        let config = ConnectionConfig {
+            name: "test".to_string(),
+            host: "localhost".to_string(),
+            port: 5432,
+            database: "mydb".to_string(),
+            username: "user".to_string(),
+            password: Some("secret".to_string()),
+            ssl_mode: SslMode::Disable,
+        };
+        assert_eq!(
+            config.connection_string_with_password(60000),
+            "host=localhost port=5432 dbname=mydb user=user sslmode=disable password='secret' options='-c statement_timeout=60000'"
+        );
+    }
+
+    #[test]
+    fn test_connection_string_zero_timeout_omits_options() {
+        let config = ConnectionConfig {
+            name: "test".to_string(),
+            host: "localhost".to_string(),
+            port: 5432,
+            database: "mydb".to_string(),
+            username: "user".to_string(),
+            password: None,
+            ssl_mode: SslMode::Prefer,
+        };
+        let conn_str = config.connection_string_with_password(0);
+        assert!(
+            !conn_str.contains("options"),
+            "0 timeout should not add options"
         );
     }
 
