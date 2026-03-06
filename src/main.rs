@@ -82,9 +82,10 @@ async fn main() -> Result<()> {
         let conn_config = resolve_connection(target)?;
 
         eprintln!("Connecting to {}...", conn_config.name);
-        let (prov, rx) = db::PostgresProvider::connect(&conn_config)
-            .await
-            .map_err(|e| anyhow::anyhow!("Connection failed: {}", e))?;
+        let (prov, rx) =
+            db::PostgresProvider::connect(&conn_config, settings.settings.statement_timeout_ms)
+                .await
+                .map_err(|e| anyhow::anyhow!("Connection failed: {}", e))?;
         let prov = Arc::new(prov);
 
         let schema = prov
@@ -215,6 +216,15 @@ fn print_config_list() -> Result<()> {
         default_tag(
             settings.settings.max_result_rows,
             defaults.settings.max_result_rows
+        ),
+    );
+    println!(
+        "  {:<20} {:<8} {}",
+        "statement_timeout_ms",
+        settings.settings.statement_timeout_ms,
+        timeout_default(
+            settings.settings.statement_timeout_ms,
+            defaults.settings.statement_timeout_ms
         ),
     );
 
@@ -371,7 +381,7 @@ async fn run_app(
                 *conn_err_rx = None;
 
                 // Connect
-                match db::PostgresProvider::connect(&config).await {
+                match db::PostgresProvider::connect(&config, app.statement_timeout_ms).await {
                     Ok((prov, rx)) => {
                         let prov = Arc::new(prov);
                         let limit = app.tree_browser.category_limit();
@@ -439,11 +449,13 @@ async fn run_app(
                     app.set_status("Not connected".to_string(), StatusLevel::Warning);
                 }
             }
-            Action::CancelQuery => {
+            Action::CancelQuery { terminate } => {
                 if let Some(prov) = provider.as_ref() {
                     let db = Arc::clone(prov);
                     tokio::spawn(async move {
-                        let _ = db.cancel_query().await;
+                        // Use enhanced cancel with pg_cancel_backend/pg_terminate_backend
+                        // Falls back to CancelToken if control connection fails
+                        let _ = db.cancel_query_enhanced(terminate).await;
                     });
                 }
             }

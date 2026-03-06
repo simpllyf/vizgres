@@ -30,7 +30,7 @@ fn test_config() -> ConnectionConfig {
 #[tokio::test]
 async fn test_connect_to_database() {
     let config = test_config();
-    let result = PostgresProvider::connect(&config).await;
+    let result = PostgresProvider::connect(&config, 0).await;
 
     match result {
         Ok(_) => {}
@@ -47,7 +47,7 @@ async fn test_connect_to_database() {
 #[tokio::test]
 async fn test_execute_simple_query() {
     let config = test_config();
-    let provider = match PostgresProvider::connect(&config).await {
+    let provider = match PostgresProvider::connect(&config, 0).await {
         Ok((p, _)) => p,
         Err(_) => {
             eprintln!("Skipping test: Database not available");
@@ -82,7 +82,7 @@ async fn test_execute_simple_query() {
 #[tokio::test]
 async fn test_query_users_table() {
     let config = test_config();
-    let provider = match PostgresProvider::connect(&config).await {
+    let provider = match PostgresProvider::connect(&config, 0).await {
         Ok((p, _)) => p,
         Err(_) => {
             eprintln!("Skipping test: Database not available");
@@ -118,7 +118,7 @@ async fn test_query_users_table() {
 #[tokio::test]
 async fn test_query_json_data() {
     let config = test_config();
-    let provider = match PostgresProvider::connect(&config).await {
+    let provider = match PostgresProvider::connect(&config, 0).await {
         Ok((p, _)) => p,
         Err(_) => {
             eprintln!("Skipping test: Database not available");
@@ -151,7 +151,7 @@ async fn test_query_json_data() {
 #[tokio::test]
 async fn test_query_null_values() {
     let config = test_config();
-    let provider = match PostgresProvider::connect(&config).await {
+    let provider = match PostgresProvider::connect(&config, 0).await {
         Ok((p, _)) => p,
         Err(_) => {
             eprintln!("Skipping test: Database not available");
@@ -181,7 +181,7 @@ async fn test_query_null_values() {
 #[tokio::test]
 async fn test_query_numeric_types() {
     let config = test_config();
-    let provider = match PostgresProvider::connect(&config).await {
+    let provider = match PostgresProvider::connect(&config, 0).await {
         Ok((p, _)) => p,
         Err(_) => {
             eprintln!("Skipping test: Database not available");
@@ -218,7 +218,7 @@ async fn test_query_numeric_types() {
 #[tokio::test]
 async fn test_query_timestamps() {
     let config = test_config();
-    let provider = match PostgresProvider::connect(&config).await {
+    let provider = match PostgresProvider::connect(&config, 0).await {
         Ok((p, _)) => p,
         Err(_) => {
             eprintln!("Skipping test: Database not available");
@@ -244,7 +244,7 @@ async fn test_query_timestamps() {
 #[tokio::test]
 async fn test_get_schema() {
     let config = test_config();
-    let provider = match PostgresProvider::connect(&config).await {
+    let provider = match PostgresProvider::connect(&config, 0).await {
         Ok((p, _)) => p,
         Err(_) => {
             eprintln!("Skipping test: Database not available");
@@ -302,7 +302,7 @@ async fn test_get_schema() {
 #[tokio::test]
 async fn test_invalid_query() {
     let config = test_config();
-    let provider = match PostgresProvider::connect(&config).await {
+    let provider = match PostgresProvider::connect(&config, 0).await {
         Ok((p, _)) => p,
         Err(_) => {
             eprintln!("Skipping test: Database not available");
@@ -322,14 +322,14 @@ async fn test_connection_failure() {
     config.host = "invalid-host-that-does-not-exist.local".to_string();
     config.port = 59999;
 
-    let result = PostgresProvider::connect(&config).await;
+    let result = PostgresProvider::connect(&config, 0).await;
     assert!(result.is_err(), "Should fail to connect to invalid host");
 }
 
 #[tokio::test]
 async fn test_multiple_schemas() {
     let config = test_config();
-    let provider = match PostgresProvider::connect(&config).await {
+    let provider = match PostgresProvider::connect(&config, 0).await {
         Ok((p, _)) => p,
         Err(_) => {
             eprintln!("Skipping test: Database not available");
@@ -364,7 +364,7 @@ async fn test_multiple_schemas() {
 #[tokio::test]
 async fn test_query_array_types() {
     let config = test_config();
-    let provider = match PostgresProvider::connect(&config).await {
+    let provider = match PostgresProvider::connect(&config, 0).await {
         Ok((p, _)) => p,
         Err(_) => {
             eprintln!("Skipping test: Database not available");
@@ -398,7 +398,7 @@ async fn test_query_array_types() {
 #[tokio::test]
 async fn test_query_aggregation_numeric() {
     let config = test_config();
-    let provider = match PostgresProvider::connect(&config).await {
+    let provider = match PostgresProvider::connect(&config, 0).await {
         Ok((p, _)) => p,
         Err(_) => {
             eprintln!("Skipping test: Database not available");
@@ -433,7 +433,7 @@ async fn test_query_aggregation_numeric() {
 #[tokio::test]
 async fn test_row_limiting_truncates_results() {
     let config = test_config();
-    let provider = match PostgresProvider::connect(&config).await {
+    let provider = match PostgresProvider::connect(&config, 0).await {
         Ok((p, _)) => p,
         Err(_) => {
             eprintln!("Skipping test: Database not available");
@@ -473,7 +473,7 @@ async fn test_row_limiting_truncates_results() {
 #[tokio::test]
 async fn test_row_limiting_no_truncation_when_within_limit() {
     let config = test_config();
-    let provider = match PostgresProvider::connect(&config).await {
+    let provider = match PostgresProvider::connect(&config, 0).await {
         Ok((p, _)) => p,
         Err(_) => {
             eprintln!("Skipping test: Database not available");
@@ -497,7 +497,7 @@ async fn test_row_limiting_no_truncation_when_within_limit() {
 #[tokio::test]
 async fn test_row_limiting_zero_means_unlimited() {
     let config = test_config();
-    let provider = match PostgresProvider::connect(&config).await {
+    let provider = match PostgresProvider::connect(&config, 0).await {
         Ok((p, _)) => p,
         Err(_) => {
             eprintln!("Skipping test: Database not available");
@@ -521,7 +521,7 @@ async fn test_row_limiting_zero_means_unlimited() {
 #[tokio::test]
 async fn test_search_schema_finds_tables() {
     let config = test_config();
-    let provider = match PostgresProvider::connect(&config).await {
+    let provider = match PostgresProvider::connect(&config, 0).await {
         Ok((p, _)) => p,
         Err(_) => {
             eprintln!("Skipping test: Database not available");
@@ -558,7 +558,7 @@ async fn test_search_schema_finds_tables() {
 #[tokio::test]
 async fn test_search_schema_finds_columns() {
     let config = test_config();
-    let provider = match PostgresProvider::connect(&config).await {
+    let provider = match PostgresProvider::connect(&config, 0).await {
         Ok((p, _)) => p,
         Err(_) => {
             eprintln!("Skipping test: Database not available");
@@ -585,7 +585,7 @@ async fn test_search_schema_finds_columns() {
 #[tokio::test]
 async fn test_search_schema_no_results() {
     let config = test_config();
-    let provider = match PostgresProvider::connect(&config).await {
+    let provider = match PostgresProvider::connect(&config, 0).await {
         Ok((p, _)) => p,
         Err(_) => {
             eprintln!("Skipping test: Database not available");
@@ -610,7 +610,7 @@ async fn test_search_schema_no_results() {
 #[tokio::test]
 async fn test_search_schema_special_characters() {
     let config = test_config();
-    let provider = match PostgresProvider::connect(&config).await {
+    let provider = match PostgresProvider::connect(&config, 0).await {
         Ok((p, _)) => p,
         Err(_) => {
             eprintln!("Skipping test: Database not available");

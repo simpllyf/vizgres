@@ -33,10 +33,10 @@
 //! // Parse connection URL
 //! let config = ConnectionConfig::from_url("postgres://user:pass@localhost/mydb")?;
 //!
-//! // Connect to database
-//! let (provider, _conn_err_rx) = PostgresProvider::connect(&config).await?;
+//! // Connect to database (0 = no server-side statement timeout)
+//! let (provider, _conn_err_rx) = PostgresProvider::connect(&config, 0).await?;
 //!
-//! // Execute a query (0 = no timeout, 0 = no row limit)
+//! // Execute a query (0 = no client timeout, 0 = no row limit)
 //! let results = provider.execute_query("SELECT * FROM users", 0, 0).await?;
 //! println!("Got {} rows", results.row_count);
 //!

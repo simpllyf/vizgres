@@ -15,6 +15,12 @@ use crate::error::DbResult;
 /// Trait abstracting database operations for testability.
 /// Send + Sync required for Arc sharing across tokio::spawn tasks.
 pub trait Database: Send + Sync {
+    /// Execute a query with client-side timeout protection.
+    ///
+    /// - `timeout_ms`: Client-side timeout (tokio::time::timeout). 0 = disabled.
+    /// - `max_rows`: Maximum rows to return. 0 = unlimited.
+    ///
+    /// Server-side `statement_timeout` is set at connection level.
     fn execute_query(
         &self,
         sql: &str,
