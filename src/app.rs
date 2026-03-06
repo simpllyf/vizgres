@@ -96,6 +96,10 @@ pub struct App {
     /// Maximum result rows (0 = unlimited)
     max_result_rows: usize,
 
+    /// Server-side statement timeout in milliseconds (0 = disabled)
+    /// Applied at connection time via the connection string
+    pub statement_timeout_ms: u64,
+
     /// Status message to display
     pub status_message: Option<StatusMessage>,
 
@@ -191,7 +195,11 @@ pub enum Action {
         timeout_ms: u64,
         max_rows: usize,
     },
-    CancelQuery,
+    /// Cancel the current query.
+    /// If `terminate` is true, use pg_terminate_backend() for hard kill.
+    CancelQuery {
+        terminate: bool,
+    },
     LoadSchema,
     SearchSchema {
         pattern: String,
@@ -243,6 +251,7 @@ impl App {
             theme: Theme::default(),
             query_timeout_ms: settings.settings.query_timeout_ms,
             max_result_rows: settings.settings.max_result_rows,
+            statement_timeout_ms: settings.settings.statement_timeout_ms,
             status_message: None,
             clipboard,
             clipboard_error,
@@ -683,7 +692,10 @@ impl App {
             KeyAction::CancelQuery => {
                 if self.tabs.iter().any(|t| t.query_running) {
                     self.set_status("Cancelling query...".to_string(), StatusLevel::Warning);
-                    Action::CancelQuery
+                    // Use graceful cancel (terminate: false) by default
+                    // Two-phase cancel with terminate: true will be implemented via
+                    // cancel phase state tracking (future enhancement)
+                    Action::CancelQuery { terminate: false }
                 } else {
                     Action::None
                 }
@@ -1569,7 +1581,7 @@ mod tests {
 
         let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
         let action = app.handle_key(esc);
-        assert!(matches!(action, Action::CancelQuery));
+        assert!(matches!(action, Action::CancelQuery { .. }));
     }
 
     #[test]

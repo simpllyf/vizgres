@@ -436,6 +436,14 @@ impl Default for KeyMap {
             },
             KeyAction::NextTab,
         );
+        // Ctrl+C for cancel query (universal muscle memory, works everywhere)
+        global.insert(
+            KeyBind {
+                code: KeyCode::Char('c'),
+                modifiers: KeyModifiers::CONTROL,
+            },
+            KeyAction::CancelQuery,
+        );
 
         let mut panels = HashMap::new();
 

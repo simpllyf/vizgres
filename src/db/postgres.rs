@@ -12,30 +12,56 @@ use crate::db::types::{CellValue, ColumnDef, DataType, QueryResults, Row};
 use crate::error::{DbError, DbResult};
 use rust_decimal::Decimal;
 use std::collections::{HashMap, HashSet};
-use tokio::sync::mpsc;
+use tokio::sync::{Mutex, mpsc};
 use tokio::time::{Duration, timeout};
 use tokio_postgres::Client;
 use tokio_postgres::types::Type;
+
+/// Result of a cancel operation
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancelResult {
+    /// Query was successfully cancelled via pg_cancel_backend()
+    Cancelled,
+    /// Backend was terminated via pg_terminate_backend()
+    Terminated,
+    /// Query had already finished (no action needed)
+    AlreadyFinished,
+    /// Cancel failed, fell back to CancelToken
+    FellBackToToken,
+}
 
 /// PostgreSQL database provider
 pub struct PostgresProvider {
     /// The tokio-postgres client
     client: Client,
-    /// Token for cancelling in-flight queries
+    /// Token for cancelling in-flight queries (fallback mechanism)
     cancel_token: tokio_postgres::CancelToken,
     /// SSL mode (needed to cancel over the right transport)
     ssl_mode: SslMode,
+    /// Connection string for establishing control connection (no statement_timeout)
+    control_conn_string: String,
+    /// Control connection for pg_cancel_backend() (lazy initialized)
+    /// Uses authenticated SQL channel instead of unauthenticated CancelRequest
+    control_conn: Mutex<Option<Client>>,
+    /// Backend PID of the main connection (stable for connection lifetime)
+    /// Fetched once at connect time, used for pg_cancel_backend/pg_terminate_backend
+    backend_pid: i32,
 }
 
 impl PostgresProvider {
     /// Connect to a PostgreSQL database.
     ///
+    /// If `statement_timeout_ms` > 0, the connection is configured with
+    /// PostgreSQL's `statement_timeout` so the server enforces it for every
+    /// query, even if the client crashes.
+    ///
     /// Returns the provider and a receiver that fires if the background
     /// connection is lost (e.g. server restart, idle timeout).
     pub async fn connect(
         config: &ConnectionConfig,
+        statement_timeout_ms: u64,
     ) -> DbResult<(Self, mpsc::UnboundedReceiver<String>)> {
-        let conn_string = config.connection_string_with_password();
+        let conn_string = config.connection_string_with_password(statement_timeout_ms);
         let (conn_err_tx, conn_err_rx) = mpsc::unbounded_channel();
 
         let client = match config.ssl_mode {
@@ -66,17 +92,171 @@ impl PostgresProvider {
             }
         };
 
+        // Fetch backend PID once — it's stable for the lifetime of this connection
+        let pid: i32 = client
+            .query_one("SELECT pg_backend_pid()", &[])
+            .await
+            .map(|row| row.get(0))
+            .unwrap_or(0);
+
         let cancel_token = client.cancel_token();
         let ssl_mode = config.ssl_mode;
+        // Control connection doesn't need statement_timeout
+        let control_conn_string = config.connection_string_with_password(0);
 
         Ok((
             Self {
                 client,
                 cancel_token,
                 ssl_mode,
+                control_conn_string,
+                control_conn: Mutex::new(None),
+                backend_pid: pid,
             },
             conn_err_rx,
         ))
+    }
+
+    /// Ensure the control connection is established (lazy initialization).
+    /// The control connection is used for pg_cancel_backend() and pg_terminate_backend(),
+    /// providing authenticated cancellation over TLS instead of the unauthenticated
+    /// CancelRequest protocol.
+    async fn ensure_control_connection(&self) -> DbResult<()> {
+        let mut guard = self.control_conn.lock().await;
+        if guard.is_some() {
+            return Ok(());
+        }
+
+        // Establish control connection with same SSL mode
+        let client = match self.ssl_mode {
+            SslMode::Disable => {
+                let (client, connection) =
+                    tokio_postgres::connect(&self.control_conn_string, tokio_postgres::NoTls)
+                        .await
+                        .map_err(|e| {
+                            DbError::ConnectionFailed(format!("Control connection failed: {}", e))
+                        })?;
+                // Spawn connection task (we don't monitor this one for errors,
+                // we'll just try to reconnect on next cancel if needed)
+                tokio::spawn(async move {
+                    let _ = connection.await;
+                });
+                client
+            }
+            SslMode::Prefer | SslMode::Require => {
+                let tls_config = make_tls_config();
+                let tls = tokio_postgres_rustls::MakeRustlsConnect::new(tls_config);
+                let (client, connection) = tokio_postgres::connect(&self.control_conn_string, tls)
+                    .await
+                    .map_err(|e| {
+                        DbError::ConnectionFailed(format!("Control connection failed: {}", e))
+                    })?;
+                tokio::spawn(async move {
+                    let _ = connection.await;
+                });
+                client
+            }
+        };
+
+        *guard = Some(client);
+        Ok(())
+    }
+
+    /// Cancel the current query using pg_cancel_backend() over the control connection.
+    /// This is more secure than CancelRequest as it uses an authenticated TLS channel.
+    /// Returns Ok(true) if the cancel was sent, Ok(false) if query already finished.
+    async fn cancel_via_backend(&self, pid: i32) -> DbResult<bool> {
+        self.ensure_control_connection().await?;
+
+        let guard = self.control_conn.lock().await;
+        if let Some(ref ctrl) = *guard {
+            let row = ctrl
+                .query_one("SELECT pg_cancel_backend($1)", &[&pid])
+                .await
+                .map_err(|e| DbError::QueryFailed {
+                    message: format!("pg_cancel_backend failed: {}", e),
+                    position: None,
+                })?;
+            Ok(row.get(0))
+        } else {
+            Err(DbError::QueryFailed {
+                message: "Control connection not available".to_string(),
+                position: None,
+            })
+        }
+    }
+
+    /// Terminate the backend using pg_terminate_backend() over the control connection.
+    /// This is a hard kill that terminates the entire backend process.
+    /// Use with caution - only after graceful cancel has failed.
+    /// Returns Ok(true) if terminate was sent, Ok(false) if backend already gone.
+    async fn terminate_via_backend(&self, pid: i32) -> DbResult<bool> {
+        self.ensure_control_connection().await?;
+
+        let guard = self.control_conn.lock().await;
+        if let Some(ref ctrl) = *guard {
+            let row = ctrl
+                .query_one("SELECT pg_terminate_backend($1)", &[&pid])
+                .await
+                .map_err(|e| DbError::QueryFailed {
+                    message: format!("pg_terminate_backend failed: {}", e),
+                    position: None,
+                })?;
+            Ok(row.get(0))
+        } else {
+            Err(DbError::QueryFailed {
+                message: "Control connection not available".to_string(),
+                position: None,
+            })
+        }
+    }
+
+    /// Reset control connection (e.g., after it fails)
+    async fn reset_control_connection(&self) {
+        let mut guard = self.control_conn.lock().await;
+        *guard = None;
+    }
+
+    /// Cancel the current query with enhanced two-phase mechanism.
+    /// Phase 1: pg_cancel_backend() - graceful, query-level cancel
+    /// Phase 2 (if requested): pg_terminate_backend() - hard, backend termination
+    /// Falls back to CancelToken if control connection fails.
+    pub async fn cancel_query_enhanced(&self, terminate: bool) -> DbResult<CancelResult> {
+        let pid = self.backend_pid;
+        if pid == 0 {
+            return Ok(CancelResult::AlreadyFinished);
+        }
+
+        if terminate {
+            // Hard terminate requested
+            match self.terminate_via_backend(pid).await {
+                Ok(true) => return Ok(CancelResult::Terminated),
+                Ok(false) => return Ok(CancelResult::AlreadyFinished),
+                Err(_) => {
+                    // Fall back to CancelToken (best we can do)
+                    self.reset_control_connection().await;
+                    let _ = self.cancel_query().await;
+                    return Ok(CancelResult::FellBackToToken);
+                }
+            }
+        }
+
+        // Graceful cancel via pg_cancel_backend
+        match self.cancel_via_backend(pid).await {
+            Ok(true) => Ok(CancelResult::Cancelled),
+            Ok(false) => Ok(CancelResult::AlreadyFinished),
+            Err(_) => {
+                // Control connection failed, fall back to CancelToken
+                self.reset_control_connection().await;
+                let _ = self.cancel_query().await;
+                Ok(CancelResult::FellBackToToken)
+            }
+        }
+    }
+
+    /// Get the backend PID of this connection (stable for its lifetime)
+    pub fn current_backend_pid(&self) -> i32 {
+        self.backend_pid
     }
 
     /// Send a cancel request for the currently running query.
@@ -99,6 +279,9 @@ impl PostgresProvider {
     /// If `max_rows` is 0, all rows are returned. Otherwise, results are
     /// limited to `max_rows` and the `truncated` flag is set if more rows
     /// were available.
+    ///
+    /// Server-side `statement_timeout` is set at connection level (via the
+    /// connection string) so every query is automatically protected.
     async fn execute_query_inner(&self, sql: &str, max_rows: usize) -> DbResult<QueryResults> {
         use futures::TryStreamExt;
 
@@ -1061,8 +1244,8 @@ impl Database for PostgresProvider {
             match timeout(Duration::from_millis(timeout_ms), query_future).await {
                 Ok(result) => result,
                 Err(_) => {
-                    // Timeout elapsed - cancel the backend query
-                    let _ = self.cancel_query().await;
+                    // Timeout elapsed - cancel the backend query using enhanced cancel
+                    let _ = self.cancel_query_enhanced(false).await;
                     Err(DbError::Timeout(timeout_ms))
                 }
             }
