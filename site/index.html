@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>vizgres — A keyboard-driven PostgreSQL client for the terminal</title>
+  <meta name="description" content="A fast, keyboard-driven PostgreSQL client for the terminal. Navigate schemas, write queries, and explore data — all without leaving your terminal.">
+  <meta property="og:title" content="vizgres — PostgreSQL client for the terminal">
+  <meta property="og:description" content="A fast, keyboard-driven PostgreSQL client for the terminal. Navigate schemas, write queries, and explore data.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://vizgres.com">
+  <meta property="og:image" content="https://vizgres.com/assets/icon-512.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16.png">
+  <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
+  <link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon.png">
+  <script>
+    (function(){
+      var t = localStorage.getItem('theme');
+      if (!t) t = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', t);
+    })();
+  </script>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+    /* ---------- dark theme (default) ---------- */
+    :root, [data-theme="dark"] {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --surface-hover: #1c2129;
+      --border: #30363d;
+      --text: #e6edf3;
+      --text-secondary: #c9d1d9;
+      --text-muted: #8b949e;
+      --accent: #4089d5;
+      --accent-hover: #58a6ff;
+      --accent-subtle: rgba(64,137,213,0.12);
+      --green: #34a248;
+      --green-subtle: rgba(52,162,72,0.12);
+      --purple: #bc8cff;
+      --yellow: #d29922;
+      --shadow: 0 8px 32px rgba(0,0,0,0.4);
+      --shadow-sm: 0 2px 8px rgba(0,0,0,0.3);
+      --kbd-bg: #1c2129;
+      --hero-glow: radial-gradient(ellipse 60% 40% at 50% 0%, rgba(64,137,213,0.08) 0%, transparent 70%);
+    }
+
+    /* ---------- light theme ---------- */
+    [data-theme="light"] {
+      --bg: #ffffff;
+      --surface: #f6f8fa;
+      --surface-hover: #eaeef2;
+      --border: #d0d7de;
+      --text: #1f2328;
+      --text-secondary: #32383f;
+      --text-muted: #656d76;
+      --accent: #0969da;
+      --accent-hover: #0550ae;
+      --accent-subtle: rgba(9,105,218,0.08);
+      --green: #1a7f37;
+      --green-subtle: rgba(26,127,55,0.08);
+      --purple: #8250df;
+      --yellow: #9a6700;
+      --shadow: 0 8px 32px rgba(0,0,0,0.06);
+      --shadow-sm: 0 2px 8px rgba(0,0,0,0.06);
+      --kbd-bg: #eff2f5;
+      --hero-glow: radial-gradient(ellipse 60% 40% at 50% 0%, rgba(9,105,218,0.06) 0%, transparent 70%);
+    }
+
+    html{font-size:16px;scroll-behavior:smooth}
+    body{
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      transition: background 0.2s ease, color 0.2s ease;
+    }
+    a{color:var(--accent);text-decoration:none}
+    a:hover{text-decoration:underline}
+    code,pre,.mono{font-family:"JetBrains Mono","Fira Code","Cascadia Code",ui-monospace,SFMono-Regular,monospace}
+
+    /* layout */
+    .container{max-width:880px;margin:0 auto;padding:0 1.5rem}
+
+    /* ---------- nav ---------- */
+    nav{
+      padding: 1rem 0;
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      background: var(--bg);
+      z-index: 100;
+      backdrop-filter: blur(8px);
+    }
+    .nav-inner{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .nav-brand{
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      text-decoration: none;
+      color: var(--text);
+      font-weight: 700;
+      font-size: 1.1rem;
+    }
+    .nav-brand:hover{text-decoration:none;color:var(--text)}
+    .nav-brand img{height:28px;width:auto}
+    .nav-right{display:flex;align-items:center;gap:0.75rem}
+    .nav-link{
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      color: var(--text-muted);
+      font-size: 0.88rem;
+      padding: 0.35rem 0.6rem;
+      border-radius: 6px;
+      transition: color 0.15s;
+    }
+    .nav-link:hover{color:var(--text);text-decoration:none}
+    .theme-toggle{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 36px;
+      height: 36px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .theme-toggle:hover{color:var(--text);border-color:var(--text-muted)}
+    .theme-toggle svg{width:18px;height:18px}
+    [data-theme="dark"] .icon-sun{display:none}
+    [data-theme="dark"] .icon-moon{display:inline}
+    [data-theme="light"] .icon-sun{display:inline}
+    [data-theme="light"] .icon-moon{display:none}
+
+    /* logo swap */
+    [data-theme="dark"] .logo-for-light{display:none}
+    [data-theme="dark"] .logo-for-dark{display:block}
+    [data-theme="light"] .logo-for-light{display:block}
+    [data-theme="light"] .logo-for-dark{display:none}
+
+    /* ---------- hero ---------- */
+    .hero{
+      padding: 5rem 0 3.5rem;
+      text-align: center;
+      background: var(--hero-glow);
+    }
+    .hero-logo-img{
+      height: 96px;
+      width: auto;
+      margin: 0 auto 1.5rem;
+    }
+    .hero h1{
+      font-size: 2.8rem;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      line-height: 1.15;
+    }
+    .hero h1 span{color:var(--accent)}
+    .hero-tagline{
+      font-size: 1.2rem;
+      color: var(--text-muted);
+      margin-top: 0.75rem;
+      max-width: 480px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    .hero-actions{
+      margin-top: 2rem;
+      display: flex;
+      gap: 0.75rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    /* buttons */
+    .btn{
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.65rem 1.4rem;
+      border-radius: 8px;
+      font-size: 0.92rem;
+      font-weight: 600;
+      border: 1px solid transparent;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      text-decoration: none;
+    }
+    .btn:hover{text-decoration:none}
+    .btn-primary{
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+    .btn-primary:hover{background:var(--accent-hover);border-color:var(--accent-hover)}
+    .btn-secondary{
+      background: transparent;
+      color: var(--text);
+      border-color: var(--border);
+    }
+    .btn-secondary:hover{border-color:var(--text-muted)}
+
+    /* install box */
+    .install-inline{
+      margin-top: 2rem;
+      text-align: center;
+    }
+    .install-box{
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.65rem 1.25rem;
+      font-size: 0.88rem;
+      color: var(--green);
+      user-select: all;
+      cursor: text;
+    }
+    .install-box .prompt{color:var(--text-muted);user-select:none}
+    .install-box .copy-btn{
+      user-select: none;
+      cursor: pointer;
+      color: var(--text-muted);
+      background: none;
+      border: none;
+      padding: 2px;
+      display: inline-flex;
+      align-items: center;
+      border-radius: 4px;
+      transition: color 0.15s;
+    }
+    .install-box .copy-btn:hover{color:var(--text)}
+
+    /* ---------- screenshot hero ---------- */
+    .screenshot-section{padding:3.5rem 0 2rem}
+    .screenshot-frame{
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 16px 48px rgba(0,0,0,0.35);
+      border: 1px solid #30363d;
+    }
+    [data-theme="light"] .screenshot-frame{
+      box-shadow: 0 16px 48px rgba(0,0,0,0.12);
+      border-color: var(--border);
+    }
+    .screenshot-frame img{
+      display: block;
+      width: 100%;
+      height: auto;
+    }
+
+    /* ---------- features ---------- */
+    .features{padding:3.5rem 0 2rem}
+    .section-title{
+      font-size: 1.5rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+      text-align: center;
+    }
+    .section-subtitle{
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.95rem;
+      margin-bottom: 2rem;
+      max-width: 500px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    .feature-grid{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 1rem;
+    }
+    .feature{
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.25rem;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .feature:hover{
+      border-color: var(--text-muted);
+      box-shadow: var(--shadow-sm);
+    }
+    .feature-icon{
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 0.75rem;
+      font-size: 1.1rem;
+    }
+    .feature-icon.blue{background:var(--accent-subtle);color:var(--accent)}
+    .feature-icon.green{background:var(--green-subtle);color:var(--green)}
+    .feature-icon.purple{background:rgba(188,140,255,0.12);color:var(--purple)}
+    .feature-icon.yellow{background:rgba(210,153,34,0.12);color:var(--yellow)}
+    .feature h3{font-size:0.95rem;font-weight:600;margin-bottom:0.3rem}
+    .feature p{font-size:0.86rem;color:var(--text-muted);line-height:1.55}
+
+    /* ---------- keyboard shortcuts ---------- */
+    .keys{padding:2.5rem 0}
+    .key-grid{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 0.5rem;
+    }
+    .key-row{
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.45rem 0.6rem;
+      border-radius: 6px;
+      transition: background 0.1s;
+    }
+    .key-row:hover{background:var(--surface)}
+    .kbd{
+      display: inline-block;
+      background: var(--kbd-bg);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 2px 8px;
+      font-size: 0.78rem;
+      color: var(--accent);
+      white-space: nowrap;
+      min-width: 60px;
+      text-align: center;
+    }
+    .key-label{font-size:0.86rem;color:var(--text-muted)}
+
+    /* ---------- install section ---------- */
+    .install-section{
+      padding: 3rem 0;
+    }
+    .install-card{
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 2rem;
+      text-align: center;
+    }
+    .install-card h2{
+      font-size: 1.4rem;
+      font-weight: 700;
+      margin-bottom: 1rem;
+    }
+    .install-steps{
+      text-align: left;
+      max-width: 520px;
+      margin: 1.5rem auto 0;
+    }
+    .install-step{
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }
+    .step-num{
+      flex-shrink: 0;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: var(--accent-subtle);
+      color: var(--accent);
+      font-size: 0.78rem;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-top: 2px;
+    }
+    .step-content{flex:1}
+    .step-content p{font-size:0.9rem;color:var(--text-muted);margin-bottom:0.35rem}
+    .step-code{
+      background: var(--kbd-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.85rem;
+      color: var(--green);
+      display: block;
+      overflow-x: auto;
+    }
+    .install-note{
+      margin-top: 1.5rem;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    /* ---------- footer ---------- */
+    footer{
+      border-top: 1px solid var(--border);
+      margin-top: 2rem;
+      padding: 1.5rem 0;
+      text-align: center;
+      font-size: 0.83rem;
+      color: var(--text-muted);
+    }
+    footer a{color:var(--text-muted)}
+    footer a:hover{color:var(--accent)}
+
+    /* ---------- responsive ---------- */
+    @media(max-width:640px){
+      .hero{padding:3.5rem 0 2.5rem}
+      .hero h1{font-size:2rem}
+      .hero-logo-img{height:72px}
+      .hero-tagline{font-size:1.05rem}
+      .feature-grid{grid-template-columns:1fr}
+      .key-grid{grid-template-columns:1fr 1fr}
+      .install-card{padding:1.5rem 1rem}
+    }
+    @media(max-width:420px){
+      .key-grid{grid-template-columns:1fr}
+    }
+  </style>
+</head>
+<body>
+
+<!-- ====== NAV ====== -->
+<nav>
+  <div class="container nav-inner">
+    <a href="/" class="nav-brand">
+      <img src="assets/logo-dark.png" alt="" class="logo-for-dark">
+      <img src="assets/logo-light.png" alt="" class="logo-for-light">
+      vizgres
+    </a>
+    <div class="nav-right">
+      <a href="#features" class="nav-link">Features</a>
+      <a href="#install" class="nav-link">Install</a>
+      <a href="https://github.com/simpllyf/vizgres" class="nav-link" target="_blank" rel="noopener">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        GitHub
+      </a>
+      <button class="theme-toggle" id="themeToggle" aria-label="Toggle theme">
+        <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+        <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      </button>
+    </div>
+  </div>
+</nav>
+
+<!-- ====== HERO ====== -->
+<section class="hero">
+  <div class="container">
+    <img src="assets/logo-dark.png" alt="" class="hero-logo-img logo-for-dark">
+    <img src="assets/logo-light.png" alt="" class="hero-logo-img logo-for-light">
+    <h1>viz<span>gres</span></h1>
+    <p class="hero-tagline">A fast, keyboard-driven PostgreSQL client for the terminal.</p>
+    <div class="hero-actions">
+      <a href="https://github.com/simpllyf/vizgres/releases/latest" class="btn btn-primary" target="_blank" rel="noopener">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Download
+      </a>
+      <a href="https://github.com/simpllyf/vizgres" class="btn btn-secondary" target="_blank" rel="noopener">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        GitHub
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ====== SCREENSHOT ====== -->
+<section class="screenshot-section" aria-label="Application screenshot">
+  <div class="container">
+    <div class="screenshot-frame">
+      <img src="assets/screenshot-hero.png" alt="vizgres — schema browser, SQL editor, and query results in a terminal" loading="eager">
+    </div>
+  </div>
+</section>
+
+<!-- ====== FEATURES ====== -->
+<section class="features" id="features">
+  <div class="container">
+    <h2 class="section-title">Built for the terminal</h2>
+    <p class="section-subtitle">Everything you need to work with PostgreSQL, without leaving your terminal.</p>
+    <div class="feature-grid">
+      <div class="feature">
+        <div class="feature-icon blue">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8l4 4-4 4"/><line x1="12" y1="16" x2="18" y2="16"/></svg>
+        </div>
+        <h3>Keyboard-first</h3>
+        <p>Vim-style navigation throughout. Browse schemas, edit queries, and explore results without touching the mouse.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon green">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+        </div>
+        <h3>Built in Rust</h3>
+        <p>Instant startup. Streams large result sets efficiently. Handles databases with 10,000+ tables via pagination.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon purple">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/><line x1="14" y1="4" x2="10" y2="20"/></svg>
+        </div>
+        <h3>Smart SQL editor</h3>
+        <p>Syntax highlighting, context-aware autocomplete, undo/redo, query formatting, and history navigation.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon blue">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
+        </div>
+        <h3>Schema browser</h3>
+        <p>Navigate schemas, tables, views, functions, and indexes. Filter with <code>/</code>, preview data, copy names, show DDL.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon yellow">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+        </div>
+        <h3>EXPLAIN ANALYZE</h3>
+        <p>One-key query plan analysis. Understand query performance with execution timing without leaving your workflow.</p>
+      </div>
+      <div class="feature">
+        <div class="feature-icon green">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        </div>
+        <h3>Export anywhere</h3>
+        <p>Save results as CSV or JSON. Copy cells, rows, or qualified table names directly to your clipboard.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ====== KEYBOARD SHORTCUTS ====== -->
+<section class="keys" aria-label="Keyboard shortcuts">
+  <div class="container">
+    <h2 class="section-title">A few essential keys</h2>
+    <p class="section-subtitle">Fully customizable via <code class="mono">~/.vizgres/config.toml</code></p>
+    <div class="key-grid">
+      <div class="key-row"><span class="kbd mono">F5</span> <span class="key-label">Execute query</span></div>
+      <div class="key-row"><span class="kbd mono">Ctrl+E</span> <span class="key-label">EXPLAIN ANALYZE</span></div>
+      <div class="key-row"><span class="kbd mono">Tab</span> <span class="key-label">Cycle focus</span></div>
+      <div class="key-row"><span class="kbd mono">j / k</span> <span class="key-label">Navigate up/down</span></div>
+      <div class="key-row"><span class="kbd mono">Enter</span> <span class="key-label">Expand / preview</span></div>
+      <div class="key-row"><span class="kbd mono">/</span> <span class="key-label">Filter tree</span></div>
+      <div class="key-row"><span class="kbd mono">Ctrl+T</span> <span class="key-label">New tab</span></div>
+      <div class="key-row"><span class="kbd mono">y</span> <span class="key-label">Copy name</span></div>
+      <div class="key-row"><span class="kbd mono">d</span> <span class="key-label">Show DDL</span></div>
+      <div class="key-row"><span class="kbd mono">Ctrl+S</span> <span class="key-label">Export CSV</span></div>
+      <div class="key-row"><span class="kbd mono">Ctrl+P</span> <span class="key-label">Command bar</span></div>
+      <div class="key-row"><span class="kbd mono">?</span> <span class="key-label">Show all keys</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ====== INSTALL ====== -->
+<section class="install-section" id="install">
+  <div class="container">
+    <div class="install-card">
+      <h2>Get started</h2>
+      <div class="install-steps">
+        <div class="install-step">
+          <span class="step-num">1</span>
+          <div class="step-content">
+            <p>Download the <a href="https://github.com/simpllyf/vizgres/releases/latest">latest release</a> for your platform</p>
+            <code class="step-code mono">tar xzf vizgres-*.tar.gz && sudo mv vizgres /usr/local/bin/</code>
+          </div>
+        </div>
+        <div class="install-step">
+          <span class="step-num">2</span>
+          <div class="step-content">
+            <p>Connect to your database</p>
+            <code class="step-code mono">vizgres postgres://user:pass@localhost:5432/mydb</code>
+          </div>
+        </div>
+        <div class="install-step">
+          <span class="step-num">3</span>
+          <div class="step-content">
+            <p>Or launch and pick a saved connection</p>
+            <code class="step-code mono">vizgres</code>
+          </div>
+        </div>
+      </div>
+      <p class="install-note">Prebuilt binaries for Linux x86_64 and macOS (ARM/Intel) &middot; Or <a href="https://github.com/simpllyf/vizgres#install">build from source</a></p>
+    </div>
+  </div>
+</section>
+
+<!-- ====== FOOTER ====== -->
+<footer>
+  <div class="container">
+    <p>MIT License &middot; <a href="https://github.com/simpllyf/vizgres">GitHub</a></p>
+  </div>
+</footer>
+
+<script>
+  const toggle = document.getElementById('themeToggle');
+  toggle.addEventListener('click', function() {
+    const html = document.documentElement;
+    const current = html.getAttribute('data-theme');
+    const next = current === 'dark' ? 'light' : 'dark';
+    html.setAttribute('data-theme', next);
+    localStorage.setItem('theme', next);
+  });
+</script>
+
+</body>
+</html>
