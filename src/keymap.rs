@@ -81,6 +81,7 @@ pub enum KeyAction {
     FilterTree,
     CopyName,
     ShowDefinition,
+    DeleteSavedQuery,
 
     // Completion
     NextCompletion,
@@ -325,6 +326,7 @@ pub fn parse_key_action(s: &str) -> Result<KeyAction, String> {
         "filter_tree" => Ok(KeyAction::FilterTree),
         "copy_name" => Ok(KeyAction::CopyName),
         "show_definition" => Ok(KeyAction::ShowDefinition),
+        "delete_saved_query" => Ok(KeyAction::DeleteSavedQuery),
         "next_completion" => Ok(KeyAction::NextCompletion),
         "prev_completion" => Ok(KeyAction::PrevCompletion),
         "show_help" => Ok(KeyAction::ShowHelp),
@@ -683,6 +685,13 @@ impl Default for KeyMap {
                 modifiers: KeyModifiers::NONE,
             },
             KeyAction::ShowDefinition,
+        );
+        tree.insert(
+            KeyBind {
+                code: KeyCode::Char('x'),
+                modifiers: KeyModifiers::NONE,
+            },
+            KeyAction::DeleteSavedQuery,
         );
         panels.insert(PanelFocus::TreeBrowser, tree);
 

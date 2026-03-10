@@ -212,6 +212,7 @@ const DEFAULT_CONFIG_TEMPLATE: &str = r#"# vizgres configuration
 # "enter" = "expand"
 # "space" = "toggle_expand"
 # "h" = "collapse"
+# "x" = "delete_saved_query"
 # "esc" = "cancel_query"
 "#;
 

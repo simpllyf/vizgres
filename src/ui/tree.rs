@@ -3,6 +3,7 @@
 //! Displays database schemas, tables, views, functions, indexes, and columns
 //! in a hierarchical tree grouped by category.
 
+use crate::config::SavedQuery;
 use crate::db::schema::SchemaTree;
 use crate::ui::Component;
 use crate::ui::theme::Theme;
@@ -21,6 +22,8 @@ enum NodeKind {
     Function,
     Index,
     LoadMore,
+    SavedQueryHeader,
+    SavedQuery,
 }
 
 /// A single item in the flattened tree view
@@ -66,6 +69,8 @@ pub struct TreeBrowser {
     pre_search_schema: Option<SchemaTree>,
     /// Whether a backend search is in progress
     searching: bool,
+    /// Saved queries for the current connection (shown at top of tree)
+    saved_queries: Vec<SavedQuery>,
 }
 
 impl TreeBrowser {
@@ -93,6 +98,7 @@ impl TreeBrowser {
             pre_filter_expanded: None,
             pre_search_schema: None,
             searching: false,
+            saved_queries: Vec::new(),
         }
     }
 
@@ -130,6 +136,34 @@ impl TreeBrowser {
 
         // If filtering, we collect items then filter based on the filter text
         let filter_lower = self.filter_text.to_lowercase();
+
+        // Saved queries section (above schemas)
+        if !self.saved_queries.is_empty() {
+            let sq_path = "__saved_queries__".to_string();
+            self.items.push(TreeItem {
+                label: format!("Saved Queries ({})", self.saved_queries.len()),
+                kind: NodeKind::SavedQueryHeader,
+                depth: 0,
+                path: sq_path.clone(),
+                expandable: true,
+                matches_filter: false,
+            });
+            if self.expanded.contains(&sq_path) {
+                for q in &self.saved_queries {
+                    let item_path = format!("__saved_queries__.{}", q.name);
+                    let matches =
+                        !filter_lower.is_empty() && q.name.to_lowercase().contains(&filter_lower);
+                    self.items.push(TreeItem {
+                        label: q.name.clone(),
+                        kind: NodeKind::SavedQuery,
+                        depth: 1,
+                        path: item_path,
+                        expandable: false,
+                        matches_filter: matches,
+                    });
+                }
+            }
+        }
 
         // Show schema count if there are multiple or if truncated
         let show_schema_count =
@@ -412,11 +446,16 @@ impl TreeBrowser {
 
             for path in &self.filter_match_paths {
                 paths_to_keep.insert(path.clone());
-                // Add all ancestor paths
-                let mut p = path.as_str();
-                while let Some((parent, _)) = p.rsplit_once('.') {
-                    paths_to_keep.insert(parent.to_string());
-                    p = parent;
+                // Add all ancestor paths (skip saved queries namespace
+                // since query names may contain dots)
+                if path.starts_with("__saved_queries__") {
+                    paths_to_keep.insert("__saved_queries__".to_string());
+                } else {
+                    let mut p = path.as_str();
+                    while let Some((parent, _)) = p.rsplit_once('.') {
+                        paths_to_keep.insert(parent.to_string());
+                        p = parent;
+                    }
                 }
             }
 
@@ -543,7 +582,10 @@ impl TreeBrowser {
                     None
                 }
             }
-            NodeKind::Category | NodeKind::LoadMore => None,
+            NodeKind::Category
+            | NodeKind::LoadMore
+            | NodeKind::SavedQueryHeader
+            | NodeKind::SavedQuery => None,
         }
     }
 
@@ -566,6 +608,51 @@ impl TreeBrowser {
     /// Expose the loaded schema tree for use by the completer.
     pub fn schema(&self) -> Option<&SchemaTree> {
         self.schema.as_ref()
+    }
+
+    /// Set saved queries for the current connection. Rebuilds the tree.
+    pub fn set_saved_queries(&mut self, queries: Vec<SavedQuery>) {
+        self.saved_queries = queries;
+        if !self.saved_queries.is_empty() {
+            self.expanded.insert("__saved_queries__".to_string());
+        }
+        self.rebuild_items();
+    }
+
+    /// If the selected node is a saved query, return a reference to it.
+    pub fn selected_saved_query(&self) -> Option<&SavedQuery> {
+        let item = self.items.get(self.selected)?;
+        if item.kind != NodeKind::SavedQuery {
+            return None;
+        }
+        let name = item.path.strip_prefix("__saved_queries__.")?;
+        self.saved_queries.iter().find(|q| q.name == name)
+    }
+
+    /// If the selected node is a saved query, return its name for deletion.
+    pub fn selected_saved_query_name(&self) -> Option<&str> {
+        let item = self.items.get(self.selected)?;
+        if item.kind != NodeKind::SavedQuery {
+            return None;
+        }
+        item.path.strip_prefix("__saved_queries__.")
+    }
+
+    /// Remove a saved query by name from the in-memory list and rebuild.
+    pub fn remove_saved_query(&mut self, name: &str) {
+        self.saved_queries.retain(|q| q.name != name);
+        self.rebuild_items();
+    }
+
+    /// Add or update a saved query in the in-memory list and rebuild.
+    pub fn upsert_saved_query(&mut self, query: SavedQuery) {
+        self.saved_queries.retain(|q| q.name != query.name);
+        self.saved_queries.push(query);
+        self.saved_queries.sort_by(|a, b| a.name.cmp(&b.name));
+        if !self.saved_queries.is_empty() {
+            self.expanded.insert("__saved_queries__".to_string());
+        }
+        self.rebuild_items();
     }
 
     pub fn collapse_current(&mut self) {
@@ -1125,6 +1212,8 @@ impl Component for TreeBrowser {
                     NodeKind::Function => theme.tree_function,
                     NodeKind::Index => theme.tree_index,
                     NodeKind::LoadMore => theme.tree_load_more,
+                    NodeKind::SavedQueryHeader => theme.tree_category,
+                    NodeKind::SavedQuery => theme.tree_table,
                 }
             };
 
