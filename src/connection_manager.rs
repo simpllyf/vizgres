@@ -1,7 +1,4 @@
 //! Per-tab database connection management.
-//!
-//! Each tab gets its own PostgreSQL connection, lazily created on first query.
-//! This gives each tab independent transaction state and allows concurrent queries.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -13,7 +10,7 @@ use crate::db;
 
 /// Manages per-tab database connections.
 ///
-/// Each tab gets its own PostgreSQL connection (lazily created on first query).
+/// Each tab gets its own PostgreSQL connection, lazily created on first query.
 /// This gives each tab independent transaction state and allows concurrent queries.
 pub struct ConnectionManager {
     /// Per-tab providers: tab_id → (provider, connection-error receiver)
