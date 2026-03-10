@@ -78,7 +78,7 @@ fn cell_to_export_string(cell: &CellValue) -> String {
         CellValue::Float(f) => f.to_string(),
         CellValue::Text(s) => s.clone(),
         CellValue::Boolean(b) => b.to_string(),
-        CellValue::Json(v) => v.to_string(),
+        CellValue::Json(s) => s.clone(),
         CellValue::Binary(b) => hex_encode(b),
         CellValue::DateTime(s) => s.clone(),
         CellValue::Uuid(s) => s.clone(),
@@ -104,7 +104,9 @@ fn cell_to_json(cell: &CellValue) -> serde_json::Value {
         }
         CellValue::Text(s) => serde_json::Value::String(s.clone()),
         CellValue::Boolean(b) => serde_json::Value::Bool(*b),
-        CellValue::Json(v) => v.clone(),
+        CellValue::Json(s) => {
+            serde_json::from_str(s).unwrap_or_else(|_| serde_json::Value::String(s.clone()))
+        }
         CellValue::Binary(b) => serde_json::Value::String(hex_encode(b)),
         CellValue::DateTime(s) => serde_json::Value::String(s.clone()),
         CellValue::Uuid(s) => serde_json::Value::String(s.clone()),
@@ -331,7 +333,7 @@ mod tests {
                 nullable: false,
             }],
             vec![Row {
-                values: vec![CellValue::Json(inner.clone())],
+                values: vec![CellValue::Json(inner.to_string())],
             }],
             Duration::from_millis(1),
             1,
