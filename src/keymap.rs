@@ -65,6 +65,7 @@ pub enum KeyAction {
 
     // Results-specific
     OpenInspector,
+    ToggleViewMode,
     CopyCell,
     CopyRow,
     ExportCsv,
@@ -312,6 +313,7 @@ pub fn parse_key_action(s: &str) -> Result<KeyAction, String> {
         "format_query" => Ok(KeyAction::FormatQuery),
         "cancel_query" => Ok(KeyAction::CancelQuery),
         "open_inspector" => Ok(KeyAction::OpenInspector),
+        "toggle_view_mode" => Ok(KeyAction::ToggleViewMode),
         "copy_cell" => Ok(KeyAction::CopyCell),
         "copy_row" => Ok(KeyAction::CopyRow),
         "export_csv" => Ok(KeyAction::ExportCsv),
@@ -544,6 +546,13 @@ impl Default for KeyMap {
                 modifiers: KeyModifiers::NONE,
             },
             KeyAction::OpenInspector,
+        );
+        results.insert(
+            KeyBind {
+                code: KeyCode::Char('v'),
+                modifiers: KeyModifiers::NONE,
+            },
+            KeyAction::ToggleViewMode,
         );
         results.insert(
             KeyBind {

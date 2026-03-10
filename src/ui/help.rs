@@ -230,6 +230,15 @@ impl HelpOverlay {
             help_line(
                 &format!(
                     "  {}",
+                    fmt(Some(PanelFocus::ResultsViewer), KeyAction::ToggleViewMode)
+                ),
+                "Toggle vertical view",
+                key,
+                desc,
+            ),
+            help_line(
+                &format!(
+                    "  {}",
                     fmt(Some(PanelFocus::ResultsViewer), KeyAction::CopyCell)
                 ),
                 "Copy cell",
