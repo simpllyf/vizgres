@@ -80,7 +80,12 @@ impl ResultsViewer {
         let col_def = results.columns.get(self.selected_col)?;
 
         let value = match cell {
-            CellValue::Json(v) => serde_json::to_string_pretty(v).unwrap_or_else(|_| v.to_string()),
+            CellValue::Json(s) => {
+                // Parse compact JSON string and pretty-print for the inspector
+                serde_json::from_str::<serde_json::Value>(s)
+                    .and_then(|v| serde_json::to_string_pretty(&v))
+                    .unwrap_or_else(|_| s.clone())
+            }
             other => other.display_string(100000),
         };
 
@@ -461,6 +466,60 @@ mod tests {
         let mut viewer = ResultsViewer::new();
         viewer.set_results(sample_results());
         assert_eq!(viewer.selected_row_text(), Some("1\tAlice".to_string()));
+    }
+
+    fn json_results() -> QueryResults {
+        QueryResults::new(
+            vec![
+                ColumnDef {
+                    name: "id".to_string(),
+                    data_type: DataType::Integer,
+                    nullable: false,
+                },
+                ColumnDef {
+                    name: "data".to_string(),
+                    data_type: DataType::Jsonb,
+                    nullable: false,
+                },
+            ],
+            vec![Row {
+                values: vec![
+                    CellValue::Integer(1),
+                    CellValue::Json(r#"{"name":"Alice","scores":[10,20]}"#.to_string()),
+                ],
+            }],
+            Duration::from_millis(5),
+            1,
+        )
+    }
+
+    #[test]
+    fn test_selected_cell_info_json_pretty_prints() {
+        let mut viewer = ResultsViewer::new();
+        viewer.set_results(json_results());
+        viewer.selected_col = 1; // JSON column
+        let (value, col_name, data_type) = viewer.selected_cell_info().unwrap();
+        assert_eq!(col_name, "data");
+        assert_eq!(data_type, "jsonb");
+        // Should be pretty-printed (contains newlines), not compact
+        assert!(
+            value.contains('\n'),
+            "JSON should be pretty-printed: {value}"
+        );
+        // Should be valid JSON when re-parsed
+        let parsed: serde_json::Value = serde_json::from_str(&value).unwrap();
+        assert_eq!(parsed["name"], "Alice");
+    }
+
+    #[test]
+    fn test_selected_cell_text_json_compact() {
+        let mut viewer = ResultsViewer::new();
+        viewer.set_results(json_results());
+        viewer.selected_col = 1;
+        let text = viewer.selected_cell_text().unwrap();
+        // selected_cell_text uses display_string, which returns compact JSON
+        assert!(!text.contains('\n'), "should be compact: {text}");
+        assert!(text.contains("Alice"));
     }
 
     #[test]

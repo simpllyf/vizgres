@@ -140,7 +140,8 @@ async fn test_query_json_data() {
 
     let first_row = &results.rows[0];
     match &first_row.values[1] {
-        CellValue::Json(v) => {
+        CellValue::Json(s) => {
+            let v: serde_json::Value = serde_json::from_str(s).unwrap();
             assert!(v.is_object(), "Metadata should be a JSON object");
             assert!(v.get("role").is_some(), "Should have role field");
         }

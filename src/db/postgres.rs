@@ -1504,7 +1504,7 @@ fn extract_cell_value(row: &tokio_postgres::Row, idx: usize, data_type: &DataTyp
         },
         DataType::Json | DataType::Jsonb => {
             match row.try_get::<_, Option<serde_json::Value>>(idx) {
-                Ok(Some(v)) => CellValue::Json(v),
+                Ok(Some(v)) => CellValue::Json(v.to_string()),
                 Ok(None) => CellValue::Null,
                 Err(_) => try_as_string(row, idx),
             }
@@ -1613,7 +1613,11 @@ fn extract_array_value(row: &tokio_postgres::Row, idx: usize, inner: &DataType) 
         },
         DataType::Json | DataType::Jsonb => {
             match row.try_get::<_, Option<Vec<serde_json::Value>>>(idx) {
-                Ok(Some(v)) => CellValue::Array(v.into_iter().map(CellValue::Json).collect()),
+                Ok(Some(v)) => CellValue::Array(
+                    v.into_iter()
+                        .map(|j| CellValue::Json(j.to_string()))
+                        .collect(),
+                ),
                 Ok(None) => CellValue::Null,
                 Err(_) => try_as_string(row, idx),
             }

@@ -121,24 +121,23 @@ impl Component for Inspector {
             Rect::new(area.x, area.y, area.width, 1),
         );
 
-        // Content area
+        // Content area — iterate lazily to avoid materializing all lines for large content
         let content_area = Rect::new(area.x, area.y + 1, area.width, area.height - 1);
-        let lines: Vec<&str> = content.lines().collect();
         let visible_height = content_area.height as usize;
+        let width = content_area.width as usize;
 
-        for i in 0..visible_height {
-            let line_idx = self.scroll_offset + i;
+        for (i, line) in content
+            .lines()
+            .skip(self.scroll_offset)
+            .take(visible_height)
+            .enumerate()
+        {
             let y = content_area.y + i as u16;
-
-            if line_idx < lines.len() {
-                let line = lines[line_idx];
-                let width = content_area.width as usize;
-                let display: String = line.chars().take(width).collect();
-                frame.render_widget(
-                    Paragraph::new(display).style(theme.inspector_text),
-                    Rect::new(content_area.x, y, content_area.width, 1),
-                );
-            }
+            let display: String = line.chars().take(width).collect();
+            frame.render_widget(
+                Paragraph::new(display).style(theme.inspector_text),
+                Rect::new(content_area.x, y, content_area.width, 1),
+            );
         }
     }
 }

@@ -147,8 +147,8 @@ pub enum CellValue {
     /// Boolean value
     Boolean(bool),
 
-    /// JSON value (parsed)
-    Json(serde_json::Value),
+    /// JSON value (stored as compact JSON string for efficient display)
+    Json(String),
 
     /// Binary data
     Binary(Vec<u8>),
@@ -194,19 +194,41 @@ impl DataType {
     }
 }
 
+/// Truncate a string with "..." suffix, respecting UTF-8 char boundaries.
+fn truncate_with_ellipsis(s: &str, max_len: usize) -> String {
+    let limit = max_len.saturating_sub(3);
+    let mut boundary = limit.min(s.len());
+    while boundary > 0 && !s.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    let mut result = String::with_capacity(boundary + 3);
+    result.push_str(&s[..boundary]);
+    result.push_str("...");
+    result
+}
+
 impl CellValue {
-    /// Get a display string for this cell value (truncated if needed)
+    /// Get a display string for this cell value (truncated if needed).
+    ///
+    /// String-backed types (Text, Json, DateTime, Uuid) avoid full cloning
+    /// when the value exceeds `max_len` — only the needed prefix is copied.
     pub fn display_string(&self, max_len: usize) -> String {
         let full = match self {
-            CellValue::Null => "NULL".to_string(),
+            CellValue::Null => return "NULL".to_string(),
             CellValue::Integer(i) => i.to_string(),
             CellValue::Float(f) => f.to_string(),
-            CellValue::Text(s) => s.clone(),
+            // String-backed types: avoid cloning the full string when truncating
+            CellValue::Text(s)
+            | CellValue::Json(s)
+            | CellValue::DateTime(s)
+            | CellValue::Uuid(s) => {
+                if s.len() <= max_len {
+                    return s.clone();
+                }
+                return truncate_with_ellipsis(s, max_len);
+            }
             CellValue::Boolean(b) => b.to_string(),
-            CellValue::Json(v) => v.to_string(),
             CellValue::Binary(b) => format!("<binary {} bytes>", b.len()),
-            CellValue::DateTime(s) => s.clone(),
-            CellValue::Uuid(s) => s.clone(),
             CellValue::Array(arr) => {
                 let items: Vec<String> = arr.iter().map(|v| v.display_string(max_len)).collect();
                 format!("{{{}}}", items.join(","))
@@ -214,7 +236,7 @@ impl CellValue {
         };
 
         if full.len() > max_len {
-            format!("{}...", &full[..max_len.saturating_sub(3)])
+            truncate_with_ellipsis(&full, max_len)
         } else {
             full
         }
@@ -313,5 +335,62 @@ mod tests {
             Duration::from_millis(1),
             1,
         );
+    }
+
+    #[test]
+    fn test_json_display_string_no_truncation() {
+        let val = CellValue::Json(r#"{"key":"value"}"#.to_string());
+        assert_eq!(val.display_string(100), r#"{"key":"value"}"#);
+    }
+
+    #[test]
+    fn test_json_display_string_truncated() {
+        let val = CellValue::Json(serde_json::json!({"key": "value", "other": "data"}).to_string());
+        let display = val.display_string(15);
+        assert!(
+            display.ends_with("..."),
+            "should end with ellipsis: {display}"
+        );
+        assert!(display.len() <= 15, "should respect max_len: {display}");
+    }
+
+    #[test]
+    fn test_json_display_large_value_is_efficient() {
+        // Build a large JSON string (~100KB) — display_string is pure truncation, no parsing
+        let mut obj = serde_json::Map::new();
+        for i in 0..1000 {
+            obj.insert(
+                format!("key_{i}"),
+                serde_json::Value::String("x".repeat(100)),
+            );
+        }
+        let val = CellValue::Json(serde_json::Value::Object(obj).to_string());
+
+        let display = val.display_string(40);
+        assert!(display.len() <= 40);
+        assert!(display.ends_with("..."));
+    }
+
+    #[test]
+    fn test_json_display_empty_object() {
+        let val = CellValue::Json("{}".to_string());
+        assert_eq!(val.display_string(100), "{}");
+    }
+
+    #[test]
+    fn test_json_display_nested() {
+        let val = CellValue::Json(serde_json::json!({"a":{"b":{"c":1}}}).to_string());
+        let full = val.display_string(100);
+        assert_eq!(full, r#"{"a":{"b":{"c":1}}}"#);
+    }
+
+    #[test]
+    fn test_text_display_utf8_truncation() {
+        // Multi-byte chars should not panic on truncation
+        let val = CellValue::Text("café au lait".to_string());
+        let display = val.display_string(7);
+        assert!(display.ends_with("..."));
+        // Should not panic or produce invalid UTF-8
+        assert!(display.len() <= 10); // may be fewer bytes due to char boundary
     }
 }
