@@ -94,7 +94,12 @@ async fn main() -> Result<()> {
             .await
             .map_err(|e| anyhow::anyhow!("Schema load failed: {}", e))?;
 
-        let app = App::with_connection(conn_config.name.clone(), schema, &settings);
+        let app = App::with_connection(
+            conn_config.name.clone(),
+            conn_config.is_saved,
+            schema,
+            &settings,
+        );
 
         // Seed tab 0 with the initial connection
         let mut mgr =
@@ -387,7 +392,7 @@ async fn run_app(
                         let limit = app.tree_browser.category_limit();
                         match prov.get_schema(limit).await {
                             Ok(schema) => {
-                                app.apply_connection(config.name.clone(), schema);
+                                app.apply_connection(config.name.clone(), config.is_saved, schema);
                                 app.set_status(
                                     format!("Connected to {}", config.name),
                                     StatusLevel::Success,

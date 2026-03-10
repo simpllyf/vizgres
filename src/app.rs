@@ -58,6 +58,8 @@ impl Tab {
 pub struct App {
     /// Name of current connection profile
     pub connection_name: Option<String>,
+    /// Whether the current connection is a saved profile from connections.toml
+    pub is_saved_connection: bool,
 
     /// Which panel currently has focus
     pub focus: PanelFocus,
@@ -266,6 +268,7 @@ impl App {
         let (keymap, warnings) = KeyMap::from_config(&settings.keybindings);
         let mut app = Self {
             connection_name: None,
+            is_saved_connection: false,
             focus: PanelFocus::QueryEditor,
             previous_focus: PanelFocus::QueryEditor,
             tree_browser: TreeBrowser::with_settings(
@@ -304,9 +307,15 @@ impl App {
     }
 
     /// Create an app pre-loaded with a connection name and schema
-    pub fn with_connection(name: String, schema: SchemaTree, settings: &Settings) -> Self {
+    pub fn with_connection(
+        name: String,
+        saved: bool,
+        schema: SchemaTree,
+        settings: &Settings,
+    ) -> Self {
         let mut app = Self::new_with_settings(settings);
         app.connection_name = Some(name);
+        app.is_saved_connection = saved;
         app.tree_browser.set_schema(schema);
         app
     }
@@ -487,6 +496,8 @@ impl App {
                 for tab in &mut self.tabs {
                     tab.transaction_state = TransactionState::Idle;
                 }
+                self.connection_name = None;
+                self.is_saved_connection = false;
                 self.set_status(format!("Connection lost: {}", msg), StatusLevel::Error);
                 self.show_connection_dialog();
                 Ok(Action::Disconnect)
@@ -1343,8 +1354,14 @@ impl App {
     }
 
     /// Apply a new connection (after successful connect + schema load)
-    pub fn apply_connection(&mut self, name: String, schema: crate::db::schema::SchemaTree) {
+    pub fn apply_connection(
+        &mut self,
+        name: String,
+        saved: bool,
+        schema: crate::db::schema::SchemaTree,
+    ) {
         self.connection_name = Some(name);
+        self.is_saved_connection = saved;
         self.tree_browser.set_schema(schema);
         // Reset all tabs to fresh state (transaction_state resets via Tab::new)
         self.tabs = vec![Tab::new(0)];
@@ -1504,6 +1521,7 @@ mod tests {
     fn test_app_new_has_correct_defaults() {
         let app = App::new();
         assert!(app.connection_name.is_none());
+        assert!(!app.is_saved_connection);
         assert_eq!(app.focus, PanelFocus::QueryEditor);
         assert!(app.running);
         assert_eq!(app.tabs.len(), 1);
@@ -1526,8 +1544,52 @@ mod tests {
                 functions: PaginatedVec::default(),
             }]),
         };
-        let app = App::with_connection("test-db".to_string(), schema, &Settings::default());
+        let app = App::with_connection("test-db".to_string(), false, schema, &Settings::default());
         assert_eq!(app.connection_name.as_deref(), Some("test-db"));
+        assert!(!app.is_saved_connection);
+    }
+
+    #[test]
+    fn test_saved_connection_flag() {
+        use crate::db::schema::SchemaTree;
+
+        // with_connection(saved: true) sets the flag
+        let app = App::with_connection(
+            "prod".to_string(),
+            true,
+            SchemaTree::new(),
+            &Settings::default(),
+        );
+        assert!(app.is_saved_connection);
+
+        // apply_connection propagates the flag
+        let mut app = App::new();
+        assert!(!app.is_saved_connection);
+        app.apply_connection("prod".to_string(), true, SchemaTree::new());
+        assert!(app.is_saved_connection);
+
+        // Reconnecting with unsaved clears the flag
+        app.apply_connection("adhoc@localhost".to_string(), false, SchemaTree::new());
+        assert!(!app.is_saved_connection);
+    }
+
+    #[test]
+    fn test_connection_lost_clears_saved_flag() {
+        use crate::db::schema::SchemaTree;
+
+        let mut app = App::with_connection(
+            "prod".to_string(),
+            true,
+            SchemaTree::new(),
+            &Settings::default(),
+        );
+        assert!(app.is_saved_connection);
+        assert!(app.connection_name.is_some());
+
+        app.handle_event(AppEvent::ConnectionLost("gone".to_string()))
+            .unwrap();
+        assert!(!app.is_saved_connection);
+        assert!(app.connection_name.is_none());
     }
 
     #[test]
@@ -1901,7 +1963,7 @@ mod tests {
                 functions: PaginatedVec::default(),
             }]),
         };
-        let mut app = App::with_connection("test".to_string(), schema, &Settings::default());
+        let mut app = App::with_connection("test".to_string(), false, schema, &Settings::default());
         app.focus = PanelFocus::TreeBrowser;
 
         // Navigate to the "users" table node via public API
@@ -1957,7 +2019,7 @@ mod tests {
                 },
             ]),
         };
-        let mut app = App::with_connection("test".to_string(), schema, &Settings::default());
+        let mut app = App::with_connection("test".to_string(), false, schema, &Settings::default());
         app.focus = PanelFocus::TreeBrowser;
 
         // Navigate to the collapsed "other" schema node
@@ -2468,7 +2530,7 @@ mod tests {
             }]),
         };
 
-        app.apply_connection("new-db".to_string(), schema);
+        app.apply_connection("new-db".to_string(), false, schema);
 
         assert_eq!(app.connection_name.as_deref(), Some("new-db"));
         assert_eq!(app.tabs.len(), 1);
@@ -2688,7 +2750,7 @@ mod tests {
                 functions: PaginatedVec::default(),
             }]),
         };
-        let mut app = App::with_connection("test".to_string(), schema, &Settings::default());
+        let mut app = App::with_connection("test".to_string(), false, schema, &Settings::default());
         app.focus = PanelFocus::TreeBrowser;
 
         // Navigate to users table
@@ -2844,7 +2906,7 @@ mod tests {
 
         let mut app = App::new();
         app.tabs[0].transaction_state = TransactionState::InTransaction;
-        app.apply_connection("test".to_string(), SchemaTree::new());
+        app.apply_connection("test".to_string(), false, SchemaTree::new());
         assert_eq!(app.tabs[0].transaction_state, TransactionState::Idle);
     }
 
@@ -3039,7 +3101,7 @@ mod tests {
         use crate::db::schema::SchemaTree;
         let mut app = App::new();
         app.tabs[0].transaction_state = TransactionState::InTransaction;
-        app.apply_connection("test-db".to_string(), SchemaTree::new());
+        app.apply_connection("test-db".to_string(), false, SchemaTree::new());
         assert_eq!(app.connection_name.as_deref(), Some("test-db"));
         assert_eq!(app.tabs[0].transaction_state, TransactionState::Idle);
     }

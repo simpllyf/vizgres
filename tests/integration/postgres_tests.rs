@@ -24,6 +24,7 @@ fn test_config() -> ConnectionConfig {
             std::env::var("TEST_DB_PASSWORD").unwrap_or_else(|_| "test_password".to_string()),
         ),
         ssl_mode: SslMode::Disable,
+        is_saved: false,
     }
 }
 
