@@ -8,6 +8,15 @@ use crate::ui::theme::Theme;
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
+/// Display mode for query results
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewMode {
+    /// Standard horizontal table layout
+    Table,
+    /// Vertical key-value layout showing one row at a time
+    Vertical,
+}
+
 /// Results table viewer
 pub struct ResultsViewer {
     results: Option<QueryResults>,
@@ -19,6 +28,8 @@ pub struct ResultsViewer {
     col_widths: Vec<u16>,
     /// Last query error (shown in results area)
     error: Option<String>,
+    /// Current display mode
+    view_mode: ViewMode,
 }
 
 impl ResultsViewer {
@@ -31,6 +42,7 @@ impl ResultsViewer {
             h_scroll_offset: 0,
             col_widths: Vec::new(),
             error: None,
+            view_mode: ViewMode::Table,
         }
     }
 
@@ -102,6 +114,19 @@ impl ResultsViewer {
         let row = results.rows.get(self.selected_row)?;
         let parts: Vec<String> = row.values.iter().map(|v| v.display_string(10000)).collect();
         Some(parts.join("\t"))
+    }
+
+    /// Toggle between table and vertical view modes
+    pub fn toggle_view_mode(&mut self) {
+        self.view_mode = match self.view_mode {
+            ViewMode::Table => ViewMode::Vertical,
+            ViewMode::Vertical => ViewMode::Table,
+        };
+    }
+
+    /// Current view mode
+    pub fn view_mode(&self) -> ViewMode {
+        self.view_mode
     }
 
     pub fn move_up(&mut self) {
@@ -214,6 +239,11 @@ impl Component for ResultsViewer {
         };
 
         if area.height < 2 || area.width < 5 {
+            return;
+        }
+
+        if self.view_mode == ViewMode::Vertical {
+            render_vertical(frame, area, self, results, focused, theme);
             return;
         }
 
@@ -401,6 +431,148 @@ fn truncate_str(s: &str, max: usize) -> String {
     } else {
         s.chars().take(max).collect()
     }
+}
+
+/// Render results in vertical mode: one row at a time as column_name │ value pairs.
+fn render_vertical(
+    frame: &mut Frame,
+    area: Rect,
+    viewer: &ResultsViewer,
+    results: &QueryResults,
+    focused: bool,
+    theme: &Theme,
+) {
+    // Layout: 1 line header, N field lines, 1 line footer
+    let visible_fields = (area.height as usize).saturating_sub(2);
+    if visible_fields == 0 {
+        return;
+    }
+
+    let row = match results.rows.get(viewer.selected_row) {
+        Some(r) => r,
+        None => {
+            let p = Paragraph::new("No rows").style(theme.results_empty);
+            frame.render_widget(p, area);
+            return;
+        }
+    };
+
+    // Header: "Row N/M (vertical)"
+    let truncated_suffix = if results.truncated { "+" } else { "" };
+    let header = format!(
+        " Row {}/{}{} \u{2500} vertical view (v to toggle)",
+        viewer.selected_row + 1,
+        results.row_count,
+        truncated_suffix,
+    );
+    let header_style = if focused {
+        theme.results_header
+    } else {
+        theme.results_footer
+    };
+    frame.render_widget(
+        Paragraph::new(header).style(header_style),
+        Rect::new(area.x, area.y, area.width, 1),
+    );
+
+    // Compute label width (longest column name)
+    let label_width = results
+        .columns
+        .iter()
+        .map(|c| c.name.len())
+        .max()
+        .unwrap_or(0)
+        .min(area.width as usize / 3);
+
+    // Compute field scroll offset to keep selected_col visible
+    let field_offset = if viewer.selected_col >= visible_fields {
+        viewer.selected_col - visible_fields + 1
+    } else {
+        0
+    };
+
+    let separator = "\u{2502}"; // │
+    let value_width = (area.width as usize).saturating_sub(label_width + 3); // " │ "
+
+    for vis in 0..visible_fields {
+        let col_idx = field_offset + vis;
+        let y = area.y + 1 + vis as u16;
+        if y >= area.y + area.height - 1 {
+            break;
+        }
+        if col_idx >= results.columns.len() {
+            break;
+        }
+
+        let col_def = &results.columns[col_idx];
+        let cell = match row.values.get(col_idx) {
+            Some(c) => c,
+            None => break,
+        };
+
+        let is_selected = focused && col_idx == viewer.selected_col;
+        let label = format!("{:>width$}", col_def.name, width = label_width);
+        let value = cell.display_string(value_width);
+        let padded_value = format!("{:<width$}", value, width = value_width);
+
+        let label_style = if is_selected {
+            theme.results_selected
+        } else {
+            theme.results_header
+        };
+        let sep_style = theme.results_footer;
+        let value_style = if is_selected {
+            theme.results_selected
+        } else if cell.is_null() {
+            theme.results_null
+        } else if col_idx % 2 == 0 {
+            theme.results_row_even
+        } else {
+            theme.results_row_odd
+        };
+
+        // Render: label │ value
+        let label_w = label_width as u16;
+        let sep_w = 3u16; // " │ "
+        let val_w = area.width.saturating_sub(label_w + sep_w);
+
+        if label_w > 0 {
+            frame.render_widget(
+                Paragraph::new(label).style(label_style),
+                Rect::new(area.x, y, label_w.min(area.width), 1),
+            );
+        }
+        if label_w + sep_w <= area.width {
+            frame.render_widget(
+                Paragraph::new(format!(" {} ", separator)).style(sep_style),
+                Rect::new(
+                    area.x + label_w,
+                    y,
+                    sep_w.min(area.width.saturating_sub(label_w)),
+                    1,
+                ),
+            );
+        }
+        if val_w > 0 {
+            frame.render_widget(
+                Paragraph::new(padded_value).style(value_style),
+                Rect::new(area.x + label_w + sep_w, y, val_w, 1),
+            );
+        }
+    }
+
+    // Footer
+    let footer_y = area.y + area.height - 1;
+    let footer = format!(
+        "Field {}/{} | {:.1}ms | \u{2191}\u{2193}=rows \u{2190}\u{2192}=fields",
+        viewer.selected_col + 1,
+        results.columns.len(),
+        results.execution_time.as_secs_f64() * 1000.0,
+    );
+    frame.render_widget(
+        Paragraph::new(footer).style(theme.results_footer),
+        Rect::new(area.x, footer_y, area.width, 1),
+    );
 }
 
 #[cfg(test)]
@@ -682,5 +854,50 @@ mod tests {
         assert_eq!(truncate_str("hello", 3), "hel");
         assert_eq!(truncate_str("hello", 2), "he");
         assert_eq!(truncate_str("日本語", 2), "日本");
+    }
+
+    // ── View mode tests ──────────────────────────────────
+    #[test]
+    fn test_default_view_mode_is_table() {
+        let viewer = ResultsViewer::new();
+        assert_eq!(viewer.view_mode(), ViewMode::Table);
+    }
+
+    #[test]
+    fn test_toggle_view_mode() {
+        let mut viewer = ResultsViewer::new();
+        viewer.toggle_view_mode();
+        assert_eq!(viewer.view_mode(), ViewMode::Vertical);
+        viewer.toggle_view_mode();
+        assert_eq!(viewer.view_mode(), ViewMode::Table);
+    }
+
+    #[test]
+    fn test_set_results_preserves_view_mode() {
+        let mut viewer = ResultsViewer::new();
+        viewer.toggle_view_mode();
+        assert_eq!(viewer.view_mode(), ViewMode::Vertical);
+        viewer.set_results(sample_results());
+        // View mode should persist across new results
+        assert_eq!(viewer.view_mode(), ViewMode::Vertical);
+    }
+
+    #[test]
+    fn test_navigation_works_in_vertical_mode() {
+        let mut viewer = ResultsViewer::new();
+        viewer.set_results(sample_results()); // 2 rows, 2 cols
+        viewer.toggle_view_mode();
+
+        // up/down still navigates rows
+        viewer.move_down();
+        assert_eq!(viewer.selected_row, 1);
+        viewer.move_up();
+        assert_eq!(viewer.selected_row, 0);
+
+        // left/right navigates fields (columns)
+        viewer.move_right();
+        assert_eq!(viewer.selected_col, 1);
+        viewer.move_left();
+        assert_eq!(viewer.selected_col, 0);
     }
 }
