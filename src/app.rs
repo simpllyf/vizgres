@@ -3082,4 +3082,73 @@ mod tests {
         assert!(matches!(action, Action::None));
         assert_eq!(app.tabs.len(), 2); // Tab not closed
     }
+
+    #[test]
+    fn test_transaction_state_isolated_per_tab() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+
+        // Tab 0: start a transaction
+        app.tabs[0].editor.set_content("BEGIN".to_string());
+        let f5 = KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE);
+        app.handle_key(f5);
+        assert_eq!(
+            app.tabs[0].transaction_state,
+            TransactionState::InTransaction
+        );
+
+        // Open tab 1 — should start Idle
+        app.new_tab();
+        assert_eq!(app.tabs[1].transaction_state, TransactionState::Idle);
+
+        // Run a query on tab 1 — tab 0's state should be unaffected
+        app.tabs[1].editor.set_content("SELECT 1".to_string());
+        app.handle_key(f5);
+        assert_eq!(app.tabs[1].transaction_state, TransactionState::Idle);
+        assert_eq!(
+            app.tabs[0].transaction_state,
+            TransactionState::InTransaction
+        );
+    }
+
+    #[test]
+    fn test_close_tab_with_failed_transaction_warns() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+        app.new_tab();
+
+        // Set failed transaction state on active tab
+        app.tab_mut().transaction_state = TransactionState::Failed;
+
+        let close_key = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL);
+        let action = app.handle_key(close_key);
+        assert!(matches!(action, Action::TabClosed { .. }));
+        assert!(app.status_message.is_some());
+        assert!(
+            app.status_message
+                .unwrap()
+                .message
+                .contains("uncommitted transaction")
+        );
+    }
+
+    #[test]
+    fn test_connection_lost_resets_all_tabs_transaction_state() {
+        let mut app = App::new();
+        app.new_tab();
+
+        // Both tabs have active transactions
+        app.tabs[0].transaction_state = TransactionState::InTransaction;
+        app.tabs[1].transaction_state = TransactionState::Failed;
+
+        app.handle_event(AppEvent::ConnectionLost("server crashed".to_string()))
+            .unwrap();
+
+        assert_eq!(app.tabs[0].transaction_state, TransactionState::Idle);
+        assert_eq!(app.tabs[1].transaction_state, TransactionState::Idle);
+    }
 }
