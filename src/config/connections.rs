@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Database connection configuration
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectionConfig {
     /// Connection profile name
     pub name: String,
@@ -38,6 +38,20 @@ pub struct ConnectionConfig {
     /// Runtime-only flag — not serialized.
     #[serde(skip)]
     pub is_saved: bool,
+}
+
+/// Equality ignores `is_saved` — two configs pointing at the same database
+/// are equal regardless of whether they came from disk or a URL.
+impl PartialEq for ConnectionConfig {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.host == other.host
+            && self.port == other.port
+            && self.database == other.database
+            && self.username == other.username
+            && self.password == other.password
+            && self.ssl_mode == other.ssl_mode
+    }
 }
 
 /// SSL connection mode
@@ -375,6 +389,7 @@ mod tests {
         assert_eq!(config.username, "user");
         assert_eq!(config.password, Some("pass".to_string()));
         assert_eq!(config.ssl_mode, SslMode::Prefer);
+        assert!(!config.is_saved, "from_url should produce is_saved = false");
     }
 
     #[test]
@@ -802,5 +817,13 @@ mod tests {
             !toml_str.contains("password"),
             "None password should not appear in TOML"
         );
+    }
+
+    #[test]
+    fn test_equality_ignores_is_saved() {
+        let a = ConnectionConfig::from_url("postgres://user:pass@localhost/mydb").unwrap();
+        let mut b = a.clone();
+        b.is_saved = true;
+        assert_eq!(a, b, "is_saved should not affect equality");
     }
 }

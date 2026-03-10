@@ -651,6 +651,7 @@ mod tests {
                 assert_eq!(config.host, "localhost");
                 assert_eq!(config.username, "user");
                 assert_eq!(config.database, "mydb");
+                assert!(!config.is_saved, "URL-only connection should not be saved");
             }
             _ => panic!("Expected Connect action"),
         }
@@ -848,6 +849,10 @@ mod tests {
             DialogAction::Connect(config) => {
                 assert_eq!(config.name, "my-local");
                 assert_eq!(config.host, "localhost");
+                assert!(
+                    config.is_saved,
+                    "named connection should be marked as saved"
+                );
             }
             _ => panic!("Expected Connect action"),
         }
