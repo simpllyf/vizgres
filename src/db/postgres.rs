@@ -224,7 +224,10 @@ impl PostgresProvider {
     pub async fn cancel_query_enhanced(&self, terminate: bool) -> DbResult<CancelResult> {
         let pid = self.backend_pid;
         if pid == 0 {
-            return Ok(CancelResult::AlreadyFinished);
+            // PID unknown — skip pg_cancel_backend/pg_terminate_backend and fall
+            // back to the CancelToken protocol which doesn't require a PID.
+            let _ = self.cancel_query().await;
+            return Ok(CancelResult::FellBackToToken);
         }
 
         if terminate {
