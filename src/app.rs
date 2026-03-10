@@ -84,6 +84,9 @@ pub struct App {
     /// Pending export format (set when Ctrl+S/Ctrl+J opens the filename prompt)
     pending_export: Option<ExportFormat>,
 
+    /// Pending save-query prompt (waiting for user to type a name)
+    pending_save_query: bool,
+
     /// Query history for Ctrl+Up/Down navigation
     history: QueryHistory,
 
@@ -283,6 +286,7 @@ impl App {
             active_tab: 0,
             next_tab_id: 1,
             pending_export: None,
+            pending_save_query: false,
             history: QueryHistory::load(settings.settings.history_size),
             max_tabs: settings.settings.max_tabs,
             keymap,
@@ -314,9 +318,10 @@ impl App {
         settings: &Settings,
     ) -> Self {
         let mut app = Self::new_with_settings(settings);
-        app.connection_name = Some(name);
+        app.connection_name = Some(name.clone());
         app.is_saved_connection = saved;
         app.tree_browser.set_schema(schema);
+        app.load_saved_queries_for(&name, saved);
         app
     }
 
@@ -498,6 +503,8 @@ impl App {
                 }
                 self.connection_name = None;
                 self.is_saved_connection = false;
+                self.pending_save_query = false;
+                self.pending_export = None;
                 self.set_status(format!("Connection lost: {}", msg), StatusLevel::Error);
                 self.show_connection_dialog();
                 Ok(Action::Disconnect)
@@ -913,6 +920,15 @@ impl App {
                             limit,
                         };
                     }
+                    // Check if saved query is selected - load into editor
+                    if let Some(sq) = self.tree_browser.selected_saved_query() {
+                        let sql = sq.sql.clone();
+                        let name = sq.name.clone();
+                        self.tab_mut().editor.set_content(sql);
+                        self.focus = PanelFocus::QueryEditor;
+                        self.set_status(format!("Loaded saved query: {}", name), StatusLevel::Info);
+                        return Action::None;
+                    }
                     // Check if table/view is selected - run preview query
                     if let Some(sql) = self.tree_browser.preview_query() {
                         let tab_id = self.tab().id;
@@ -1002,6 +1018,36 @@ impl App {
                 Action::None
             }
 
+            KeyAction::DeleteSavedQuery => {
+                if self.focus == PanelFocus::TreeBrowser {
+                    if let Some(name) = self.tree_browser.selected_saved_query_name() {
+                        let name = name.to_string();
+                        if let Some(conn) = &self.connection_name {
+                            let conn = conn.clone();
+                            if let Err(e) = crate::config::saved_queries::delete_query(&conn, &name)
+                            {
+                                self.set_status(
+                                    format!("Failed to delete query: {}", e),
+                                    StatusLevel::Error,
+                                );
+                            } else {
+                                self.tree_browser.remove_saved_query(&name);
+                                self.set_status(
+                                    format!("Deleted saved query: {}", name),
+                                    StatusLevel::Success,
+                                );
+                            }
+                        }
+                    } else {
+                        self.set_status(
+                            "Select a saved query to delete".to_string(),
+                            StatusLevel::Warning,
+                        );
+                    }
+                }
+                Action::None
+            }
+
             // ── Modal (inspector, command bar, help) ──────────
             KeyAction::Dismiss => {
                 match self.focus {
@@ -1011,6 +1057,7 @@ impl App {
                     }
                     PanelFocus::CommandBar => {
                         self.pending_export = None;
+                        self.pending_save_query = false;
                         self.command_bar.deactivate();
                         self.focus = self.previous_focus;
                     }
@@ -1027,6 +1074,7 @@ impl App {
                     let input = self.command_bar.input_text().to_string();
                     let is_prompt = self.command_bar.is_prompt_mode();
                     let format = self.pending_export.take();
+                    let save_query = std::mem::take(&mut self.pending_save_query);
                     self.command_bar.deactivate();
                     self.focus = self.previous_focus;
 
@@ -1037,6 +1085,8 @@ impl App {
                     if is_prompt {
                         if let Some(fmt) = format {
                             self.execute_export(fmt, &input);
+                        } else if save_query {
+                            self.finish_save_query(&input);
                         }
                         Action::None
                     } else {
@@ -1194,6 +1244,29 @@ impl App {
             Command::Quit => Action::Quit,
             Command::Connect => {
                 self.show_connection_dialog();
+                Action::None
+            }
+            Command::SaveQuery { name } => {
+                if !self.is_saved_connection {
+                    self.set_status(
+                        "Save a connection profile first to use saved queries".to_string(),
+                        StatusLevel::Warning,
+                    );
+                    return Action::None;
+                }
+                let sql = self.tab().editor.get_content();
+                if sql.trim().is_empty() {
+                    self.set_status(
+                        "Editor is empty — nothing to save".to_string(),
+                        StatusLevel::Warning,
+                    );
+                    return Action::None;
+                }
+                if let Some(name) = name {
+                    self.finish_save_query(&name);
+                } else {
+                    self.start_save_query_prompt();
+                }
                 Action::None
             }
         }
@@ -1360,14 +1433,27 @@ impl App {
         saved: bool,
         schema: crate::db::schema::SchemaTree,
     ) {
-        self.connection_name = Some(name);
+        self.connection_name = Some(name.clone());
         self.is_saved_connection = saved;
         self.tree_browser.set_schema(schema);
+        self.load_saved_queries_for(&name, saved);
         // Reset all tabs to fresh state (transaction_state resets via Tab::new)
         self.tabs = vec![Tab::new(0)];
         self.active_tab = 0;
         self.next_tab_id = 1;
         self.focus = PanelFocus::QueryEditor;
+    }
+
+    /// Load saved queries into the tree browser for a saved connection
+    fn load_saved_queries_for(&mut self, connection_name: &str, saved: bool) {
+        if saved {
+            match crate::config::saved_queries::load_queries_for_connection(connection_name) {
+                Ok(queries) => self.tree_browser.set_saved_queries(queries),
+                Err(_) => self.tree_browser.set_saved_queries(Vec::new()),
+            }
+        } else {
+            self.tree_browser.set_saved_queries(Vec::new());
+        }
     }
 
     fn start_export(&mut self, format: ExportFormat) {
@@ -1411,6 +1497,41 @@ impl App {
                 self.set_status(format!("Export failed: {}", e), StatusLevel::Error);
             }
         }
+    }
+
+    fn start_save_query_prompt(&mut self) {
+        self.pending_save_query = true;
+        self.previous_focus = self.focus;
+        self.focus = PanelFocus::CommandBar;
+        self.command_bar
+            .activate_with_prompt("Save query as: ".to_string(), String::new());
+    }
+
+    fn finish_save_query(&mut self, name: &str) {
+        let name = name.trim();
+        if name.is_empty() {
+            self.set_status(
+                "Query name cannot be empty".to_string(),
+                StatusLevel::Warning,
+            );
+            return;
+        }
+        let Some(conn) = self.connection_name.clone() else {
+            self.set_status("No active connection".to_string(), StatusLevel::Error);
+            return;
+        };
+        let sql = self.tab().editor.get_content();
+        let query = crate::config::SavedQuery {
+            connection: conn,
+            name: name.to_string(),
+            sql,
+        };
+        if let Err(e) = crate::config::saved_queries::save_query(&query) {
+            self.set_status(format!("Failed to save query: {}", e), StatusLevel::Error);
+            return;
+        }
+        self.tree_browser.upsert_saved_query(query);
+        self.set_status(format!("Saved query: {}", name), StatusLevel::Success);
     }
 
     fn copy_to_clipboard(&mut self, text: &str) {
@@ -3216,5 +3337,112 @@ mod tests {
 
         assert_eq!(app.tabs[0].transaction_state, TransactionState::Idle);
         assert_eq!(app.tabs[1].transaction_state, TransactionState::Idle);
+    }
+
+    // ── Saved queries tests ──────────────────────────
+
+    #[test]
+    fn test_save_query_requires_saved_connection() {
+        let mut app = App::new();
+        app.connection_name = Some("test".to_string());
+        app.is_saved_connection = false;
+        app.tab_mut().editor.set_content("SELECT 1".to_string());
+
+        let action = app.execute_command(Command::SaveQuery {
+            name: Some("q1".to_string()),
+        });
+        assert!(matches!(action, Action::None));
+        assert!(
+            app.status_message
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("Save a connection")
+        );
+    }
+
+    #[test]
+    fn test_save_query_requires_editor_content() {
+        let mut app = App::new();
+        app.connection_name = Some("test".to_string());
+        app.is_saved_connection = true;
+
+        let action = app.execute_command(Command::SaveQuery {
+            name: Some("q1".to_string()),
+        });
+        assert!(matches!(action, Action::None));
+        assert!(
+            app.status_message
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("empty")
+        );
+    }
+
+    #[test]
+    fn test_save_query_no_name_opens_prompt() {
+        let mut app = App::new();
+        app.connection_name = Some("test".to_string());
+        app.is_saved_connection = true;
+        app.tab_mut().editor.set_content("SELECT 1".to_string());
+
+        app.execute_command(Command::SaveQuery { name: None });
+
+        assert!(app.pending_save_query);
+        assert!(app.command_bar.is_prompt_mode());
+        assert_eq!(app.focus, PanelFocus::CommandBar);
+    }
+
+    #[test]
+    fn test_dismiss_clears_pending_save_query() {
+        let mut app = App::new();
+        app.connection_name = Some("test".to_string());
+        app.is_saved_connection = true;
+        app.tab_mut().editor.set_content("SELECT 1".to_string());
+
+        app.execute_command(Command::SaveQuery { name: None });
+        assert!(app.pending_save_query);
+
+        // Press Escape to dismiss
+        app.handle_event(AppEvent::Key(KeyEvent::from(
+            crossterm::event::KeyCode::Esc,
+        )))
+        .unwrap();
+
+        assert!(!app.pending_save_query);
+        assert!(!app.command_bar.is_active());
+    }
+
+    #[test]
+    fn test_expand_on_saved_query_loads_into_editor() {
+        use crate::config::SavedQuery;
+        use crate::db::schema::SchemaTree;
+
+        let mut app = App::new();
+        app.connection_name = Some("test".to_string());
+        app.is_saved_connection = true;
+        app.focus = PanelFocus::TreeBrowser;
+
+        // Set an empty schema so the tree can rebuild
+        app.tree_browser.set_schema(SchemaTree::new());
+
+        // Add a saved query to the tree (auto-expands the section)
+        app.tree_browser.set_saved_queries(vec![SavedQuery {
+            connection: "test".to_string(),
+            name: "my-query".to_string(),
+            sql: "SELECT * FROM users".to_string(),
+        }]);
+
+        // Move down from header to the saved query item
+        app.tree_browser.move_down();
+
+        // Press Enter (Expand)
+        let key = crossterm::event::KeyEvent::from(crossterm::event::KeyCode::Enter);
+        let action = app.handle_event(AppEvent::Key(key)).unwrap();
+
+        assert!(matches!(action, Action::None));
+        assert_eq!(app.tab().editor.get_content(), "SELECT * FROM users");
+        assert_eq!(app.focus, PanelFocus::QueryEditor);
     }
 }
