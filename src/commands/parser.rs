@@ -22,6 +22,9 @@ pub enum Command {
 
     /// Open connection picker dialog
     Connect,
+
+    /// Save current query with optional inline name
+    SaveQuery { name: Option<String> },
 }
 
 /// Parse a command string into a Command enum
@@ -44,6 +47,14 @@ pub fn parse_command(input: &str) -> CommandResult<Command> {
         "help" | "h" | "?" => Ok(Command::Help),
         "quit" | "q" | "exit" => Ok(Command::Quit),
         "connect" | "conn" => Ok(Command::Connect),
+        "save-query" | "sq" => {
+            let name = if parts.len() > 1 {
+                Some(parts[1..].join(" "))
+            } else {
+                None
+            };
+            Ok(Command::SaveQuery { name })
+        }
         unknown => Err(CommandError::Unknown(unknown.to_string())),
     }
 }
@@ -99,5 +110,29 @@ mod tests {
     fn test_parse_connect() {
         assert_eq!(parse_command("/connect").unwrap(), Command::Connect);
         assert_eq!(parse_command("/conn").unwrap(), Command::Connect);
+    }
+
+    #[test]
+    fn test_parse_save_query() {
+        assert_eq!(
+            parse_command("/save-query").unwrap(),
+            Command::SaveQuery { name: None }
+        );
+        assert_eq!(
+            parse_command("/sq").unwrap(),
+            Command::SaveQuery { name: None }
+        );
+        assert_eq!(
+            parse_command("/save-query my report").unwrap(),
+            Command::SaveQuery {
+                name: Some("my report".to_string())
+            }
+        );
+        assert_eq!(
+            parse_command("/sq active-users").unwrap(),
+            Command::SaveQuery {
+                name: Some("active-users".to_string())
+            }
+        );
     }
 }

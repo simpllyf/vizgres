@@ -332,6 +332,15 @@ impl HelpOverlay {
                 key,
                 desc,
             ),
+            help_line(
+                &format!(
+                    "  {}",
+                    fmt(Some(PanelFocus::TreeBrowser), KeyAction::DeleteSavedQuery)
+                ),
+                "Delete saved query",
+                key,
+                desc,
+            ),
             help_line("  Enter", "Search database / Load more", key, desc),
             help_line("  Esc", "Clear filter and restore tree", key, desc),
             blank.clone(),
@@ -361,6 +370,7 @@ impl HelpOverlay {
             help_line("  /help", "Show this help", key, desc),
             help_line("  /connect", "Connection picker", key, desc),
             help_line("  /refresh", "Reload schema", key, desc),
+            help_line("  /save-query [name]", "Save current query", key, desc),
         ]
     }
 
