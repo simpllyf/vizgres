@@ -53,6 +53,7 @@ pub mod app;
 pub mod commands;
 pub mod completer;
 pub mod config;
+pub mod connection_manager;
 pub mod db;
 pub mod error;
 pub mod export;
