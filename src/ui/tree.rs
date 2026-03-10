@@ -518,24 +518,32 @@ impl TreeBrowser {
 
     /// If the selected node is a table or view, return a preview query for it.
     pub fn preview_query(&self) -> Option<String> {
+        let base = self.preview_base_query()?;
+        Some(format!("{} LIMIT {}", base, self.preview_rows))
+    }
+
+    /// If the selected node is a table or view, return the base query without LIMIT.
+    /// Used by pagination to construct LIMIT/OFFSET dynamically.
+    pub fn preview_base_query(&self) -> Option<String> {
         let item = self.items.get(self.selected)?;
         match item.kind {
             NodeKind::Table | NodeKind::View => {
-                // Path format: "schema.Tables.tablename" or "schema.Views.viewname"
                 let parts: Vec<&str> = item.path.splitn(3, '.').collect();
                 if parts.len() == 3 {
                     let schema = parts[0];
                     let name = parts[2];
-                    Some(format!(
-                        "SELECT * FROM \"{}\".\"{}\" LIMIT {}",
-                        schema, name, self.preview_rows
-                    ))
+                    Some(format!("SELECT * FROM \"{}\".\"{}\"", schema, name))
                 } else {
                     None
                 }
             }
             _ => None,
         }
+    }
+
+    /// Number of rows for preview queries
+    pub fn preview_rows(&self) -> usize {
+        self.preview_rows
     }
 
     /// Return the qualified name of the selected item for copying.

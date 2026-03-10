@@ -272,6 +272,24 @@ impl HelpOverlay {
                 key,
                 desc,
             ),
+            help_line(
+                &format!(
+                    "  {}",
+                    fmt(Some(PanelFocus::ResultsViewer), KeyAction::NextPage)
+                ),
+                "Next page",
+                key,
+                desc,
+            ),
+            help_line(
+                &format!(
+                    "  {}",
+                    fmt(Some(PanelFocus::ResultsViewer), KeyAction::PrevPage)
+                ),
+                "Previous page",
+                key,
+                desc,
+            ),
             help_line("  g / G", "Top / Bottom", key, desc),
             help_line("  Home / End", "First / Last column", key, desc),
             help_line("  PgUp / PgDn", "Page up / down", key, desc),

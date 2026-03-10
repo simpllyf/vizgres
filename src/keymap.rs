@@ -83,6 +83,10 @@ pub enum KeyAction {
     ShowDefinition,
     DeleteSavedQuery,
 
+    // Pagination
+    NextPage,
+    PrevPage,
+
     // Completion
     NextCompletion,
     PrevCompletion,
@@ -327,6 +331,8 @@ pub fn parse_key_action(s: &str) -> Result<KeyAction, String> {
         "copy_name" => Ok(KeyAction::CopyName),
         "show_definition" => Ok(KeyAction::ShowDefinition),
         "delete_saved_query" => Ok(KeyAction::DeleteSavedQuery),
+        "next_page" => Ok(KeyAction::NextPage),
+        "prev_page" => Ok(KeyAction::PrevPage),
         "next_completion" => Ok(KeyAction::NextCompletion),
         "prev_completion" => Ok(KeyAction::PrevCompletion),
         "show_help" => Ok(KeyAction::ShowHelp),
@@ -597,6 +603,20 @@ impl Default for KeyMap {
                 modifiers: KeyModifiers::NONE,
             },
             KeyAction::ShowHelp,
+        );
+        results.insert(
+            KeyBind {
+                code: KeyCode::Char('n'),
+                modifiers: KeyModifiers::NONE,
+            },
+            KeyAction::NextPage,
+        );
+        results.insert(
+            KeyBind {
+                code: KeyCode::Char('p'),
+                modifiers: KeyModifiers::NONE,
+            },
+            KeyAction::PrevPage,
         );
         panels.insert(PanelFocus::ResultsViewer, results);
 

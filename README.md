@@ -8,7 +8,7 @@ A fast, keyboard-driven PostgreSQL client for the terminal.
 - **SQL Editor**: Multi-line editing with syntax highlighting, autocomplete, undo/redo
 - **Query Execution**: Run queries with configurable timeout, cancel running queries
 - **EXPLAIN ANALYZE**: One-key query plan analysis
-- **Results Viewer**: Scrollable table with cell-level navigation and NULL styling
+- **Results Viewer**: Scrollable table with auto-pagination, cell-level navigation, and NULL styling
 - **Inspector**: Full cell content viewer with JSON pretty-printing
 - **Export**: Save results as CSV or JSON
 - **Query History**: Navigate previous queries with Ctrl+Up/Down
@@ -92,6 +92,8 @@ Press `?` in-app for full keybinding help. All keybindings are configurable in `
 | Ctrl+S | Export as CSV |
 | Ctrl+J | Export as JSON |
 | g/G | Jump to first/last row |
+| n | Next page |
+| p | Previous page |
 
 ## Commands
 

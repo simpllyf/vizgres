@@ -8,6 +8,7 @@ use crate::config::ConnectionConfig;
 use crate::config::settings::Settings;
 use crate::db::QueryResults;
 use crate::db::schema::{Function, Index, SchemaTree, Table};
+use crate::db::sql_limit;
 use crate::error::Result;
 use crate::export::ExportFormat;
 use crate::history::QueryHistory;
@@ -24,6 +25,44 @@ use crate::ui::theme::Theme;
 use crate::ui::tree::TreeBrowser;
 use crossterm::event::KeyEvent;
 
+/// Server-side pagination state for a query
+#[derive(Debug, Clone)]
+pub struct PaginationState {
+    /// Original SQL before LIMIT/OFFSET was added
+    pub original_sql: String,
+    /// Current page (0-based)
+    pub current_page: usize,
+    /// Rows per page
+    pub page_size: usize,
+    /// Whether more rows exist beyond this page
+    pub has_more: bool,
+    /// Whether the user's SQL already had LIMIT (no auto-pagination)
+    pub user_has_limit: bool,
+    /// Page before navigation (for rollback on query failure)
+    previous_page: Option<usize>,
+}
+
+impl PaginationState {
+    /// Row offset for the current page
+    pub fn offset(&self) -> usize {
+        self.current_page * self.page_size
+    }
+
+    /// Build the SQL for the current page (appends LIMIT/OFFSET)
+    pub fn paged_sql(&self) -> String {
+        if self.user_has_limit {
+            self.original_sql.clone()
+        } else {
+            format!(
+                "{} LIMIT {} OFFSET {}",
+                self.original_sql.trim().trim_end_matches(';'),
+                self.page_size + 1, // +1 to detect if more rows exist
+                self.offset()
+            )
+        }
+    }
+}
+
 /// A single query tab containing its own editor, results, and completer.
 /// Each tab holds its own transaction state (independent per connection).
 pub struct Tab {
@@ -38,6 +77,8 @@ pub struct Tab {
     pub query_start: Option<std::time::Instant>,
     /// Client-side transaction state for this tab's connection
     pub transaction_state: TransactionState,
+    /// Pagination state for the current result set
+    pub pagination: Option<PaginationState>,
 }
 
 impl Tab {
@@ -50,6 +91,7 @@ impl Tab {
             query_running: false,
             query_start: None,
             transaction_state: TransactionState::Idle,
+            pagination: None,
         }
     }
 }
@@ -337,30 +379,116 @@ impl App {
                 Ok(Action::None)
             }
             AppEvent::Resize => Ok(Action::None),
-            AppEvent::QueryCompleted { results, tab_id } => {
-                let count = results.row_count;
+            AppEvent::QueryCompleted {
+                mut results,
+                tab_id,
+            } => {
                 let time = results.execution_time;
-                let truncated = results.truncated;
+
                 if let Some(idx) = self.tab_index_by_id(tab_id) {
                     self.tabs[idx].query_running = false;
                     self.tabs[idx].query_start = None;
+
+                    // Process pagination: trim the +1 probe row and update state
+                    let pagination_info = if let Some(ref mut pg) = self.tabs[idx].pagination {
+                        pg.previous_page = None; // navigation succeeded, clear rollback
+                        if !pg.user_has_limit && results.rows.len() > pg.page_size {
+                            // More rows exist — trim to page_size
+                            results.rows.truncate(pg.page_size);
+                            results.row_count = pg.page_size;
+                            results.truncated = false; // we handle it via pagination
+                            pg.has_more = true;
+                        } else {
+                            pg.has_more = false;
+                        }
+                        Some(crate::ui::results::PaginationInfo {
+                            page_offset: pg.offset(),
+                            has_more: pg.has_more,
+                            has_prev: pg.current_page > 0,
+                        })
+                    } else {
+                        None
+                    };
+
                     self.tabs[idx].results_viewer.set_results(results);
+                    self.tabs[idx]
+                        .results_viewer
+                        .set_pagination(pagination_info.clone());
+
                     if idx == self.active_tab {
                         self.focus = PanelFocus::ResultsViewer;
                     }
-                }
-                if truncated {
+
+                    // Status message
+                    if let Some(ref info) = pagination_info {
+                        let row_count = self.tabs[idx]
+                            .results_viewer
+                            .results()
+                            .map_or(0, |r| r.rows.len());
+                        if row_count == 0 {
+                            self.set_status(
+                                format!("0 rows in {:.1}ms", time.as_secs_f64() * 1000.0),
+                                StatusLevel::Success,
+                            );
+                        } else {
+                            let start = info.page_offset + 1;
+                            let end = info.page_offset + row_count;
+                            let more = if info.has_more { "+" } else { "" };
+                            let hint = if info.has_more {
+                                " — n for next page"
+                            } else {
+                                ""
+                            };
+                            self.set_status(
+                                format!(
+                                    "Rows {}-{} of {}{} in {:.1}ms{}",
+                                    start,
+                                    end,
+                                    end,
+                                    more,
+                                    time.as_secs_f64() * 1000.0,
+                                    hint,
+                                ),
+                                if info.has_more {
+                                    StatusLevel::Info
+                                } else {
+                                    StatusLevel::Success
+                                },
+                            );
+                        }
+                    } else {
+                        let count = self.tabs[idx]
+                            .results_viewer
+                            .results()
+                            .map_or(0, |r| r.row_count);
+                        let truncated = self.tabs[idx]
+                            .results_viewer
+                            .results()
+                            .is_some_and(|r| r.truncated);
+                        if truncated {
+                            self.set_status(
+                                format!(
+                                    "{} rows (limited) in {:.1}ms",
+                                    count,
+                                    time.as_secs_f64() * 1000.0,
+                                ),
+                                StatusLevel::Warning,
+                            );
+                        } else {
+                            self.set_status(
+                                format!("{} rows in {:.1}ms", count, time.as_secs_f64() * 1000.0),
+                                StatusLevel::Success,
+                            );
+                        }
+                    }
+                } else {
+                    // Tab was closed while query was running
                     self.set_status(
                         format!(
-                            "{} rows (truncated) in {:.1}ms - increase max_result_rows to see more",
-                            count,
+                            "{} rows in {:.1}ms",
+                            results.row_count,
                             time.as_secs_f64() * 1000.0
                         ),
-                        StatusLevel::Warning,
-                    );
-                } else {
-                    self.set_status(
-                        format!("{} rows in {:.1}ms", count, time.as_secs_f64() * 1000.0),
                         StatusLevel::Success,
                     );
                 }
@@ -379,6 +507,14 @@ impl App {
                         && !cancelled
                     {
                         self.tabs[idx].transaction_state = TransactionState::Failed;
+                    }
+
+                    // Roll back pagination page if a page-navigation query failed
+                    if let Some(ref mut pg) = self.tabs[idx].pagination
+                        && let Some(prev) = pg.previous_page.take()
+                    {
+                        pg.current_page = prev;
+                        pg.has_more = true;
                     }
 
                     self.tabs[idx].query_running = false;
@@ -929,20 +1065,31 @@ impl App {
                         self.set_status(format!("Loaded saved query: {}", name), StatusLevel::Info);
                         return Action::None;
                     }
-                    // Check if table/view is selected - run preview query
-                    if let Some(sql) = self.tree_browser.preview_query() {
+                    // Check if table/view is selected - run paginated preview
+                    if let Some(base_sql) = self.tree_browser.preview_base_query() {
+                        let page_size = self.tree_browser.preview_rows();
+                        let pagination = PaginationState {
+                            original_sql: base_sql.clone(),
+                            current_page: 0,
+                            page_size,
+                            has_more: false,
+                            user_has_limit: false,
+                            previous_page: None,
+                        };
+                        let paged_sql = pagination.paged_sql();
+                        let display_sql = format!("{} LIMIT {}", base_sql, page_size);
                         let tab_id = self.tab().id;
                         let timeout_ms = self.query_timeout_ms;
-                        let max_rows = self.max_result_rows;
-                        self.tab_mut().editor.set_content(sql.clone());
+                        self.tab_mut().editor.set_content(display_sql);
+                        self.tab_mut().pagination = Some(pagination);
                         self.tab_mut().query_running = true;
                         self.tab_mut().query_start = Some(std::time::Instant::now());
                         self.set_status("Executing query...".to_string(), StatusLevel::Info);
                         return Action::ExecuteQuery {
-                            sql,
+                            sql: paged_sql,
                             tab_id,
                             timeout_ms,
-                            max_rows,
+                            max_rows: 0,
                         };
                     }
                 }
@@ -1043,6 +1190,66 @@ impl App {
                             "Select a saved query to delete".to_string(),
                             StatusLevel::Warning,
                         );
+                    }
+                }
+                Action::None
+            }
+
+            // ── Pagination ────────────────────────────────────
+            KeyAction::NextPage => {
+                if self.tab().query_running {
+                    return Action::None;
+                }
+                if let Some(ref pg) = self.tab().pagination {
+                    if pg.has_more && !pg.user_has_limit {
+                        let mut next = pg.clone();
+                        next.previous_page = Some(pg.current_page);
+                        next.current_page += 1;
+                        next.has_more = false; // will be set on results
+                        let sql = next.paged_sql();
+                        let tab_id = self.tab().id;
+                        let timeout_ms = self.query_timeout_ms;
+                        self.tab_mut().pagination = Some(next);
+                        self.tab_mut().query_running = true;
+                        self.tab_mut().query_start = Some(std::time::Instant::now());
+                        self.set_status("Loading next page...".to_string(), StatusLevel::Info);
+                        return Action::ExecuteQuery {
+                            sql,
+                            tab_id,
+                            timeout_ms,
+                            max_rows: 0,
+                        };
+                    } else if !pg.has_more {
+                        self.set_status("No more rows".to_string(), StatusLevel::Info);
+                    }
+                }
+                Action::None
+            }
+            KeyAction::PrevPage => {
+                if self.tab().query_running {
+                    return Action::None;
+                }
+                if let Some(ref pg) = self.tab().pagination {
+                    if pg.current_page > 0 && !pg.user_has_limit {
+                        let mut prev = pg.clone();
+                        prev.previous_page = Some(pg.current_page);
+                        prev.current_page -= 1;
+                        prev.has_more = true; // previous page always has a next
+                        let sql = prev.paged_sql();
+                        let tab_id = self.tab().id;
+                        let timeout_ms = self.query_timeout_ms;
+                        self.tab_mut().pagination = Some(prev);
+                        self.tab_mut().query_running = true;
+                        self.tab_mut().query_start = Some(std::time::Instant::now());
+                        self.set_status("Loading previous page...".to_string(), StatusLevel::Info);
+                        return Action::ExecuteQuery {
+                            sql,
+                            tab_id,
+                            timeout_ms,
+                            max_rows: 0,
+                        };
+                    } else if pg.current_page == 0 {
+                        self.set_status("Already on first page".to_string(), StatusLevel::Info);
                     }
                 }
                 Action::None
@@ -1179,7 +1386,7 @@ impl App {
     fn prepare_execute_query(&mut self, sql: String) -> Action {
         let tab_id = self.tab().id;
         let timeout_ms = self.query_timeout_ms;
-        let max_rows = self.max_result_rows;
+        let page_size = self.max_result_rows;
 
         // Update this tab's transaction state based on query intent
         if let Some(new_state) = detect_transaction_intent(&sql) {
@@ -1190,11 +1397,42 @@ impl App {
         self.tab_mut().query_start = Some(std::time::Instant::now());
         self.history.push(&sql);
 
+        // Auto-paginate if the query has no user LIMIT and isn't EXPLAIN
+        let trimmed = sql.trim();
+        let is_explain = trimmed
+            .split_whitespace()
+            .next()
+            .is_some_and(|w| w.eq_ignore_ascii_case("EXPLAIN"));
+
+        if !is_explain && page_size > 0 {
+            let analysis = sql_limit::analyze_limit(&sql);
+            if analysis.can_paginate() {
+                let pagination = PaginationState {
+                    original_sql: sql,
+                    current_page: 0,
+                    page_size,
+                    has_more: false,
+                    user_has_limit: false,
+                    previous_page: None,
+                };
+                let paged_sql = pagination.paged_sql();
+                self.tab_mut().pagination = Some(pagination);
+                return Action::ExecuteQuery {
+                    sql: paged_sql,
+                    tab_id,
+                    timeout_ms,
+                    max_rows: 0, // LIMIT in SQL controls row count
+                };
+            }
+        }
+
+        // User has LIMIT or EXPLAIN — run as-is with max_rows safety net
+        self.tab_mut().pagination = None;
         Action::ExecuteQuery {
             sql,
             tab_id,
             timeout_ms,
-            max_rows,
+            max_rows: page_size,
         }
     }
 
@@ -2002,12 +2240,9 @@ mod tests {
 
         let msg = app.status_message.as_ref().unwrap();
         assert!(
-            msg.message.contains("truncated"),
-            "Should contain 'truncated'"
-        );
-        assert!(
-            msg.message.contains("max_result_rows"),
-            "Should mention how to see more"
+            msg.message.contains("limited"),
+            "Should contain 'limited', got: {}",
+            msg.message
         );
         assert_eq!(msg.level, StatusLevel::Warning);
     }
@@ -2096,19 +2331,26 @@ mod tests {
         let action = app.handle_key(enter);
 
         match action {
-            Action::ExecuteQuery { sql, .. } => {
-                assert_eq!(sql, "SELECT * FROM \"public\".\"users\" LIMIT 100");
+            Action::ExecuteQuery { sql, max_rows, .. } => {
+                // Paginated: LIMIT page_size+1 OFFSET 0
+                assert_eq!(sql, "SELECT * FROM \"public\".\"users\" LIMIT 101 OFFSET 0");
+                assert_eq!(max_rows, 0); // LIMIT in SQL controls rows
             }
             other => panic!(
                 "Expected ExecuteQuery, got {:?}",
                 std::mem::discriminant(&other)
             ),
         }
-        // Editor should contain the generated SQL
+        // Editor shows the display SQL (LIMIT without +1)
         assert_eq!(
             app.tabs[0].editor.get_content(),
             "SELECT * FROM \"public\".\"users\" LIMIT 100"
         );
+        // Pagination state should be set
+        let pg = app.tabs[0].pagination.as_ref().unwrap();
+        assert_eq!(pg.current_page, 0);
+        assert_eq!(pg.page_size, 100);
+        assert!(!pg.user_has_limit);
     }
 
     #[test]
@@ -3444,5 +3686,318 @@ mod tests {
         assert!(matches!(action, Action::None));
         assert_eq!(app.tab().editor.get_content(), "SELECT * FROM users");
         assert_eq!(app.focus, PanelFocus::QueryEditor);
+    }
+
+    // ── Pagination tests ─────────────────────────────
+
+    #[test]
+    fn test_pagination_state_paged_sql() {
+        let pg = PaginationState {
+            original_sql: "SELECT * FROM users".to_string(),
+            current_page: 0,
+            page_size: 500,
+            has_more: false,
+            user_has_limit: false,
+            previous_page: None,
+        };
+        assert_eq!(pg.paged_sql(), "SELECT * FROM users LIMIT 501 OFFSET 0");
+        assert_eq!(pg.offset(), 0);
+
+        let pg2 = PaginationState {
+            current_page: 2,
+            ..pg.clone()
+        };
+        assert_eq!(pg2.paged_sql(), "SELECT * FROM users LIMIT 501 OFFSET 1000");
+        assert_eq!(pg2.offset(), 1000);
+    }
+
+    #[test]
+    fn test_pagination_state_user_limit_passthrough() {
+        let pg = PaginationState {
+            original_sql: "SELECT * FROM users LIMIT 10".to_string(),
+            current_page: 0,
+            page_size: 500,
+            has_more: false,
+            user_has_limit: true,
+            previous_page: None,
+        };
+        assert_eq!(pg.paged_sql(), "SELECT * FROM users LIMIT 10");
+    }
+
+    #[test]
+    fn test_prepare_execute_paginates_simple_query() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+        app.tab_mut()
+            .editor
+            .set_content("SELECT * FROM users".to_string());
+
+        let f5 = KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE);
+        let action = app.handle_key(f5);
+
+        match action {
+            Action::ExecuteQuery { sql, max_rows, .. } => {
+                assert!(sql.contains("LIMIT"));
+                assert!(sql.contains("OFFSET"));
+                assert_eq!(max_rows, 0);
+            }
+            other => panic!(
+                "Expected ExecuteQuery, got {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+        assert!(app.tab().pagination.is_some());
+    }
+
+    #[test]
+    fn test_prepare_execute_skips_pagination_for_user_limit() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+        app.tab_mut()
+            .editor
+            .set_content("SELECT * FROM users LIMIT 10".to_string());
+
+        let f5 = KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE);
+        let action = app.handle_key(f5);
+
+        match action {
+            Action::ExecuteQuery { sql, max_rows, .. } => {
+                assert_eq!(sql, "SELECT * FROM users LIMIT 10");
+                assert_eq!(max_rows, 1000); // safety net
+            }
+            other => panic!(
+                "Expected ExecuteQuery, got {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+        assert!(app.tab().pagination.is_none());
+    }
+
+    #[test]
+    fn test_prepare_execute_skips_pagination_for_explain() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+        app.tab_mut()
+            .editor
+            .set_content("SELECT * FROM users".to_string());
+
+        let ctrl_e = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL);
+        let action = app.handle_key(ctrl_e);
+
+        match action {
+            Action::ExecuteQuery { sql, .. } => {
+                assert!(sql.starts_with("EXPLAIN ANALYZE"));
+                // EXPLAIN should NOT have LIMIT/OFFSET appended
+                assert!(!sql.contains("OFFSET"));
+            }
+            other => panic!(
+                "Expected ExecuteQuery, got {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+        assert!(app.tab().pagination.is_none());
+    }
+
+    #[test]
+    fn test_next_page_when_has_more() {
+        let mut app = App::new();
+        app.focus = PanelFocus::ResultsViewer;
+        app.tab_mut().pagination = Some(PaginationState {
+            original_sql: "SELECT * FROM users".to_string(),
+            current_page: 0,
+            page_size: 100,
+            has_more: true,
+            user_has_limit: false,
+            previous_page: None,
+        });
+
+        let n = KeyEvent::from(crossterm::event::KeyCode::Char('n'));
+        let action = app.handle_key(n);
+
+        match action {
+            Action::ExecuteQuery { sql, .. } => {
+                assert!(sql.contains("OFFSET 100"));
+            }
+            other => panic!(
+                "Expected ExecuteQuery, got {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+        assert_eq!(app.tab().pagination.as_ref().unwrap().current_page, 1);
+    }
+
+    #[test]
+    fn test_next_page_noop_when_no_more() {
+        let mut app = App::new();
+        app.focus = PanelFocus::ResultsViewer;
+        app.tab_mut().pagination = Some(PaginationState {
+            original_sql: "SELECT * FROM users".to_string(),
+            current_page: 0,
+            page_size: 100,
+            has_more: false,
+            user_has_limit: false,
+            previous_page: None,
+        });
+
+        let n = KeyEvent::from(crossterm::event::KeyCode::Char('n'));
+        let action = app.handle_key(n);
+        assert!(matches!(action, Action::None));
+    }
+
+    #[test]
+    fn test_prev_page_when_on_page_two() {
+        let mut app = App::new();
+        app.focus = PanelFocus::ResultsViewer;
+        app.tab_mut().pagination = Some(PaginationState {
+            original_sql: "SELECT * FROM users".to_string(),
+            current_page: 2,
+            page_size: 100,
+            has_more: true,
+            user_has_limit: false,
+            previous_page: None,
+        });
+
+        let p = KeyEvent::from(crossterm::event::KeyCode::Char('p'));
+        let action = app.handle_key(p);
+
+        match action {
+            Action::ExecuteQuery { sql, .. } => {
+                assert!(sql.contains("OFFSET 100"));
+            }
+            other => panic!(
+                "Expected ExecuteQuery, got {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+        assert_eq!(app.tab().pagination.as_ref().unwrap().current_page, 1);
+    }
+
+    #[test]
+    fn test_prev_page_noop_on_first_page() {
+        let mut app = App::new();
+        app.focus = PanelFocus::ResultsViewer;
+        app.tab_mut().pagination = Some(PaginationState {
+            original_sql: "SELECT * FROM users".to_string(),
+            current_page: 0,
+            page_size: 100,
+            has_more: true,
+            user_has_limit: false,
+            previous_page: None,
+        });
+
+        let p = KeyEvent::from(crossterm::event::KeyCode::Char('p'));
+        let action = app.handle_key(p);
+        assert!(matches!(action, Action::None));
+    }
+
+    #[test]
+    fn test_query_completed_trims_pagination_probe_row() {
+        use crate::db::types::{CellValue, ColumnDef, DataType, Row};
+
+        let mut app = App::new();
+        app.tab_mut().query_running = true;
+        app.tab_mut().pagination = Some(PaginationState {
+            original_sql: "SELECT 1".to_string(),
+            current_page: 0,
+            page_size: 2,
+            has_more: false,
+            user_has_limit: false,
+            previous_page: None,
+        });
+
+        // Return 3 rows (page_size + 1) to indicate more exist
+        let cols = vec![ColumnDef {
+            name: "x".to_string(),
+            data_type: DataType::Integer,
+            nullable: false,
+        }];
+        let rows = vec![
+            Row {
+                values: vec![CellValue::Integer(1)],
+            },
+            Row {
+                values: vec![CellValue::Integer(2)],
+            },
+            Row {
+                values: vec![CellValue::Integer(3)],
+            },
+        ];
+        let results = QueryResults::new(cols, rows, std::time::Duration::from_millis(5), 3);
+
+        app.handle_event(AppEvent::QueryCompleted { results, tab_id: 0 })
+            .unwrap();
+
+        // Should have trimmed to page_size (2 rows) and set has_more
+        let pg = app.tab().pagination.as_ref().unwrap();
+        assert!(pg.has_more);
+        assert_eq!(app.tab().results_viewer.results().unwrap().rows.len(), 2);
+    }
+
+    #[test]
+    fn test_query_failed_rolls_back_pagination_page() {
+        let mut app = App::new();
+        app.focus = PanelFocus::ResultsViewer;
+
+        // Set up pagination on page 1 with has_more
+        app.tab_mut().pagination = Some(PaginationState {
+            original_sql: "SELECT * FROM users".to_string(),
+            current_page: 1,
+            page_size: 100,
+            has_more: true,
+            user_has_limit: false,
+            previous_page: None,
+        });
+
+        // Navigate to page 2
+        let n = KeyEvent::from(crossterm::event::KeyCode::Char('n'));
+        let action = app.handle_key(n);
+        assert!(matches!(action, Action::ExecuteQuery { .. }));
+        assert_eq!(app.tab().pagination.as_ref().unwrap().current_page, 2);
+
+        // Query fails — should roll back to page 1
+        app.handle_event(AppEvent::QueryFailed {
+            error: "connection lost".to_string(),
+            position: None,
+            tab_id: 0,
+        })
+        .unwrap();
+
+        let pg = app.tab().pagination.as_ref().unwrap();
+        assert_eq!(pg.current_page, 1);
+        assert!(pg.has_more); // restored
+        assert!(pg.previous_page.is_none()); // cleared after rollback
+    }
+
+    #[test]
+    fn test_query_failed_no_rollback_on_initial_query() {
+        let mut app = App::new();
+        app.tab_mut().query_running = true;
+
+        // Pagination from initial execute (no previous_page)
+        app.tab_mut().pagination = Some(PaginationState {
+            original_sql: "SELECT * FROM users".to_string(),
+            current_page: 0,
+            page_size: 100,
+            has_more: false,
+            user_has_limit: false,
+            previous_page: None,
+        });
+
+        app.handle_event(AppEvent::QueryFailed {
+            error: "syntax error".to_string(),
+            position: None,
+            tab_id: 0,
+        })
+        .unwrap();
+
+        // Page stays at 0 — no rollback needed
+        let pg = app.tab().pagination.as_ref().unwrap();
+        assert_eq!(pg.current_page, 0);
     }
 }

@@ -7,6 +7,7 @@ use crate::ui::Component;
 use crate::ui::theme::Theme;
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
+use std::cell::Cell;
 
 /// Display mode for query results
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,6 +16,17 @@ pub enum ViewMode {
     Table,
     /// Vertical key-value layout showing one row at a time
     Vertical,
+}
+
+/// Pagination display info passed from App to ResultsViewer
+#[derive(Debug, Clone)]
+pub struct PaginationInfo {
+    /// Row offset of the current page (0 for first page)
+    pub page_offset: usize,
+    /// Whether more rows exist beyond this page
+    pub has_more: bool,
+    /// Whether we can go to a previous page
+    pub has_prev: bool,
 }
 
 /// Results table viewer
@@ -30,6 +42,10 @@ pub struct ResultsViewer {
     error: Option<String>,
     /// Current display mode
     view_mode: ViewMode,
+    /// Pagination info for footer display
+    pagination: Option<PaginationInfo>,
+    /// Visible height for adaptive page jumps (updated during render)
+    page_height: Cell<usize>,
 }
 
 impl ResultsViewer {
@@ -43,6 +59,8 @@ impl ResultsViewer {
             col_widths: Vec::new(),
             error: None,
             view_mode: ViewMode::Table,
+            pagination: None,
+            page_height: Cell::new(20),
         }
     }
 
@@ -155,13 +173,25 @@ impl ResultsViewer {
         }
     }
 
+    /// Set pagination info for footer display
+    pub fn set_pagination(&mut self, info: Option<PaginationInfo>) {
+        self.pagination = info;
+    }
+
+    /// Current pagination info
+    pub fn pagination(&self) -> Option<&PaginationInfo> {
+        self.pagination.as_ref()
+    }
+
     pub fn page_up(&mut self) {
-        self.selected_row = self.selected_row.saturating_sub(20);
+        let height = self.page_height.get();
+        self.selected_row = self.selected_row.saturating_sub(height);
     }
 
     pub fn page_down(&mut self) {
+        let height = self.page_height.get();
         let count = self.row_count();
-        self.selected_row = (self.selected_row + 20).min(count.saturating_sub(1));
+        self.selected_row = (self.selected_row + height).min(count.saturating_sub(1));
     }
 
     pub fn go_to_top(&mut self) {
@@ -248,6 +278,7 @@ impl Component for ResultsViewer {
         }
 
         let visible_height = (area.height as usize).saturating_sub(2); // header + footer
+        self.page_height.set(visible_height.max(1));
         let viewer = self;
 
         // Ensure selected row is visible
@@ -374,24 +405,54 @@ impl Component for ResultsViewer {
             }
         }
 
-        // Footer with row count and timing
+        // Footer with row count, pagination, and timing
         let footer_y = area.y + area.height - 1;
-        let truncated_suffix = if results.truncated { "+" } else { "" };
-        let footer = format!(
-            "Row {}/{}{} | Col {}/{} | {:.1}ms",
-            viewer.selected_row + 1,
-            results.row_count,
-            truncated_suffix,
-            viewer.selected_col + 1,
-            results.columns.len(),
-            results.execution_time.as_secs_f64() * 1000.0,
-        );
+        let footer = build_footer(viewer, results);
         let footer_style = theme.results_footer;
         frame.render_widget(
             Paragraph::new(footer).style(footer_style),
             Rect::new(area.x, footer_y, area.width, 1),
         );
     }
+}
+
+/// Build footer text with pagination-aware row display
+fn build_footer(viewer: &ResultsViewer, results: &QueryResults) -> String {
+    let time_ms = results.execution_time.as_secs_f64() * 1000.0;
+    let col_info = format!("Col {}/{}", viewer.selected_col + 1, results.columns.len());
+
+    let row_info = if let Some(ref pg) = viewer.pagination {
+        if results.rows.is_empty() {
+            "0 rows".to_string()
+        } else {
+            let start = pg.page_offset + 1;
+            let end = pg.page_offset + results.rows.len();
+            let more = if pg.has_more { "+" } else { "" };
+            let mut hints = Vec::new();
+            if pg.has_more {
+                hints.push("n=more");
+            }
+            if pg.has_prev {
+                hints.push("p=prev");
+            }
+            let hint_str = if hints.is_empty() {
+                String::new()
+            } else {
+                format!(" | {}", hints.join(" "))
+            };
+            format!("Rows {}-{} of {}{}", start, end, end, more) + &hint_str
+        }
+    } else {
+        let truncated_suffix = if results.truncated { "+" } else { "" };
+        format!(
+            "Row {}/{}{}",
+            viewer.selected_row + 1,
+            results.row_count,
+            truncated_suffix,
+        )
+    };
+
+    format!("{} | {} | {:.1}ms", row_info, col_info, time_ms)
 }
 
 /// Compute column widths based on header names and data
