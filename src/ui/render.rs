@@ -13,8 +13,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 /// Render the entire application
 pub fn render(frame: &mut Frame, app: &App) {
     let theme = &app.theme;
-    let show_tab_bar = app.tab_count() > 1;
-    let layout = calculate_layout(frame.area(), show_tab_bar);
+    let layout = calculate_layout(frame.area(), true);
 
     // Tree browser
     render_panel(
@@ -29,10 +28,8 @@ pub fn render(frame: &mut Frame, app: &App) {
         },
     );
 
-    // Tab bar (only when >1 tab)
-    if show_tab_bar {
-        render_tab_bar(frame, layout.tab_bar, app, theme);
-    }
+    // Tab bar (always visible)
+    render_tab_bar(frame, layout.tab_bar, app, theme);
 
     // Editor (active tab)
     render_panel(
@@ -96,11 +93,16 @@ fn render_tab_bar(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
             spans.push(Span::styled(" \u{2502} ", theme.tab_separator));
         }
 
-        let label = if tab.query_running {
-            format!(" Tab {}* ", i + 1)
-        } else {
-            format!(" Tab {} ", i + 1)
-        };
+        let mut label = format!(" Tab {}", i + 1);
+        if tab.query_running {
+            label.push('*');
+        }
+        match tab.transaction_state {
+            TransactionState::InTransaction => label.push_str(" [TXN]"),
+            TransactionState::Failed => label.push_str(" [TXN!]"),
+            TransactionState::Idle => {}
+        }
+        label.push(' ');
 
         let style = if i == app.active_tab {
             theme.tab_active
@@ -310,7 +312,8 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     }
 
     // Right side: TXN indicator + connection info (always visible)
-    let txn_badge = match app.transaction_state {
+    // Shows the active tab's transaction state
+    let txn_badge = match app.tab().transaction_state {
         TransactionState::Idle => None,
         TransactionState::InTransaction => Some((" TXN ", theme.status_txn_active)),
         TransactionState::Failed => Some((" TXN FAILED ", theme.status_txn_failed)),

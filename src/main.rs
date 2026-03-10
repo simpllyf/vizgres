@@ -13,6 +13,7 @@ use ratatui::prelude::*;
 use tokio::sync::mpsc;
 use vizgres::app::{Action, App, AppEvent, LoadMoreItems, StatusLevel};
 use vizgres::config::{self, ConnectionConfig, Settings};
+use vizgres::connection_manager::ConnectionManager;
 use vizgres::db::{self, Database};
 use vizgres::error::DbError;
 
@@ -78,7 +79,7 @@ async fn main() -> Result<()> {
     }));
 
     // Resolve connection target (URL or saved name)
-    let (mut provider, mut conn_err_rx, mut app) = if let Some(ref target) = cli.connect.target {
+    let (mut conn_mgr, mut app) = if let Some(ref target) = cli.connect.target {
         let conn_config = resolve_connection(target)?;
 
         eprintln!("Connecting to {}...", conn_config.name);
@@ -94,12 +95,18 @@ async fn main() -> Result<()> {
             .map_err(|e| anyhow::anyhow!("Schema load failed: {}", e))?;
 
         let app = App::with_connection(conn_config.name.clone(), schema, &settings);
-        (Some(prov), Some(rx), app)
+
+        // Seed tab 0 with the initial connection
+        let mut mgr =
+            ConnectionManager::new(Some(conn_config), settings.settings.statement_timeout_ms);
+        mgr.insert(0, prov, rx);
+        (mgr, app)
     } else {
         // No target — start disconnected and show connection dialog
         let mut app = App::new_with_settings(&settings);
         app.show_connection_dialog();
-        (None, None, app)
+        let mgr = ConnectionManager::new(None, settings.settings.statement_timeout_ms);
+        (mgr, app)
     };
 
     // Initialize terminal
@@ -110,7 +117,7 @@ async fn main() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     // Run the app (separated so we can always clean up)
-    let result = run_app(&mut terminal, &mut app, &mut provider, &mut conn_err_rx).await;
+    let result = run_app(&mut terminal, &mut app, &mut conn_mgr).await;
 
     // Restore terminal
     disable_raw_mode()?;
@@ -295,8 +302,7 @@ fn open_config_in_editor() -> Result<()> {
 async fn run_app(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     app: &mut App,
-    provider: &mut Option<Arc<db::PostgresProvider>>,
-    conn_err_rx: &mut Option<mpsc::UnboundedReceiver<String>>,
+    conn_mgr: &mut ConnectionManager,
 ) -> Result<()> {
     // Channel for async events (db results, etc.)
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<AppEvent>();
@@ -316,14 +322,9 @@ async fn run_app(
                 action = app.handle_event(event)?;
             }
 
-            // Background connection died (server restart, idle timeout, etc.)
-            // Only poll when we have a receiver
-            Some(msg) = async {
-                match conn_err_rx.as_mut() {
-                    Some(rx) => rx.recv().await,
-                    None => std::future::pending().await,
-                }
-            } => {
+            // Background connection died on any tab
+            result = std::future::poll_fn(|cx| conn_mgr.poll_connection_errors(cx)) => {
+                let (_tab_id, msg) = result;
                 action = app.handle_event(AppEvent::ConnectionLost(msg))?;
             }
 
@@ -376,14 +377,13 @@ async fn run_app(
                 app.set_status("Connecting...".to_string(), StatusLevel::Info);
                 terminal.draw(|f| vizgres::ui::render::render(f, app))?;
 
-                // Drop old provider
-                *provider = None;
-                *conn_err_rx = None;
+                // Drop all existing connections
+                conn_mgr.disconnect_all();
 
-                // Connect
-                match db::PostgresProvider::connect(&config, app.statement_timeout_ms).await {
-                    Ok((prov, rx)) => {
-                        let prov = Arc::new(prov);
+                // Connect under tab_id 0 — apply_connection() resets tabs to [Tab::new(0)]
+                conn_mgr.set_config(config.clone(), app.statement_timeout_ms);
+                match conn_mgr.ensure_connected(0).await {
+                    Ok(prov) => {
                         let limit = app.tree_browser.category_limit();
                         match prov.get_schema(limit).await {
                             Ok(schema) => {
@@ -392,8 +392,6 @@ async fn run_app(
                                     format!("Connected to {}", config.name),
                                     StatusLevel::Success,
                                 );
-                                *provider = Some(prov);
-                                *conn_err_rx = Some(rx);
                             }
                             Err(e) => {
                                 app.set_status(
@@ -414,53 +412,59 @@ async fn run_app(
                 timeout_ms,
                 max_rows,
             } => {
-                if let Some(prov) = provider.as_ref() {
-                    let db = Arc::clone(prov);
-                    let tx = event_tx.clone();
-                    tokio::spawn(async move {
-                        match db.execute_query(&sql, timeout_ms, max_rows).await {
-                            Ok(results) => {
-                                let _ = tx.send(AppEvent::QueryCompleted { results, tab_id });
+                // Lazily connect this tab if needed
+                match conn_mgr.ensure_connected(tab_id).await {
+                    Ok(db) => {
+                        let tx = event_tx.clone();
+                        tokio::spawn(async move {
+                            match db.execute_query(&sql, timeout_ms, max_rows).await {
+                                Ok(results) => {
+                                    let _ = tx.send(AppEvent::QueryCompleted { results, tab_id });
+                                }
+                                Err(e) => {
+                                    let (error, position) = match e {
+                                        DbError::QueryFailed { message, position } => {
+                                            (message, position)
+                                        }
+                                        DbError::Timeout(ms) => {
+                                            let msg = if ms >= 1000 {
+                                                format!("Query timed out after {}s", ms / 1000)
+                                            } else {
+                                                format!("Query timed out after {}ms", ms)
+                                            };
+                                            (msg, None)
+                                        }
+                                        other => (other.to_string(), None),
+                                    };
+                                    let _ = tx.send(AppEvent::QueryFailed {
+                                        error,
+                                        position,
+                                        tab_id,
+                                    });
+                                }
                             }
-                            Err(e) => {
-                                let (error, position) = match e {
-                                    DbError::QueryFailed { message, position } => {
-                                        (message, position)
-                                    }
-                                    DbError::Timeout(ms) => {
-                                        let msg = if ms >= 1000 {
-                                            format!("Query timed out after {}s", ms / 1000)
-                                        } else {
-                                            format!("Query timed out after {}ms", ms)
-                                        };
-                                        (msg, None)
-                                    }
-                                    other => (other.to_string(), None),
-                                };
-                                let _ = tx.send(AppEvent::QueryFailed {
-                                    error,
-                                    position,
-                                    tab_id,
-                                });
-                            }
-                        }
-                    });
-                } else {
-                    app.set_status("Not connected".to_string(), StatusLevel::Warning);
+                        });
+                    }
+                    Err(e) => {
+                        // Connection failed for this tab — clear running state
+                        app.handle_event(AppEvent::QueryFailed {
+                            error: e,
+                            position: None,
+                            tab_id,
+                        })?;
+                    }
                 }
             }
-            Action::CancelQuery { terminate } => {
-                if let Some(prov) = provider.as_ref() {
+            Action::CancelQuery { tab_id, terminate } => {
+                if let Some(prov) = conn_mgr.get(tab_id) {
                     let db = Arc::clone(prov);
                     tokio::spawn(async move {
-                        // Use enhanced cancel with pg_cancel_backend/pg_terminate_backend
-                        // Falls back to CancelToken if control connection fails
                         let _ = db.cancel_query_enhanced(terminate).await;
                     });
                 }
             }
             Action::LoadSchema => {
-                if let Some(prov) = provider.as_ref() {
+                if let Some(prov) = conn_mgr.any_provider() {
                     let db = Arc::clone(prov);
                     let tx = event_tx.clone();
                     let limit = app.tree_browser.category_limit();
@@ -479,7 +483,7 @@ async fn run_app(
                 }
             }
             Action::SearchSchema { pattern } => {
-                if let Some(prov) = provider.as_ref() {
+                if let Some(prov) = conn_mgr.any_provider() {
                     let db = Arc::clone(prov);
                     let tx = event_tx.clone();
                     tokio::spawn(async move {
@@ -502,7 +506,7 @@ async fn run_app(
                 offset,
                 limit,
             } => {
-                if let Some(prov) = provider.as_ref() {
+                if let Some(prov) = conn_mgr.any_provider() {
                     let db = Arc::clone(prov);
                     let tx = event_tx.clone();
                     let schema = schema_name.clone();
@@ -544,9 +548,11 @@ async fn run_app(
                     app.set_status("Not connected".to_string(), StatusLevel::Warning);
                 }
             }
+            Action::TabClosed { tab_id } => {
+                conn_mgr.remove(tab_id);
+            }
             Action::Disconnect => {
-                *provider = None;
-                *conn_err_rx = None;
+                conn_mgr.disconnect_all();
             }
             Action::None => {}
         }

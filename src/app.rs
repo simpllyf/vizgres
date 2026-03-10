@@ -24,7 +24,8 @@ use crate::ui::theme::Theme;
 use crate::ui::tree::TreeBrowser;
 use crossterm::event::KeyEvent;
 
-/// A single query tab containing its own editor, results, and completer
+/// A single query tab containing its own editor, results, and completer.
+/// Each tab holds its own transaction state (independent per connection).
 pub struct Tab {
     /// Stable identifier (monotonically increasing, never reused)
     pub id: usize,
@@ -35,6 +36,8 @@ pub struct Tab {
     pub query_running: bool,
     /// When the current query started (for elapsed time display)
     pub query_start: Option<std::time::Instant>,
+    /// Client-side transaction state for this tab's connection
+    pub transaction_state: TransactionState,
 }
 
 impl Tab {
@@ -46,6 +49,7 @@ impl Tab {
             completer: Completer::new(),
             query_running: false,
             query_start: None,
+            transaction_state: TransactionState::Idle,
         }
     }
 }
@@ -99,9 +103,6 @@ pub struct App {
     /// Server-side statement timeout in milliseconds (0 = disabled)
     /// Applied at connection time via the connection string
     pub statement_timeout_ms: u64,
-
-    /// Client-side transaction state (inferred from query text + errors)
-    pub transaction_state: TransactionState,
 
     /// Whether to prompt before executing destructive queries (DROP, TRUNCATE, etc.)
     confirm_destructive: bool,
@@ -224,9 +225,10 @@ pub enum Action {
         timeout_ms: u64,
         max_rows: usize,
     },
-    /// Cancel the current query.
+    /// Cancel a query on a specific tab's connection.
     /// If `terminate` is true, use pg_terminate_backend() for hard kill.
     CancelQuery {
+        tab_id: usize,
         terminate: bool,
     },
     LoadSchema,
@@ -238,6 +240,10 @@ pub enum Action {
         category: String,
         offset: usize,
         limit: usize,
+    },
+    /// A tab was closed — main loop should clean up its connection
+    TabClosed {
+        tab_id: usize,
     },
     Connect(ConnectionConfig),
     /// Signal to clear provider and show reconnect dialog (on connection loss)
@@ -281,7 +287,6 @@ impl App {
             query_timeout_ms: settings.settings.query_timeout_ms,
             max_result_rows: settings.settings.max_result_rows,
             statement_timeout_ms: settings.settings.statement_timeout_ms,
-            transaction_state: TransactionState::Idle,
             confirm_destructive: settings.settings.confirm_destructive,
             pending_confirm_sql: None,
             status_message: None,
@@ -354,12 +359,14 @@ impl App {
             } => {
                 let cancelled = error.contains("canceling statement due to user request");
 
-                // Transition to Failed if we're inside a transaction
-                if self.transaction_state == TransactionState::InTransaction && !cancelled {
-                    self.transaction_state = TransactionState::Failed;
-                }
-
                 if let Some(idx) = self.tab_index_by_id(tab_id) {
+                    // Transition to Failed if this tab is inside a transaction
+                    if self.tabs[idx].transaction_state == TransactionState::InTransaction
+                        && !cancelled
+                    {
+                        self.tabs[idx].transaction_state = TransactionState::Failed;
+                    }
+
                     self.tabs[idx].query_running = false;
                     self.tabs[idx].query_start = None;
                     self.tabs[idx].results_viewer.set_error(error);
@@ -476,7 +483,10 @@ impl App {
                 Ok(Action::None)
             }
             AppEvent::ConnectionLost(msg) => {
-                self.transaction_state = TransactionState::Idle;
+                // Reset all tabs' transaction state — connection is gone
+                for tab in &mut self.tabs {
+                    tab.transaction_state = TransactionState::Idle;
+                }
                 self.set_status(format!("Connection lost: {}", msg), StatusLevel::Error);
                 self.show_connection_dialog();
                 Ok(Action::Disconnect)
@@ -596,13 +606,26 @@ impl App {
                         "Cannot close tab while query is running".to_string(),
                         StatusLevel::Warning,
                     );
-                } else if !self.close_tab() {
+                    return Action::None;
+                }
+                let had_transaction = self.tab().transaction_state != TransactionState::Idle;
+                let tab_id = self.tab().id;
+                if self.close_tab() {
+                    if had_transaction {
+                        self.set_status(
+                            "Closed tab with uncommitted transaction (auto-rolled back)"
+                                .to_string(),
+                            StatusLevel::Warning,
+                        );
+                    }
+                    Action::TabClosed { tab_id }
+                } else {
                     self.set_status(
                         "Cannot close the last tab".to_string(),
                         StatusLevel::Warning,
                     );
+                    Action::None
                 }
-                Action::None
             }
             KeyAction::NextTab => {
                 self.next_tab();
@@ -728,12 +751,19 @@ impl App {
                 }
             }
             KeyAction::CancelQuery => {
-                if self.tabs.iter().any(|t| t.query_running) {
+                // Prefer cancelling the active tab; fall back to any running tab
+                let active = &self.tabs[self.active_tab];
+                let target = if active.query_running {
+                    Some(active.id)
+                } else {
+                    self.tabs.iter().find(|t| t.query_running).map(|t| t.id)
+                };
+                if let Some(tab_id) = target {
                     self.set_status("Cancelling query...".to_string(), StatusLevel::Warning);
-                    // Use graceful cancel (terminate: false) by default
-                    // Two-phase cancel with terminate: true will be implemented via
-                    // cancel phase state tracking (future enhancement)
-                    Action::CancelQuery { terminate: false }
+                    Action::CancelQuery {
+                        tab_id,
+                        terminate: false,
+                    }
                 } else {
                     Action::None
                 }
@@ -1086,9 +1116,9 @@ impl App {
         let timeout_ms = self.query_timeout_ms;
         let max_rows = self.max_result_rows;
 
-        // Update transaction state based on query intent
+        // Update this tab's transaction state based on query intent
         if let Some(new_state) = detect_transaction_intent(&sql) {
-            self.transaction_state = new_state;
+            self.tab_mut().transaction_state = new_state;
         }
 
         self.tab_mut().query_running = true;
@@ -1105,11 +1135,10 @@ impl App {
 
     /// Execute a confirmed (destructive) query
     fn execute_confirmed_query(&mut self, pending: PendingConfirm) -> Action {
-        if let Some(new_state) = detect_transaction_intent(&pending.sql) {
-            self.transaction_state = new_state;
-        }
-
         if let Some(idx) = self.tab_index_by_id(pending.tab_id) {
+            if let Some(new_state) = detect_transaction_intent(&pending.sql) {
+                self.tabs[idx].transaction_state = new_state;
+            }
             self.tabs[idx].query_running = true;
             self.tabs[idx].query_start = Some(std::time::Instant::now());
         }
@@ -1313,8 +1342,7 @@ impl App {
     pub fn apply_connection(&mut self, name: String, schema: crate::db::schema::SchemaTree) {
         self.connection_name = Some(name);
         self.tree_browser.set_schema(schema);
-        self.transaction_state = TransactionState::Idle;
-        // Reset all tabs to fresh state
+        // Reset all tabs to fresh state (transaction_state resets via Tab::new)
         self.tabs = vec![Tab::new(0)];
         self.active_tab = 0;
         self.next_tab_id = 1;
@@ -2724,14 +2752,17 @@ mod tests {
 
         let mut app = App::new();
         app.focus = PanelFocus::QueryEditor;
-        assert_eq!(app.transaction_state, TransactionState::Idle);
+        assert_eq!(app.tabs[0].transaction_state, TransactionState::Idle);
 
         // Execute BEGIN
         app.tabs[0].editor.set_content("BEGIN".to_string());
         let f5 = KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE);
         let action = app.handle_key(f5);
         assert!(matches!(action, Action::ExecuteQuery { .. }));
-        assert_eq!(app.transaction_state, TransactionState::InTransaction);
+        assert_eq!(
+            app.tabs[0].transaction_state,
+            TransactionState::InTransaction
+        );
 
         // Execute a SELECT (no state change)
         app.tabs[0]
@@ -2739,13 +2770,16 @@ mod tests {
             .set_content("SELECT * FROM users".to_string());
         let action = app.handle_key(f5);
         assert!(matches!(action, Action::ExecuteQuery { .. }));
-        assert_eq!(app.transaction_state, TransactionState::InTransaction);
+        assert_eq!(
+            app.tabs[0].transaction_state,
+            TransactionState::InTransaction
+        );
 
         // Execute COMMIT
         app.tabs[0].editor.set_content("COMMIT".to_string());
         let action = app.handle_key(f5);
         assert!(matches!(action, Action::ExecuteQuery { .. }));
-        assert_eq!(app.transaction_state, TransactionState::Idle);
+        assert_eq!(app.tabs[0].transaction_state, TransactionState::Idle);
     }
 
     #[test]
@@ -2759,7 +2793,10 @@ mod tests {
         app.tabs[0].editor.set_content("BEGIN".to_string());
         let f5 = KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE);
         app.handle_key(f5);
-        assert_eq!(app.transaction_state, TransactionState::InTransaction);
+        assert_eq!(
+            app.tabs[0].transaction_state,
+            TransactionState::InTransaction
+        );
 
         // Simulate query failure while in transaction
         app.tabs[0].query_running = true;
@@ -2769,19 +2806,19 @@ mod tests {
             tab_id: 0,
         })
         .unwrap();
-        assert_eq!(app.transaction_state, TransactionState::Failed);
+        assert_eq!(app.tabs[0].transaction_state, TransactionState::Failed);
 
         // ROLLBACK should return to Idle
         app.focus = PanelFocus::QueryEditor; // QueryFailed moves focus to results
         app.tabs[0].editor.set_content("ROLLBACK".to_string());
         app.handle_key(f5);
-        assert_eq!(app.transaction_state, TransactionState::Idle);
+        assert_eq!(app.tabs[0].transaction_state, TransactionState::Idle);
     }
 
     #[test]
     fn test_transaction_state_cancel_does_not_fail() {
         let mut app = App::new();
-        app.transaction_state = TransactionState::InTransaction;
+        app.tabs[0].transaction_state = TransactionState::InTransaction;
         app.tabs[0].query_running = true;
 
         // Cancellation should NOT transition to Failed
@@ -2791,7 +2828,10 @@ mod tests {
             tab_id: 0,
         })
         .unwrap();
-        assert_eq!(app.transaction_state, TransactionState::InTransaction);
+        assert_eq!(
+            app.tabs[0].transaction_state,
+            TransactionState::InTransaction
+        );
     }
 
     #[test]
@@ -2799,18 +2839,18 @@ mod tests {
         use crate::db::schema::SchemaTree;
 
         let mut app = App::new();
-        app.transaction_state = TransactionState::InTransaction;
+        app.tabs[0].transaction_state = TransactionState::InTransaction;
         app.apply_connection("test".to_string(), SchemaTree::new());
-        assert_eq!(app.transaction_state, TransactionState::Idle);
+        assert_eq!(app.tabs[0].transaction_state, TransactionState::Idle);
     }
 
     #[test]
     fn test_transaction_state_reset_on_connection_lost() {
         let mut app = App::new();
-        app.transaction_state = TransactionState::InTransaction;
+        app.tabs[0].transaction_state = TransactionState::InTransaction;
         app.handle_event(AppEvent::ConnectionLost("gone".to_string()))
             .unwrap();
-        assert_eq!(app.transaction_state, TransactionState::Idle);
+        assert_eq!(app.tabs[0].transaction_state, TransactionState::Idle);
     }
 
     // ── Destructive query confirmation tests ─────────────────
@@ -2994,9 +3034,52 @@ mod tests {
     fn test_apply_connection_resets_transaction_state() {
         use crate::db::schema::SchemaTree;
         let mut app = App::new();
-        app.transaction_state = TransactionState::InTransaction;
+        app.tabs[0].transaction_state = TransactionState::InTransaction;
         app.apply_connection("test-db".to_string(), SchemaTree::new());
         assert_eq!(app.connection_name.as_deref(), Some("test-db"));
-        assert_eq!(app.transaction_state, TransactionState::Idle);
+        assert_eq!(app.tabs[0].transaction_state, TransactionState::Idle);
+    }
+
+    #[test]
+    fn test_close_tab_with_active_transaction_warns() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+
+        // Open a second tab so we can close one
+        app.new_tab();
+        assert_eq!(app.tabs.len(), 2);
+
+        // Set transaction state on active tab (tab 2)
+        app.tab_mut().transaction_state = TransactionState::InTransaction;
+
+        // Close tab — should succeed with warning
+        let close_key = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL);
+        let action = app.handle_key(close_key);
+        assert!(matches!(action, Action::TabClosed { .. }));
+        assert_eq!(app.tabs.len(), 1);
+
+        // Should have set a warning status about uncommitted transaction
+        assert!(app.status_message.is_some());
+        let msg = &app.status_message.unwrap().message;
+        assert!(msg.contains("uncommitted transaction"));
+    }
+
+    #[test]
+    fn test_close_tab_blocks_while_query_running() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+
+        // Open second tab and mark query as running
+        app.new_tab();
+        app.tab_mut().query_running = true;
+
+        let close_key = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL);
+        let action = app.handle_key(close_key);
+        assert!(matches!(action, Action::None));
+        assert_eq!(app.tabs.len(), 2); // Tab not closed
     }
 }
