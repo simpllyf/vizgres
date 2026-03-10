@@ -147,6 +147,7 @@ impl ConnectionDialog {
                         let name = self.name_input.trim().to_string();
                         if !name.is_empty() {
                             config.name = name;
+                            config.is_saved = true;
                             self.save_connection(&config);
                         }
                         DialogAction::Connect(config)
@@ -595,6 +596,7 @@ mod tests {
             username: "user".to_string(),
             password: None,
             ssl_mode: crate::config::connections::SslMode::Prefer,
+            is_saved: false,
         }];
 
         dialog.handle_key(key(KeyCode::Tab)); // URL → Name
@@ -649,6 +651,7 @@ mod tests {
                 assert_eq!(config.host, "localhost");
                 assert_eq!(config.username, "user");
                 assert_eq!(config.database, "mydb");
+                assert!(!config.is_saved, "URL-only connection should not be saved");
             }
             _ => panic!("Expected Connect action"),
         }
@@ -690,6 +693,7 @@ mod tests {
             username: "user".to_string(),
             password: Some("pass".to_string()),
             ssl_mode: crate::config::connections::SslMode::Prefer,
+            is_saved: false,
         }];
 
         // Switch to saved list
@@ -762,6 +766,7 @@ mod tests {
                 username: "u1".to_string(),
                 password: None,
                 ssl_mode: crate::config::connections::SslMode::Prefer,
+                is_saved: false,
             },
             ConnectionConfig {
                 name: "db2".to_string(),
@@ -771,6 +776,7 @@ mod tests {
                 username: "u2".to_string(),
                 password: None,
                 ssl_mode: crate::config::connections::SslMode::Prefer,
+                is_saved: false,
             },
         ];
         dialog.focus = DialogFocus::SavedList;
@@ -843,6 +849,10 @@ mod tests {
             DialogAction::Connect(config) => {
                 assert_eq!(config.name, "my-local");
                 assert_eq!(config.host, "localhost");
+                assert!(
+                    config.is_saved,
+                    "named connection should be marked as saved"
+                );
             }
             _ => panic!("Expected Connect action"),
         }

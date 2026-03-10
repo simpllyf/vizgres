@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Database connection configuration
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectionConfig {
     /// Connection profile name
     pub name: String,
@@ -33,6 +33,25 @@ pub struct ConnectionConfig {
     /// SSL mode
     #[serde(default)]
     pub ssl_mode: SslMode,
+
+    /// Whether this connection was loaded from or saved to connections.toml.
+    /// Runtime-only flag — not serialized.
+    #[serde(skip)]
+    pub is_saved: bool,
+}
+
+/// Equality ignores `is_saved` — two configs pointing at the same database
+/// are equal regardless of whether they came from disk or a URL.
+impl PartialEq for ConnectionConfig {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.host == other.host
+            && self.port == other.port
+            && self.database == other.database
+            && self.username == other.username
+            && self.password == other.password
+            && self.ssl_mode == other.ssl_mode
+    }
 }
 
 /// SSL connection mode
@@ -113,6 +132,7 @@ impl ConnectionConfig {
             username,
             password,
             ssl_mode,
+            is_saved: false,
         })
     }
 
@@ -307,7 +327,11 @@ pub fn load_connections() -> ConfigResult<Vec<ConnectionConfig>> {
     let content = std::fs::read_to_string(&path)
         .map_err(|e| ConfigError::NotFound(format!("Failed to read connections file: {}", e)))?;
     let file: ConnectionsFile = toml::from_str(&content)?;
-    Ok(file.connections)
+    let mut connections = file.connections;
+    for conn in &mut connections {
+        conn.is_saved = true;
+    }
+    Ok(connections)
 }
 
 /// Save connection profiles to config file
@@ -347,6 +371,7 @@ mod tests {
             username: "user".to_string(),
             password: None,
             ssl_mode: SslMode::Disable,
+            is_saved: false,
         };
         assert_eq!(
             config.connection_string(),
@@ -364,6 +389,7 @@ mod tests {
         assert_eq!(config.username, "user");
         assert_eq!(config.password, Some("pass".to_string()));
         assert_eq!(config.ssl_mode, SslMode::Prefer);
+        assert!(!config.is_saved, "from_url should produce is_saved = false");
     }
 
     #[test]
@@ -420,6 +446,7 @@ mod tests {
             username: "user".to_string(),
             password: Some("secret".to_string()),
             ssl_mode: SslMode::Disable,
+            is_saved: false,
         };
         assert_eq!(
             config.connection_string_with_password(0),
@@ -437,6 +464,7 @@ mod tests {
             username: "user".to_string(),
             password: Some("it's a p@ss\\word".to_string()),
             ssl_mode: SslMode::Disable,
+            is_saved: false,
         };
         assert_eq!(
             config.connection_string_with_password(0),
@@ -454,6 +482,7 @@ mod tests {
             username: "user".to_string(),
             password: Some("secret".to_string()),
             ssl_mode: SslMode::Disable,
+            is_saved: false,
         };
         assert_eq!(
             config.connection_string_with_password(60000),
@@ -471,6 +500,7 @@ mod tests {
             username: "user".to_string(),
             password: None,
             ssl_mode: SslMode::Prefer,
+            is_saved: false,
         };
         let conn_str = config.connection_string_with_password(0);
         assert!(
@@ -596,6 +626,7 @@ mod tests {
             username: "user".to_string(),
             password: Some("pass".to_string()),
             ssl_mode: SslMode::Prefer,
+            is_saved: false,
         };
         let url = original.to_url();
         let parsed = ConnectionConfig::from_url(&url).unwrap();
@@ -617,6 +648,7 @@ mod tests {
             username: "user".to_string(),
             password: Some("p@ss:w/rd".to_string()),
             ssl_mode: SslMode::Prefer,
+            is_saved: false,
         };
         let url = config.to_url();
         // Special chars should be percent-encoded
@@ -636,6 +668,7 @@ mod tests {
             username: "user".to_string(),
             password: None,
             ssl_mode: SslMode::Prefer,
+            is_saved: false,
         };
         let url = config.to_url();
         assert_eq!(url, "postgres://user@localhost/mydb");
@@ -651,6 +684,7 @@ mod tests {
             username: "user".to_string(),
             password: Some("pass".to_string()),
             ssl_mode: SslMode::Require,
+            is_saved: false,
         };
         let url = config.to_url();
         assert!(url.ends_with("?sslmode=require"));
@@ -666,6 +700,7 @@ mod tests {
             username: "user".to_string(),
             password: None,
             ssl_mode: SslMode::Prefer,
+            is_saved: false,
         };
         let url = config.to_url();
         assert_eq!(url, "postgres://user@localhost:5433/mydb");
@@ -681,6 +716,7 @@ mod tests {
             username: "user".to_string(),
             password: Some("pass".to_string()),
             ssl_mode: SslMode::Prefer,
+            is_saved: false,
         };
         let url = config.to_url();
         let parsed = ConnectionConfig::from_url(&url).unwrap();
@@ -699,6 +735,7 @@ mod tests {
             username: "user".to_string(),
             password: Some("secret".to_string()),
             ssl_mode: SslMode::Prefer,
+            is_saved: false,
         };
         let toml_str = toml::to_string_pretty(&config).unwrap();
         assert!(
@@ -720,6 +757,7 @@ mod tests {
             username: "user".to_string(),
             password: Some("supersecret".to_string()),
             ssl_mode: SslMode::Prefer,
+            is_saved: false,
         };
         let masked = config.to_url_masked();
         assert_eq!(masked, "postgres://user:****@localhost/mydb");
@@ -736,6 +774,7 @@ mod tests {
             username: "user".to_string(),
             password: None,
             ssl_mode: SslMode::Prefer,
+            is_saved: false,
         };
         assert_eq!(config.to_url_masked(), "postgres://user@localhost/mydb");
     }
@@ -750,6 +789,7 @@ mod tests {
             username: "admin".to_string(),
             password: Some("secret".to_string()),
             ssl_mode: SslMode::Require,
+            is_saved: false,
         };
         let masked = config.to_url_masked();
         assert_eq!(
@@ -770,11 +810,20 @@ mod tests {
             username: "user".to_string(),
             password: None,
             ssl_mode: SslMode::Prefer,
+            is_saved: false,
         };
         let toml_str = toml::to_string_pretty(&config).unwrap();
         assert!(
             !toml_str.contains("password"),
             "None password should not appear in TOML"
         );
+    }
+
+    #[test]
+    fn test_equality_ignores_is_saved() {
+        let a = ConnectionConfig::from_url("postgres://user:pass@localhost/mydb").unwrap();
+        let mut b = a.clone();
+        b.is_saved = true;
+        assert_eq!(a, b, "is_saved should not affect equality");
     }
 }
