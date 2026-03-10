@@ -99,6 +99,9 @@ pub struct Theme {
     pub status_warning: Style,
     pub status_conn_info: Style,
     pub status_help_hint: Style,
+    pub status_txn_active: Style,
+    pub status_txn_failed: Style,
+    pub status_confirm: Style,
 }
 
 impl Default for Theme {
@@ -231,6 +234,17 @@ impl Default for Theme {
             status_warning: Style::default().fg(Color::Yellow),
             status_conn_info: Style::default().fg(Color::DarkGray),
             status_help_hint: Style::default().fg(Color::DarkGray),
+            status_txn_active: Style::default()
+                .fg(Color::Black)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+            status_txn_failed: Style::default()
+                .fg(Color::White)
+                .bg(Color::Red)
+                .add_modifier(Modifier::BOLD),
+            status_confirm: Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         }
     }
 }

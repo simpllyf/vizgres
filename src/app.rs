@@ -100,6 +100,15 @@ pub struct App {
     /// Applied at connection time via the connection string
     pub statement_timeout_ms: u64,
 
+    /// Client-side transaction state (inferred from query text + errors)
+    pub transaction_state: TransactionState,
+
+    /// Whether to prompt before executing destructive queries (DROP, TRUNCATE, etc.)
+    confirm_destructive: bool,
+
+    /// SQL pending destructive-query confirmation (waiting for y/n)
+    pending_confirm_sql: Option<PendingConfirm>,
+
     /// Status message to display
     pub status_message: Option<StatusMessage>,
 
@@ -137,6 +146,26 @@ pub enum StatusLevel {
     Success,
     Warning,
     Error,
+}
+
+/// Client-side transaction state tracking.
+/// Inferred from query text (BEGIN/COMMIT/ROLLBACK) and error events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransactionState {
+    /// No active transaction (autocommit)
+    Idle,
+    /// Inside an explicit transaction block
+    InTransaction,
+    /// Transaction block entered error state (requires ROLLBACK)
+    Failed,
+}
+
+/// Pending destructive query confirmation
+struct PendingConfirm {
+    sql: String,
+    tab_id: usize,
+    timeout_ms: u64,
+    max_rows: usize,
 }
 
 /// Application events from the event loop
@@ -252,6 +281,9 @@ impl App {
             query_timeout_ms: settings.settings.query_timeout_ms,
             max_result_rows: settings.settings.max_result_rows,
             statement_timeout_ms: settings.settings.statement_timeout_ms,
+            transaction_state: TransactionState::Idle,
+            confirm_destructive: settings.settings.confirm_destructive,
+            pending_confirm_sql: None,
             status_message: None,
             clipboard,
             clipboard_error,
@@ -321,6 +353,12 @@ impl App {
                 tab_id,
             } => {
                 let cancelled = error.contains("canceling statement due to user request");
+
+                // Transition to Failed if we're inside a transaction
+                if self.transaction_state == TransactionState::InTransaction && !cancelled {
+                    self.transaction_state = TransactionState::Failed;
+                }
+
                 if let Some(idx) = self.tab_index_by_id(tab_id) {
                     self.tabs[idx].query_running = false;
                     self.tabs[idx].query_start = None;
@@ -438,6 +476,7 @@ impl App {
                 Ok(Action::None)
             }
             AppEvent::ConnectionLost(msg) => {
+                self.transaction_state = TransactionState::Idle;
                 self.set_status(format!("Connection lost: {}", msg), StatusLevel::Error);
                 self.show_connection_dialog();
                 Ok(Action::Disconnect)
@@ -447,6 +486,11 @@ impl App {
 
     fn handle_key(&mut self, key: KeyEvent) -> Action {
         self.status_message = None;
+
+        // Destructive-query confirmation intercepts all keys
+        if let Some(pending) = self.pending_confirm_sql.take() {
+            return self.handle_confirm_key(key, pending);
+        }
 
         // Connection dialog intercepts all keys when visible
         if self.focus == PanelFocus::ConnectionDialog {
@@ -651,19 +695,24 @@ impl App {
             KeyAction::ExecuteQuery => {
                 let sql = self.tab().editor.get_content();
                 if !sql.trim().is_empty() {
-                    let tab_id = self.tab().id;
-                    let timeout_ms = self.query_timeout_ms;
-                    let max_rows = self.max_result_rows;
-                    self.tab_mut().query_running = true;
-                    self.tab_mut().query_start = Some(std::time::Instant::now());
-                    self.history.push(&sql);
-                    self.set_status("Executing query...".to_string(), StatusLevel::Info);
-                    Action::ExecuteQuery {
-                        sql,
-                        tab_id,
-                        timeout_ms,
-                        max_rows,
+                    // Check for destructive query
+                    if self.confirm_destructive
+                        && let Some(label) = is_destructive_query(&sql)
+                    {
+                        self.pending_confirm_sql = Some(PendingConfirm {
+                            sql,
+                            tab_id: self.tab().id,
+                            timeout_ms: self.query_timeout_ms,
+                            max_rows: self.max_result_rows,
+                        });
+                        self.set_status(
+                            format!("This query contains {}. Execute? (y/N)", label),
+                            StatusLevel::Warning,
+                        );
+                        return Action::None;
                     }
+                    self.set_status("Executing query...".to_string(), StatusLevel::Info);
+                    self.prepare_execute_query(sql)
                 } else {
                     Action::None
                 }
@@ -671,20 +720,9 @@ impl App {
             KeyAction::ExplainQuery => {
                 let sql = self.tab().editor.get_content();
                 if !sql.trim().is_empty() {
-                    let tab_id = self.tab().id;
-                    let timeout_ms = self.query_timeout_ms;
-                    let max_rows = self.max_result_rows;
                     let explain = format!("EXPLAIN ANALYZE {}", sql.trim());
-                    self.tab_mut().query_running = true;
-                    self.tab_mut().query_start = Some(std::time::Instant::now());
-                    self.history.push(&sql);
                     self.set_status("Running EXPLAIN ANALYZE...".to_string(), StatusLevel::Info);
-                    Action::ExecuteQuery {
-                        sql: explain,
-                        tab_id,
-                        timeout_ms,
-                        max_rows,
-                    }
+                    self.prepare_execute_query(explain)
                 } else {
                     Action::None
                 }
@@ -1025,6 +1063,66 @@ impl App {
         }
     }
 
+    /// Handle a y/n keypress for destructive query confirmation
+    fn handle_confirm_key(&mut self, key: KeyEvent, pending: PendingConfirm) -> Action {
+        use crossterm::event::KeyCode;
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                self.set_status("Executing...".to_string(), StatusLevel::Info);
+                self.execute_confirmed_query(pending)
+            }
+            _ => {
+                // Any other key cancels
+                self.set_status("Query cancelled".to_string(), StatusLevel::Warning);
+                Action::None
+            }
+        }
+    }
+
+    /// Execute a query that has already passed confirmation (or didn't need it).
+    /// This handles both the transaction state update and returning the Action.
+    fn prepare_execute_query(&mut self, sql: String) -> Action {
+        let tab_id = self.tab().id;
+        let timeout_ms = self.query_timeout_ms;
+        let max_rows = self.max_result_rows;
+
+        // Update transaction state based on query intent
+        if let Some(new_state) = detect_transaction_intent(&sql) {
+            self.transaction_state = new_state;
+        }
+
+        self.tab_mut().query_running = true;
+        self.tab_mut().query_start = Some(std::time::Instant::now());
+        self.history.push(&sql);
+
+        Action::ExecuteQuery {
+            sql,
+            tab_id,
+            timeout_ms,
+            max_rows,
+        }
+    }
+
+    /// Execute a confirmed (destructive) query
+    fn execute_confirmed_query(&mut self, pending: PendingConfirm) -> Action {
+        if let Some(new_state) = detect_transaction_intent(&pending.sql) {
+            self.transaction_state = new_state;
+        }
+
+        if let Some(idx) = self.tab_index_by_id(pending.tab_id) {
+            self.tabs[idx].query_running = true;
+            self.tabs[idx].query_start = Some(std::time::Instant::now());
+        }
+        self.history.push(&pending.sql);
+
+        Action::ExecuteQuery {
+            sql: pending.sql,
+            tab_id: pending.tab_id,
+            timeout_ms: pending.timeout_ms,
+            max_rows: pending.max_rows,
+        }
+    }
+
     fn process_component_action(&mut self, action: ComponentAction) -> Action {
         // Components only return Consumed/Ignored for text input.
         // All meaningful actions are handled by KeyMap → execute_key_action.
@@ -1199,6 +1297,11 @@ impl App {
         self.status_message = Some(StatusMessage { message, level });
     }
 
+    /// Whether a destructive-query confirmation prompt is active
+    pub fn is_confirm_pending(&self) -> bool {
+        self.pending_confirm_sql.is_some()
+    }
+
     /// Show the connection picker dialog
     pub fn show_connection_dialog(&mut self) {
         self.previous_focus = self.focus;
@@ -1210,6 +1313,7 @@ impl App {
     pub fn apply_connection(&mut self, name: String, schema: crate::db::schema::SchemaTree) {
         self.connection_name = Some(name);
         self.tree_browser.set_schema(schema);
+        self.transaction_state = TransactionState::Idle;
         // Reset all tabs to fresh state
         self.tabs = vec![Tab::new(0)];
         self.active_tab = 0;
@@ -1282,6 +1386,62 @@ impl Default for App {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Detect the transaction intent of a SQL statement by looking at the first keyword.
+/// Returns the new TransactionState if the query changes it, or None if no change.
+fn detect_transaction_intent(sql: &str) -> Option<TransactionState> {
+    let trimmed = sql.trim();
+    // Find the first word (case-insensitive)
+    let first_word = trimmed.split_whitespace().next()?.to_uppercase();
+    match first_word.as_str() {
+        "BEGIN" | "START" => Some(TransactionState::InTransaction),
+        "COMMIT" | "END" => Some(TransactionState::Idle),
+        "ROLLBACK" | "ABORT" => Some(TransactionState::Idle),
+        _ => None,
+    }
+}
+
+/// Check if a SQL statement is destructive and return a label describing the operation.
+/// Returns None if the query is safe, or Some("LABEL") for destructive queries.
+fn is_destructive_query(sql: &str) -> Option<&'static str> {
+    let trimmed = sql.trim();
+    // Normalize to uppercase for matching, but only the prefix we need
+    let upper: String = trimmed.chars().take(200).collect::<String>().to_uppercase();
+
+    if upper.starts_with("DROP TABLE")
+        || upper.starts_with("DROP INDEX")
+        || upper.starts_with("DROP SCHEMA")
+        || upper.starts_with("DROP DATABASE")
+        || upper.starts_with("DROP VIEW")
+        || upper.starts_with("DROP MATERIALIZED VIEW")
+        || upper.starts_with("DROP FUNCTION")
+        || upper.starts_with("DROP PROCEDURE")
+        || upper.starts_with("DROP TRIGGER")
+        || upper.starts_with("DROP SEQUENCE")
+        || upper.starts_with("DROP TYPE")
+        || upper.starts_with("DROP EXTENSION")
+        || upper.starts_with("DROP ROLE")
+        || upper.starts_with("DROP USER")
+    {
+        return Some("DROP");
+    }
+
+    if upper.starts_with("TRUNCATE") {
+        return Some("TRUNCATE");
+    }
+
+    // DELETE without WHERE
+    if upper.starts_with("DELETE") && !upper.contains("WHERE") {
+        return Some("DELETE without WHERE");
+    }
+
+    // ALTER TABLE ... DROP (column, constraint, etc.)
+    if upper.starts_with("ALTER TABLE") && upper.contains(" DROP ") {
+        return Some("ALTER TABLE DROP");
+    }
+
+    None
 }
 
 /// Convert a 1-based byte offset (from PostgreSQL error) to (line, col) position.
@@ -2515,5 +2675,328 @@ mod tests {
                 std::mem::discriminant(&other)
             ),
         }
+    }
+
+    // ── Transaction state tracking tests ─────────────────────
+
+    #[test]
+    fn test_detect_transaction_intent() {
+        assert_eq!(
+            detect_transaction_intent("BEGIN"),
+            Some(TransactionState::InTransaction)
+        );
+        assert_eq!(
+            detect_transaction_intent("  begin  "),
+            Some(TransactionState::InTransaction)
+        );
+        assert_eq!(
+            detect_transaction_intent("START TRANSACTION"),
+            Some(TransactionState::InTransaction)
+        );
+        assert_eq!(
+            detect_transaction_intent("COMMIT"),
+            Some(TransactionState::Idle)
+        );
+        assert_eq!(
+            detect_transaction_intent("END"),
+            Some(TransactionState::Idle)
+        );
+        assert_eq!(
+            detect_transaction_intent("ROLLBACK"),
+            Some(TransactionState::Idle)
+        );
+        assert_eq!(
+            detect_transaction_intent("rollback"),
+            Some(TransactionState::Idle)
+        );
+        assert_eq!(
+            detect_transaction_intent("ABORT"),
+            Some(TransactionState::Idle)
+        );
+        assert_eq!(detect_transaction_intent("SELECT 1"), None);
+        assert_eq!(detect_transaction_intent("INSERT INTO t VALUES(1)"), None);
+        assert_eq!(detect_transaction_intent("  "), None);
+    }
+
+    #[test]
+    fn test_transaction_state_begin_commit_cycle() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+        assert_eq!(app.transaction_state, TransactionState::Idle);
+
+        // Execute BEGIN
+        app.tabs[0].editor.set_content("BEGIN".to_string());
+        let f5 = KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE);
+        let action = app.handle_key(f5);
+        assert!(matches!(action, Action::ExecuteQuery { .. }));
+        assert_eq!(app.transaction_state, TransactionState::InTransaction);
+
+        // Execute a SELECT (no state change)
+        app.tabs[0]
+            .editor
+            .set_content("SELECT * FROM users".to_string());
+        let action = app.handle_key(f5);
+        assert!(matches!(action, Action::ExecuteQuery { .. }));
+        assert_eq!(app.transaction_state, TransactionState::InTransaction);
+
+        // Execute COMMIT
+        app.tabs[0].editor.set_content("COMMIT".to_string());
+        let action = app.handle_key(f5);
+        assert!(matches!(action, Action::ExecuteQuery { .. }));
+        assert_eq!(app.transaction_state, TransactionState::Idle);
+    }
+
+    #[test]
+    fn test_transaction_state_error_transitions_to_failed() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+
+        // BEGIN
+        app.tabs[0].editor.set_content("BEGIN".to_string());
+        let f5 = KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE);
+        app.handle_key(f5);
+        assert_eq!(app.transaction_state, TransactionState::InTransaction);
+
+        // Simulate query failure while in transaction
+        app.tabs[0].query_running = true;
+        app.handle_event(AppEvent::QueryFailed {
+            error: "relation does not exist".to_string(),
+            position: None,
+            tab_id: 0,
+        })
+        .unwrap();
+        assert_eq!(app.transaction_state, TransactionState::Failed);
+
+        // ROLLBACK should return to Idle
+        app.focus = PanelFocus::QueryEditor; // QueryFailed moves focus to results
+        app.tabs[0].editor.set_content("ROLLBACK".to_string());
+        app.handle_key(f5);
+        assert_eq!(app.transaction_state, TransactionState::Idle);
+    }
+
+    #[test]
+    fn test_transaction_state_cancel_does_not_fail() {
+        let mut app = App::new();
+        app.transaction_state = TransactionState::InTransaction;
+        app.tabs[0].query_running = true;
+
+        // Cancellation should NOT transition to Failed
+        app.handle_event(AppEvent::QueryFailed {
+            error: "ERROR: canceling statement due to user request".to_string(),
+            position: None,
+            tab_id: 0,
+        })
+        .unwrap();
+        assert_eq!(app.transaction_state, TransactionState::InTransaction);
+    }
+
+    #[test]
+    fn test_transaction_state_reset_on_connection() {
+        use crate::db::schema::SchemaTree;
+
+        let mut app = App::new();
+        app.transaction_state = TransactionState::InTransaction;
+        app.apply_connection("test".to_string(), SchemaTree::new());
+        assert_eq!(app.transaction_state, TransactionState::Idle);
+    }
+
+    #[test]
+    fn test_transaction_state_reset_on_connection_lost() {
+        let mut app = App::new();
+        app.transaction_state = TransactionState::InTransaction;
+        app.handle_event(AppEvent::ConnectionLost("gone".to_string()))
+            .unwrap();
+        assert_eq!(app.transaction_state, TransactionState::Idle);
+    }
+
+    // ── Destructive query confirmation tests ─────────────────
+
+    #[test]
+    fn test_is_destructive_query() {
+        assert_eq!(is_destructive_query("DROP TABLE users"), Some("DROP"));
+        assert_eq!(is_destructive_query("drop table users"), Some("DROP"));
+        assert_eq!(is_destructive_query("DROP INDEX idx_name"), Some("DROP"));
+        assert_eq!(is_destructive_query("DROP SCHEMA public"), Some("DROP"));
+        assert_eq!(is_destructive_query("DROP DATABASE mydb"), Some("DROP"));
+        assert_eq!(is_destructive_query("DROP VIEW my_view"), Some("DROP"));
+        assert_eq!(
+            is_destructive_query("DROP MATERIALIZED VIEW mv"),
+            Some("DROP")
+        );
+        assert_eq!(is_destructive_query("DROP FUNCTION fn()"), Some("DROP"));
+        assert_eq!(is_destructive_query("TRUNCATE users"), Some("TRUNCATE"));
+        assert_eq!(
+            is_destructive_query("DELETE FROM users"),
+            Some("DELETE without WHERE")
+        );
+        assert_eq!(
+            is_destructive_query("ALTER TABLE users DROP COLUMN name"),
+            Some("ALTER TABLE DROP")
+        );
+
+        // Safe queries
+        assert_eq!(is_destructive_query("SELECT * FROM users"), None);
+        assert_eq!(is_destructive_query("INSERT INTO users VALUES(1)"), None);
+        assert_eq!(is_destructive_query("DELETE FROM users WHERE id = 1"), None);
+        assert_eq!(
+            is_destructive_query("ALTER TABLE users ADD COLUMN age int"),
+            None
+        );
+        assert_eq!(is_destructive_query("UPDATE users SET name = 'x'"), None);
+        assert_eq!(is_destructive_query("BEGIN"), None);
+        assert_eq!(is_destructive_query("COMMIT"), None);
+    }
+
+    #[test]
+    fn test_destructive_query_triggers_confirmation() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+        app.tabs[0]
+            .editor
+            .set_content("DROP TABLE users".to_string());
+
+        let f5 = KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE);
+        let action = app.handle_key(f5);
+
+        // Should NOT execute yet
+        assert!(matches!(action, Action::None));
+        assert!(app.is_confirm_pending());
+        let msg = app.status_message.as_ref().unwrap();
+        assert!(msg.message.contains("DROP"));
+        assert!(msg.message.contains("(y/N)"));
+    }
+
+    #[test]
+    fn test_confirm_y_executes_query() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+        app.tabs[0]
+            .editor
+            .set_content("DROP TABLE users".to_string());
+
+        // Trigger confirmation
+        let f5 = KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE);
+        app.handle_key(f5);
+        assert!(app.is_confirm_pending());
+
+        // Press 'y' to confirm
+        let y = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE);
+        let action = app.handle_key(y);
+        assert!(matches!(action, Action::ExecuteQuery { .. }));
+        assert!(!app.is_confirm_pending());
+    }
+
+    #[test]
+    fn test_confirm_n_cancels_query() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+        app.tabs[0]
+            .editor
+            .set_content("TRUNCATE orders".to_string());
+
+        // Trigger confirmation
+        let f5 = KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE);
+        app.handle_key(f5);
+        assert!(app.is_confirm_pending());
+
+        // Press 'n' to cancel
+        let n = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE);
+        let action = app.handle_key(n);
+        assert!(matches!(action, Action::None));
+        assert!(!app.is_confirm_pending());
+        assert_eq!(
+            app.status_message.as_ref().unwrap().message,
+            "Query cancelled"
+        );
+    }
+
+    #[test]
+    fn test_confirm_esc_cancels_query() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+        app.tabs[0]
+            .editor
+            .set_content("DROP TABLE users".to_string());
+
+        let f5 = KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE);
+        app.handle_key(f5);
+        assert!(app.is_confirm_pending());
+
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        let action = app.handle_key(esc);
+        assert!(matches!(action, Action::None));
+        assert!(!app.is_confirm_pending());
+    }
+
+    #[test]
+    fn test_confirm_disabled_executes_immediately() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut settings = Settings::default();
+        settings.settings.confirm_destructive = false;
+        let mut app = App::new_with_settings(&settings);
+        app.focus = PanelFocus::QueryEditor;
+        app.tabs[0]
+            .editor
+            .set_content("DROP TABLE users".to_string());
+
+        let f5 = KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE);
+        let action = app.handle_key(f5);
+        assert!(matches!(action, Action::ExecuteQuery { .. }));
+        assert!(!app.is_confirm_pending());
+    }
+
+    #[test]
+    fn test_safe_query_no_confirmation() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+        app.tabs[0]
+            .editor
+            .set_content("SELECT * FROM users".to_string());
+
+        let f5 = KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE);
+        let action = app.handle_key(f5);
+        assert!(matches!(action, Action::ExecuteQuery { .. }));
+        assert!(!app.is_confirm_pending());
+    }
+
+    #[test]
+    fn test_delete_with_where_is_safe() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+        app.tabs[0]
+            .editor
+            .set_content("DELETE FROM users WHERE id = 1".to_string());
+
+        let f5 = KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE);
+        let action = app.handle_key(f5);
+        assert!(matches!(action, Action::ExecuteQuery { .. }));
+        assert!(!app.is_confirm_pending());
+    }
+
+    #[test]
+    fn test_apply_connection_resets_transaction_state() {
+        use crate::db::schema::SchemaTree;
+        let mut app = App::new();
+        app.transaction_state = TransactionState::InTransaction;
+        app.apply_connection("test-db".to_string(), SchemaTree::new());
+        assert_eq!(app.connection_name.as_deref(), Some("test-db"));
+        assert_eq!(app.transaction_state, TransactionState::Idle);
     }
 }

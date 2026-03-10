@@ -38,6 +38,10 @@ pub struct SettingsInner {
     /// at the server level, providing a safety net even if the client crashes.
     #[serde(default = "default_statement_timeout_ms")]
     pub statement_timeout_ms: u64,
+    /// Whether to prompt for confirmation before executing destructive queries
+    /// (DROP, TRUNCATE, DELETE without WHERE). Default: true.
+    #[serde(default = "default_confirm_destructive")]
+    pub confirm_destructive: bool,
 }
 
 /// Keybinding overrides organized by panel context
@@ -81,6 +85,10 @@ fn default_statement_timeout_ms() -> u64 {
     60000 // 60 seconds server-side timeout, 0 = disabled
 }
 
+fn default_confirm_destructive() -> bool {
+    true
+}
+
 impl Default for SettingsInner {
     fn default() -> Self {
         Self {
@@ -91,6 +99,7 @@ impl Default for SettingsInner {
             max_result_rows: default_max_result_rows(),
             tree_category_limit: default_tree_category_limit(),
             statement_timeout_ms: default_statement_timeout_ms(),
+            confirm_destructive: default_confirm_destructive(),
         }
     }
 }
@@ -166,6 +175,7 @@ const DEFAULT_CONFIG_TEMPLATE: &str = r#"# vizgres configuration
 # max_result_rows = 1000    # row limit for query results, 0 = unlimited
 # tree_category_limit = 500 # items per category before pagination, 0 = unlimited
 # statement_timeout_ms = 60000  # 60 seconds server-side timeout, 0 = disabled
+# confirm_destructive = true    # prompt before DROP, TRUNCATE, DELETE without WHERE
 
 [keybindings.global]
 # "ctrl+q" = "quit"
@@ -218,6 +228,7 @@ mod tests {
         assert_eq!(settings.settings.max_result_rows, 1000);
         assert_eq!(settings.settings.tree_category_limit, 500);
         assert_eq!(settings.settings.statement_timeout_ms, 60000);
+        assert!(settings.settings.confirm_destructive);
         assert!(settings.keybindings.global.is_empty());
         assert!(settings.keybindings.editor.is_empty());
         assert!(settings.keybindings.results.is_empty());
@@ -370,5 +381,21 @@ statement_timeout_ms = 0
 "#;
         let settings: Settings = toml::from_str(toml_str).unwrap();
         assert_eq!(settings.settings.statement_timeout_ms, 0);
+    }
+
+    #[test]
+    fn test_confirm_destructive_default_true() {
+        let settings: Settings = toml::from_str("").unwrap();
+        assert!(settings.settings.confirm_destructive);
+    }
+
+    #[test]
+    fn test_confirm_destructive_can_disable() {
+        let toml_str = r#"
+[settings]
+confirm_destructive = false
+"#;
+        let settings: Settings = toml::from_str(toml_str).unwrap();
+        assert!(!settings.settings.confirm_destructive);
     }
 }

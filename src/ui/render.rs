@@ -2,7 +2,7 @@
 //!
 //! Orchestrates rendering of all panels using the layout module.
 
-use crate::app::{App, PanelFocus, StatusLevel};
+use crate::app::{App, PanelFocus, StatusLevel, TransactionState};
 use crate::keymap::KeyAction;
 use crate::ui::Component;
 use crate::ui::layout::calculate_layout;
@@ -309,22 +309,46 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         return;
     }
 
-    // Right side: connection info (always visible)
+    // Right side: TXN indicator + connection info (always visible)
+    let txn_badge = match app.transaction_state {
+        TransactionState::Idle => None,
+        TransactionState::InTransaction => Some((" TXN ", theme.status_txn_active)),
+        TransactionState::Failed => Some((" TXN FAILED ", theme.status_txn_failed)),
+    };
+
     let conn_info = if let Some(ref name) = app.connection_name {
         format!("[{}]", name)
     } else {
         "[disconnected]".to_string()
     };
-    let right_len = conn_info.len() as u16;
-    let right_x = area.x + area.width.saturating_sub(right_len);
 
+    // Calculate total right-side width
+    let badge_len = txn_badge.as_ref().map_or(0, |(s, _)| s.len() as u16);
+    let spacer = if badge_len > 0 { 1u16 } else { 0 };
+    let right_total = conn_info.len() as u16 + badge_len + spacer;
+    let right_x = area.x + area.width.saturating_sub(right_total);
+
+    // Render TXN badge (if any), then connection info
+    let mut cursor_x = right_x;
+    if let Some((badge_text, badge_style)) = txn_badge {
+        frame.render_widget(
+            Paragraph::new(badge_text).style(badge_style),
+            Rect::new(cursor_x, area.y, badge_len.min(area.width), 1),
+        );
+        cursor_x += badge_len + spacer;
+    }
     frame.render_widget(
         Paragraph::new(conn_info).style(theme.status_conn_info),
-        Rect::new(right_x, area.y, right_len.min(area.width), 1),
+        Rect::new(
+            cursor_x,
+            area.y,
+            (area.width.saturating_sub(cursor_x - area.x)).min(area.width),
+            1,
+        ),
     );
 
     // Left side: toast message or default help hint
-    let max_left_width = area.width.saturating_sub(right_len + 2);
+    let max_left_width = area.width.saturating_sub(right_total + 2);
     if max_left_width < 4 {
         return;
     }
