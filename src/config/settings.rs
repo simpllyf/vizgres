@@ -206,6 +206,8 @@ const DEFAULT_CONFIG_TEMPLATE: &str = r#"# vizgres configuration
 # "shift+y" = "copy_row"
 # "ctrl+s" = "export_csv"
 # "ctrl+j" = "export_json"
+# "n" = "next_page"
+# "p" = "prev_page"
 # "esc" = "cancel_query"
 
 [keybindings.tree]

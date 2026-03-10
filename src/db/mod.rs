@@ -4,6 +4,7 @@
 
 pub mod postgres;
 pub mod schema;
+pub mod sql_limit;
 pub mod types;
 
 pub use postgres::PostgresProvider;
