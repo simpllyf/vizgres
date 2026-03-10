@@ -845,6 +845,10 @@ impl App {
                 }
                 Action::None
             }
+            KeyAction::ToggleViewMode => {
+                self.tab_mut().results_viewer.toggle_view_mode();
+                Action::None
+            }
             KeyAction::CopyCell => {
                 if let Some(text) = self.tab().results_viewer.selected_cell_text() {
                     self.copy_to_clipboard(&text);

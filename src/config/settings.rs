@@ -201,6 +201,7 @@ const DEFAULT_CONFIG_TEMPLATE: &str = r#"# vizgres configuration
 
 [keybindings.results]
 # "enter" = "open_inspector"
+# "v" = "toggle_view_mode"
 # "y" = "copy_cell"
 # "shift+y" = "copy_row"
 # "ctrl+s" = "export_csv"
