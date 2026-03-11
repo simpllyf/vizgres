@@ -236,7 +236,7 @@ pub fn parse_keybind(s: &str) -> Result<KeyBind, String> {
     }
 
     let mut modifiers = KeyModifiers::NONE;
-    let key_part = parts.last().unwrap();
+    let key_part = parts.last().expect("non-empty after split");
 
     // All parts except the last are modifiers
     for &part in &parts[..parts.len() - 1] {
@@ -291,7 +291,7 @@ fn parse_key_code(s: &str) -> Result<KeyCode, String> {
                 Err(format!("function key out of range: {}", s))
             }
         }
-        _ if s.chars().count() == 1 => Ok(KeyCode::Char(s.chars().next().unwrap())),
+        _ if s.chars().count() == 1 => Ok(KeyCode::Char(s.chars().next().expect("single char"))),
         _ => Err(format!("unknown key: {}", s)),
     }
 }
