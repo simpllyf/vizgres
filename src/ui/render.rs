@@ -311,13 +311,15 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         return;
     }
 
-    // Right side: TXN indicator + connection info (always visible)
+    // Right side: RO badge + TXN indicator + connection info (always visible)
     // Shows the active tab's transaction state
     let txn_badge = match app.tab().transaction_state {
         TransactionState::Idle => None,
         TransactionState::InTransaction => Some((" TXN ", theme.status_txn_active)),
         TransactionState::Failed => Some((" TXN FAILED ", theme.status_txn_failed)),
     };
+
+    let ro_badge: Option<&str> = if app.read_only { Some(" RO ") } else { None };
 
     let (conn_dot, conn_dot_style) = if app.connection_name.is_some() {
         ("\u{25cf} ", Style::default().fg(Color::Green))
@@ -330,21 +332,34 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         "[disconnected]".to_string()
     };
 
-    // Calculate total right-side width (dot + label + txn badge)
+    // Calculate total right-side width (badges + dot + label)
     let dot_len = 2u16; // "● " = 2 chars
-    let badge_len = txn_badge.as_ref().map_or(0, |(s, _)| s.len() as u16);
-    let spacer = if badge_len > 0 { 1u16 } else { 0 };
-    let right_total = dot_len + conn_label.len() as u16 + badge_len + spacer;
+    let txn_len = txn_badge.as_ref().map_or(0, |(s, _)| s.len() as u16);
+    let ro_len = ro_badge.map_or(0, |s| s.len() as u16);
+    let badge_spacer = |len: u16| if len > 0 { 1u16 } else { 0 };
+    let right_total = ro_len
+        + badge_spacer(ro_len)
+        + txn_len
+        + badge_spacer(txn_len)
+        + dot_len
+        + conn_label.len() as u16;
     let right_x = area.x + area.width.saturating_sub(right_total);
 
-    // Render TXN badge (if any), then dot + connection info
+    // Render RO badge, TXN badge, then dot + connection info
     let mut cursor_x = right_x;
+    if let Some(ro_text) = ro_badge {
+        frame.render_widget(
+            Paragraph::new(ro_text).style(theme.status_read_only),
+            Rect::new(cursor_x, area.y, ro_len.min(area.width), 1),
+        );
+        cursor_x += ro_len + badge_spacer(ro_len);
+    }
     if let Some((badge_text, badge_style)) = txn_badge {
         frame.render_widget(
             Paragraph::new(badge_text).style(badge_style),
-            Rect::new(cursor_x, area.y, badge_len.min(area.width), 1),
+            Rect::new(cursor_x, area.y, txn_len.min(area.width), 1),
         );
-        cursor_x += badge_len + spacer;
+        cursor_x += txn_len + badge_spacer(txn_len);
     }
     frame.render_widget(
         Paragraph::new(conn_dot).style(conn_dot_style),

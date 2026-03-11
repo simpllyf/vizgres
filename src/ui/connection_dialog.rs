@@ -414,14 +414,15 @@ impl ConnectionDialog {
                     "    "
                 };
                 let url_preview = conn.to_url();
+                let ro_tag = if conn.read_only { " [RO]" } else { "" };
                 let name_width = 16.min(inner_width as usize / 3);
                 let name_display = if conn.name.len() > name_width {
-                    format!("{:.width$}", conn.name, width = name_width)
+                    format!("{:.width$}{}", conn.name, ro_tag, width = name_width)
                 } else {
-                    format!("{:<width$}", conn.name, width = name_width)
+                    format!("{:<width$}{}", conn.name, ro_tag, width = name_width)
                 };
-                let remaining =
-                    (inner_width as usize).saturating_sub(prefix.len() + name_width + 2);
+                let remaining = (inner_width as usize)
+                    .saturating_sub(prefix.len() + name_width + ro_tag.len() + 2);
                 let url_display = if url_preview.len() > remaining {
                     format!(
                         "{:.width$}...",
@@ -596,6 +597,7 @@ mod tests {
             username: "user".to_string(),
             password: None,
             ssl_mode: crate::config::connections::SslMode::Prefer,
+            read_only: false,
             is_saved: false,
         }];
 
@@ -693,6 +695,7 @@ mod tests {
             username: "user".to_string(),
             password: Some("pass".to_string()),
             ssl_mode: crate::config::connections::SslMode::Prefer,
+            read_only: false,
             is_saved: false,
         }];
 
@@ -766,6 +769,7 @@ mod tests {
                 username: "u1".to_string(),
                 password: None,
                 ssl_mode: crate::config::connections::SslMode::Prefer,
+                read_only: false,
                 is_saved: false,
             },
             ConnectionConfig {
@@ -776,6 +780,7 @@ mod tests {
                 username: "u2".to_string(),
                 password: None,
                 ssl_mode: crate::config::connections::SslMode::Prefer,
+                read_only: false,
                 is_saved: false,
             },
         ];
