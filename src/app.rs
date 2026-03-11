@@ -1120,6 +1120,18 @@ impl App {
                 }
                 Action::None
             }
+            KeyAction::WidenColumn => {
+                self.tab_mut().results_viewer.widen_column();
+                Action::None
+            }
+            KeyAction::NarrowColumn => {
+                self.tab_mut().results_viewer.narrow_column();
+                Action::None
+            }
+            KeyAction::ResetColumnWidths => {
+                self.tab_mut().results_viewer.reset_column_widths();
+                Action::None
+            }
             KeyAction::CopyCell => {
                 if let Some(text) = self.tab().results_viewer.selected_cell_text() {
                     self.copy_to_clipboard(&text);

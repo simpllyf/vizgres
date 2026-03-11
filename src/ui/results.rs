@@ -213,6 +213,29 @@ impl ResultsViewer {
         self.selected_col = count.saturating_sub(1);
     }
 
+    /// Widen the currently selected column by a fixed step
+    pub fn widen_column(&mut self) {
+        if self.selected_col < self.col_widths.len() {
+            let w = &mut self.col_widths[self.selected_col];
+            *w = (*w + 4).min(200);
+        }
+    }
+
+    /// Narrow the currently selected column by a fixed step
+    pub fn narrow_column(&mut self) {
+        if self.selected_col < self.col_widths.len() {
+            let w = &mut self.col_widths[self.selected_col];
+            *w = (*w).saturating_sub(4).max(4);
+        }
+    }
+
+    /// Reset all column widths to auto-computed values
+    pub fn reset_column_widths(&mut self) {
+        if let Some(ref results) = self.results {
+            self.col_widths = compute_column_widths(results);
+        }
+    }
+
     fn row_count(&self) -> usize {
         self.results.as_ref().map_or(0, |r| r.rows.len())
     }
@@ -960,5 +983,89 @@ mod tests {
         assert_eq!(viewer.selected_col, 1);
         viewer.move_left();
         assert_eq!(viewer.selected_col, 0);
+    }
+
+    #[test]
+    fn test_widen_column_increases_by_step() {
+        let mut viewer = ResultsViewer::new();
+        viewer.set_results(sample_results());
+        let original = viewer.col_widths[0];
+        viewer.widen_column();
+        assert_eq!(viewer.col_widths[0], original + 4);
+    }
+
+    #[test]
+    fn test_widen_column_caps_at_max() {
+        let mut viewer = ResultsViewer::new();
+        viewer.set_results(sample_results());
+        viewer.col_widths[0] = 198;
+        viewer.widen_column();
+        assert_eq!(viewer.col_widths[0], 200);
+        // Already at max — stays at 200
+        viewer.widen_column();
+        assert_eq!(viewer.col_widths[0], 200);
+    }
+
+    #[test]
+    fn test_narrow_column_decreases_by_step() {
+        let mut viewer = ResultsViewer::new();
+        viewer.set_results(sample_results());
+        let original = viewer.col_widths[0];
+        viewer.narrow_column();
+        assert_eq!(viewer.col_widths[0], original.saturating_sub(4).max(4));
+    }
+
+    #[test]
+    fn test_narrow_column_floors_at_min() {
+        let mut viewer = ResultsViewer::new();
+        viewer.set_results(sample_results());
+        viewer.col_widths[0] = 6;
+        viewer.narrow_column();
+        assert_eq!(viewer.col_widths[0], 4);
+        // Already at min — stays at 4
+        viewer.narrow_column();
+        assert_eq!(viewer.col_widths[0], 4);
+    }
+
+    #[test]
+    fn test_resize_targets_selected_column() {
+        let mut viewer = ResultsViewer::new();
+        viewer.set_results(sample_results());
+        let col0_before = viewer.col_widths[0];
+        let col1_before = viewer.col_widths[1];
+        // Widen col 0 — col 1 unchanged
+        viewer.widen_column();
+        assert_eq!(viewer.col_widths[0], col0_before + 4);
+        assert_eq!(viewer.col_widths[1], col1_before);
+        // Move to col 1 and narrow — col 0 unchanged
+        viewer.move_right();
+        viewer.narrow_column();
+        assert_eq!(viewer.col_widths[0], col0_before + 4);
+        assert_eq!(viewer.col_widths[1], col1_before.saturating_sub(4).max(4));
+    }
+
+    #[test]
+    fn test_reset_column_widths_restores_auto() {
+        let mut viewer = ResultsViewer::new();
+        viewer.set_results(sample_results());
+        let auto_widths = viewer.col_widths.clone();
+        // Mutate widths
+        viewer.widen_column();
+        viewer.move_right();
+        viewer.narrow_column();
+        assert_ne!(viewer.col_widths, auto_widths);
+        // Reset restores original auto-computed widths
+        viewer.reset_column_widths();
+        assert_eq!(viewer.col_widths, auto_widths);
+    }
+
+    #[test]
+    fn test_resize_noop_without_results() {
+        let mut viewer = ResultsViewer::new();
+        // No results — col_widths is empty, should not panic
+        viewer.widen_column();
+        viewer.narrow_column();
+        viewer.reset_column_widths();
+        assert!(viewer.col_widths.is_empty());
     }
 }

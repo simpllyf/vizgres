@@ -83,6 +83,11 @@ pub enum KeyAction {
     ShowDefinition,
     DeleteSavedQuery,
 
+    // Column resize
+    WidenColumn,
+    NarrowColumn,
+    ResetColumnWidths,
+
     // Pagination
     NextPage,
     PrevPage,
@@ -323,6 +328,9 @@ pub fn parse_key_action(s: &str) -> Result<KeyAction, String> {
         "copy_row" => Ok(KeyAction::CopyRow),
         "export_csv" => Ok(KeyAction::ExportCsv),
         "export_json" => Ok(KeyAction::ExportJson),
+        "widen_column" => Ok(KeyAction::WidenColumn),
+        "narrow_column" => Ok(KeyAction::NarrowColumn),
+        "reset_column_widths" => Ok(KeyAction::ResetColumnWidths),
         "copy_content" => Ok(KeyAction::CopyContent),
         "toggle_expand" => Ok(KeyAction::ToggleExpand),
         "expand" => Ok(KeyAction::Expand),
@@ -603,6 +611,27 @@ impl Default for KeyMap {
                 modifiers: KeyModifiers::NONE,
             },
             KeyAction::ShowHelp,
+        );
+        results.insert(
+            KeyBind {
+                code: KeyCode::Char('L'),
+                modifiers: KeyModifiers::SHIFT,
+            },
+            KeyAction::WidenColumn,
+        );
+        results.insert(
+            KeyBind {
+                code: KeyCode::Char('H'),
+                modifiers: KeyModifiers::SHIFT,
+            },
+            KeyAction::NarrowColumn,
+        );
+        results.insert(
+            KeyBind {
+                code: KeyCode::Char('R'),
+                modifiers: KeyModifiers::SHIFT,
+            },
+            KeyAction::ResetColumnWidths,
         );
         results.insert(
             KeyBind {
