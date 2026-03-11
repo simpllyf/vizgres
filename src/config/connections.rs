@@ -142,6 +142,54 @@ impl ConnectionConfig {
         })
     }
 
+    /// Build a ConnectionConfig from standard PG* environment variables.
+    ///
+    /// Reads `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, and `PGPASSWORD`.
+    /// Returns `None` if neither `PGDATABASE` nor `PGHOST` is set
+    /// (i.e. there is nothing useful to connect to).
+    pub fn from_env() -> Option<Self> {
+        Self::from_env_vars(
+            std::env::var("PGHOST").ok(),
+            std::env::var("PGPORT").ok(),
+            std::env::var("PGDATABASE").ok(),
+            std::env::var("PGUSER")
+                .or_else(|_| std::env::var("USER"))
+                .ok(),
+            std::env::var("PGPASSWORD").ok(),
+        )
+    }
+
+    /// Build a ConnectionConfig from individual PG variable values.
+    /// Returns `None` if neither `host` nor `database` is provided.
+    fn from_env_vars(
+        host: Option<String>,
+        port: Option<String>,
+        database: Option<String>,
+        username: Option<String>,
+        password: Option<String>,
+    ) -> Option<Self> {
+        if host.is_none() && database.is_none() {
+            return None;
+        }
+
+        let host = host.unwrap_or_else(|| "localhost".to_string());
+        let database = database.unwrap_or_else(|| "postgres".to_string());
+        let port = port.and_then(|p| p.parse().ok()).unwrap_or(5432);
+        let username = username.unwrap_or_else(|| "postgres".to_string());
+
+        Some(Self {
+            name: format!("{}@{}", database, host),
+            host,
+            port,
+            database,
+            username,
+            password,
+            ssl_mode: SslMode::Prefer,
+            read_only: false,
+            is_saved: false,
+        })
+    }
+
     /// Build a PostgreSQL connection string (without password)
     pub fn connection_string(&self) -> String {
         format!(
@@ -941,6 +989,62 @@ mod tests {
             toml_str.contains("read_only = true"),
             "read_only should serialize: {toml_str}"
         );
+    }
+
+    #[test]
+    fn test_from_env_vars_returns_none_without_host_or_database() {
+        assert!(ConnectionConfig::from_env_vars(None, None, None, None, None).is_none());
+    }
+
+    #[test]
+    fn test_from_env_vars_with_host_only() {
+        let config = ConnectionConfig::from_env_vars(Some("myhost".into()), None, None, None, None)
+            .expect("should resolve with host");
+        assert_eq!(config.host, "myhost");
+        assert_eq!(config.database, "postgres");
+        assert_eq!(config.port, 5432);
+        assert_eq!(config.username, "postgres");
+        assert!(config.password.is_none());
+    }
+
+    #[test]
+    fn test_from_env_vars_with_database_only() {
+        let config = ConnectionConfig::from_env_vars(None, None, Some("mydb".into()), None, None)
+            .expect("should resolve with database");
+        assert_eq!(config.host, "localhost");
+        assert_eq!(config.database, "mydb");
+        assert_eq!(config.name, "mydb@localhost");
+    }
+
+    #[test]
+    fn test_from_env_vars_with_all_values() {
+        let config = ConnectionConfig::from_env_vars(
+            Some("db.example.com".into()),
+            Some("5433".into()),
+            Some("myapp".into()),
+            Some("admin".into()),
+            Some("secret".into()),
+        )
+        .expect("should resolve");
+        assert_eq!(config.host, "db.example.com");
+        assert_eq!(config.port, 5433);
+        assert_eq!(config.database, "myapp");
+        assert_eq!(config.username, "admin");
+        assert_eq!(config.password, Some("secret".to_string()));
+        assert_eq!(config.name, "myapp@db.example.com");
+    }
+
+    #[test]
+    fn test_from_env_vars_invalid_port_falls_back() {
+        let config = ConnectionConfig::from_env_vars(
+            Some("host".into()),
+            Some("notaport".into()),
+            None,
+            None,
+            None,
+        )
+        .expect("should resolve");
+        assert_eq!(config.port, 5432);
     }
 
     #[test]

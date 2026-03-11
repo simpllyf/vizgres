@@ -6,6 +6,8 @@
 
 A fast, keyboard-driven PostgreSQL client for the terminal.
 
+![vizgres screenshot](site/assets/screenshot-hero.png)
+
 ## Features
 
 - **Schema Browser**: Navigate schemas, tables, views, functions, indexes with expand/collapse
@@ -34,7 +36,7 @@ cargo install vizgres
 cargo install --path .
 ```
 
-Requires Rust 1.93+ (2024 edition).
+Requires Rust 1.93+ (2024 edition). Tested against PostgreSQL 18; compatible with PostgreSQL 11+.
 
 ## Usage
 
@@ -42,11 +44,19 @@ Requires Rust 1.93+ (2024 edition).
 # Connect via URL
 vizgres postgres://user:pass@localhost:5432/mydb
 
-# Interactive connection dialog
-vizgres
-
 # Connect to saved profile
 vizgres myprofile
+
+# Connect via DATABASE_URL (common in containers/PaaS)
+export DATABASE_URL=postgres://user:pass@localhost:5432/mydb
+vizgres
+
+# Connect via PG* environment variables
+export PGDATABASE=mydb PGHOST=localhost PGUSER=me
+vizgres
+
+# Interactive connection dialog (when no target or env vars)
+vizgres
 ```
 
 ## Keybindings

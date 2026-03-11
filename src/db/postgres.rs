@@ -1375,14 +1375,13 @@ impl Database for PostgresProvider {
 
 /// Assemble Table structs from names, columns, constraints, and optional row counts.
 fn assemble_tables(
-    schema_name: &str,
+    _schema_name: &str,
     table_names: Vec<String>,
     mut columns: HashMap<String, Vec<(String, String)>>,
     pk_set: HashSet<(String, String)>,
     mut fk_map: HashMap<(String, String), ForeignKey>,
     row_counts: &HashMap<String, i64>,
 ) -> Vec<Table> {
-    let _ = schema_name; // May be used for FK formatting in future
     table_names
         .into_iter()
         .map(|name| {

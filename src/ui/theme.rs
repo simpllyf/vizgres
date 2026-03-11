@@ -74,7 +74,6 @@ pub struct Theme {
     pub editor_number: Style,
     pub editor_comment: Style,
     pub editor_ghost: Style,
-    #[allow(dead_code)] // reserved for cursor-shape rendering
     pub editor_cursor: Style,
     pub editor_line_number: Style,
     pub editor_tilde: Style,
@@ -101,12 +100,9 @@ pub struct Theme {
     pub help_desc: Style,
 
     // Command bar
-    #[allow(dead_code)] // reserved for styled prompt prefix
     pub command_prompt: Style,
-    #[allow(dead_code)] // reserved for input vs autocomplete split
     pub command_input: Style,
     pub command_text: Style,
-    #[allow(dead_code)] // reserved for autocomplete suggestions
     pub command_autocomplete: Style,
 
     // Tab bar

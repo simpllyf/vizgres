@@ -72,8 +72,7 @@ pub struct ColumnDef {
     pub name: String,
     /// Data type
     pub data_type: DataType,
-    /// Whether column can contain NULL (reserved for future use)
-    #[allow(dead_code)]
+    /// Whether column can contain NULL
     pub nullable: bool,
 }
 
