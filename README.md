@@ -22,7 +22,7 @@ A fast, keyboard-driven PostgreSQL client for the terminal.
 cargo install --path .
 ```
 
-Requires Rust 1.85+ (2024 edition).
+Requires Rust 1.93+ (2024 edition).
 
 ## Usage
 
