@@ -20,11 +20,6 @@ pub enum VizgresError {
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
 
-    /// Terminal/UI errors (reserved for future use)
-    #[allow(dead_code)]
-    #[error("Terminal error: {0}")]
-    Terminal(String),
-
     /// Command parsing errors
     #[error("Command error: {0}")]
     Command(#[from] CommandError),
@@ -48,19 +43,9 @@ pub enum DbError {
     #[error("Schema loading failed: {0}")]
     SchemaLoadFailed(String),
 
-    /// Not connected to a database (reserved for future use)
-    #[allow(dead_code)]
-    #[error("Not connected to database")]
-    NotConnected,
-
     /// Query timed out after configured duration (stores milliseconds)
     #[error("Query timed out after {0}ms")]
     Timeout(u64),
-
-    /// Type conversion error (reserved for future use)
-    #[allow(dead_code)]
-    #[error("Type conversion error: {0}")]
-    TypeConversion(String),
 }
 
 /// Configuration loading/parsing errors
@@ -101,21 +86,44 @@ pub enum CommandError {
     /// Unknown command
     #[error("Unknown command: {0}")]
     Unknown(String),
+}
 
-    /// Missing required argument
-    #[allow(dead_code)]
-    #[error("Missing required argument for command")]
-    MissingArgument,
-
-    /// Invalid argument (reserved for future use)
-    #[allow(dead_code)]
-    #[error("Invalid argument: {0}")]
-    InvalidArgument(String),
-
-    /// Command execution failed (reserved for future use)
-    #[allow(dead_code)]
-    #[error("Command execution failed: {0}")]
-    ExecutionFailed(String),
+/// Return a user-friendly hint for a connection error message.
+/// Matches common PostgreSQL/network error patterns and suggests actionable fixes.
+pub fn connection_hint(error: &str) -> Option<&'static str> {
+    let lower = error.to_lowercase();
+    if lower.contains("connection refused") {
+        return Some("Is PostgreSQL running? Check host/port or try: pg_isready");
+    }
+    if lower.contains("password authentication failed") {
+        return Some("Check your username and password");
+    }
+    if lower.contains("does not exist") && lower.contains("database") {
+        return Some("Database not found — verify the database name");
+    }
+    if lower.contains("role") && lower.contains("does not exist") {
+        return Some("User/role not found — verify the username");
+    }
+    if lower.contains("could not translate host name")
+        || lower.contains("name or service not known")
+    {
+        return Some("Hostname not found — check the host address");
+    }
+    if lower.contains("timeout") || lower.contains("timed out") {
+        return Some("Connection timed out — server may be unreachable or firewalled");
+    }
+    if lower.contains("ssl") || lower.contains("tls") {
+        return Some("SSL/TLS error — try ssl_mode = \"disable\" or check certificates");
+    }
+    if lower.contains("too many connections") || lower.contains("remaining connection slots") {
+        return Some(
+            "Server connection limit reached — try again later or increase max_connections",
+        );
+    }
+    if lower.contains("starting up") {
+        return Some("Server is starting up — wait a moment and retry");
+    }
+    None
 }
 
 /// Specialized Result type for vizgres operations

@@ -616,57 +616,29 @@ impl PostgresProvider {
         let map_err =
             |e: tokio_postgres::Error| crate::error::DbError::SchemaLoadFailed(e.to_string());
 
-        let (relkind_clause, query) = if relkind == "r" {
-            (
-                "c.relkind = 'r'",
-                if limit > 0 {
-                    "SELECT c.relname
-                     FROM pg_class c
-                     JOIN pg_namespace n ON n.oid = c.relnamespace
-                     WHERE c.relkind = 'r'
-                       AND n.nspname = $1
-                     ORDER BY c.relname
-                     OFFSET $2 LIMIT $3"
-                } else {
-                    "SELECT c.relname
-                     FROM pg_class c
-                     JOIN pg_namespace n ON n.oid = c.relnamespace
-                     WHERE c.relkind = 'r'
-                       AND n.nspname = $1
-                     ORDER BY c.relname"
-                },
-            )
+        let relkind_filter = if relkind == "r" {
+            "c.relkind = 'r'"
         } else {
-            (
-                "c.relkind IN ('v', 'm')",
-                if limit > 0 {
-                    "SELECT c.relname
-                     FROM pg_class c
-                     JOIN pg_namespace n ON n.oid = c.relnamespace
-                     WHERE c.relkind IN ('v', 'm')
-                       AND n.nspname = $1
-                     ORDER BY c.relname
-                     OFFSET $2 LIMIT $3"
-                } else {
-                    "SELECT c.relname
-                     FROM pg_class c
-                     JOIN pg_namespace n ON n.oid = c.relnamespace
-                     WHERE c.relkind IN ('v', 'm')
-                       AND n.nspname = $1
-                     ORDER BY c.relname"
-                },
-            )
+            "c.relkind IN ('v', 'm')"
         };
-        let _ = relkind_clause; // Suppress warning
+        let base = format!(
+            "SELECT c.relname \
+             FROM pg_class c \
+             JOIN pg_namespace n ON n.oid = c.relnamespace \
+             WHERE {} AND n.nspname = $1 \
+             ORDER BY c.relname",
+            relkind_filter
+        );
 
         let rows = if limit > 0 {
+            let query = format!("{} OFFSET $2 LIMIT $3", base);
             self.client
-                .query(query, &[&schema_name, &(offset as i64), &(limit as i64)])
+                .query(&query, &[&schema_name, &(offset as i64), &(limit as i64)])
                 .await
                 .map_err(&map_err)?
         } else {
             self.client
-                .query(query, &[&schema_name])
+                .query(&base, &[&schema_name])
                 .await
                 .map_err(&map_err)?
         };
@@ -1757,5 +1729,201 @@ fn try_as_string(row: &tokio_postgres::Row, idx: usize) -> CellValue {
                 .map_or("unknown", |c| c.type_().name());
             CellValue::Text(format!("<unable to display: {}>", type_name))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── datatype_from_format_type ─────────────────────────────────
+
+    #[test]
+    fn test_format_type_scalar_types() {
+        assert_eq!(datatype_from_format_type("integer"), DataType::Integer);
+        assert_eq!(datatype_from_format_type("bigint"), DataType::BigInt);
+        assert_eq!(datatype_from_format_type("smallint"), DataType::SmallInt);
+        assert_eq!(datatype_from_format_type("text"), DataType::Text);
+        assert_eq!(datatype_from_format_type("boolean"), DataType::Boolean);
+        assert_eq!(datatype_from_format_type("date"), DataType::Date);
+        assert_eq!(datatype_from_format_type("uuid"), DataType::Uuid);
+        assert_eq!(datatype_from_format_type("json"), DataType::Json);
+        assert_eq!(datatype_from_format_type("jsonb"), DataType::Jsonb);
+        assert_eq!(datatype_from_format_type("bytea"), DataType::Bytea);
+        assert_eq!(datatype_from_format_type("real"), DataType::Real);
+        assert_eq!(
+            datatype_from_format_type("double precision"),
+            DataType::Double
+        );
+        assert_eq!(datatype_from_format_type("numeric"), DataType::Numeric);
+        assert_eq!(datatype_from_format_type("interval"), DataType::Interval);
+    }
+
+    #[test]
+    fn test_format_type_parameterized() {
+        assert_eq!(
+            datatype_from_format_type("character varying(255)"),
+            DataType::Varchar(Some(255))
+        );
+        assert_eq!(
+            datatype_from_format_type("character varying"),
+            DataType::Varchar(None)
+        );
+        assert_eq!(
+            datatype_from_format_type("character(10)"),
+            DataType::Char(Some(10))
+        );
+    }
+
+    #[test]
+    fn test_format_type_timestamp_variants() {
+        assert_eq!(
+            datatype_from_format_type("timestamp without time zone"),
+            DataType::Timestamp
+        );
+        assert_eq!(
+            datatype_from_format_type("timestamp with time zone"),
+            DataType::TimestampTz
+        );
+        assert_eq!(
+            datatype_from_format_type("time without time zone"),
+            DataType::Time
+        );
+        assert_eq!(
+            datatype_from_format_type("time with time zone"),
+            DataType::Time
+        );
+    }
+
+    #[test]
+    fn test_format_type_arrays() {
+        assert_eq!(
+            datatype_from_format_type("text[]"),
+            DataType::Array(Box::new(DataType::Text))
+        );
+        assert_eq!(
+            datatype_from_format_type("integer[]"),
+            DataType::Array(Box::new(DataType::Integer))
+        );
+        assert_eq!(
+            datatype_from_format_type("boolean[]"),
+            DataType::Array(Box::new(DataType::Boolean))
+        );
+    }
+
+    #[test]
+    fn test_format_type_unknown() {
+        assert_eq!(
+            datatype_from_format_type("cidr"),
+            DataType::Unknown("cidr".to_string())
+        );
+    }
+
+    // ── pg_type_to_datatype ───────────────────────────────────────
+
+    #[test]
+    fn test_pg_type_scalars() {
+        assert_eq!(pg_type_to_datatype(&Type::INT4), DataType::Integer);
+        assert_eq!(pg_type_to_datatype(&Type::INT8), DataType::BigInt);
+        assert_eq!(pg_type_to_datatype(&Type::TEXT), DataType::Text);
+        assert_eq!(pg_type_to_datatype(&Type::BOOL), DataType::Boolean);
+        assert_eq!(pg_type_to_datatype(&Type::UUID), DataType::Uuid);
+        assert_eq!(pg_type_to_datatype(&Type::JSONB), DataType::Jsonb);
+        assert_eq!(
+            pg_type_to_datatype(&Type::TIMESTAMPTZ),
+            DataType::TimestampTz
+        );
+    }
+
+    #[test]
+    fn test_pg_type_arrays() {
+        assert_eq!(
+            pg_type_to_datatype(&Type::TEXT_ARRAY),
+            DataType::Array(Box::new(DataType::Text))
+        );
+        assert_eq!(
+            pg_type_to_datatype(&Type::INT4_ARRAY),
+            DataType::Array(Box::new(DataType::Integer))
+        );
+    }
+
+    // ── assemble_tables ──────────────────────────────────────────
+
+    #[test]
+    fn test_assemble_tables_merges_columns() {
+        let names = vec!["users".to_string(), "orders".to_string()];
+        let mut columns = HashMap::new();
+        columns.insert(
+            "users".to_string(),
+            vec![
+                ("id".to_string(), "integer".to_string()),
+                ("name".to_string(), "text".to_string()),
+            ],
+        );
+        columns.insert(
+            "orders".to_string(),
+            vec![("id".to_string(), "integer".to_string())],
+        );
+
+        let pks = HashSet::new();
+        let fks = HashMap::new();
+        let row_counts = HashMap::new();
+
+        let tables = assemble_tables("public", names, columns, pks, fks, &row_counts);
+        assert_eq!(tables.len(), 2);
+        assert_eq!(tables[0].name, "users");
+        assert_eq!(tables[0].columns.len(), 2);
+        assert_eq!(tables[1].name, "orders");
+        assert_eq!(tables[1].columns.len(), 1);
+    }
+
+    #[test]
+    fn test_assemble_tables_with_pk_and_fk() {
+        let names = vec!["orders".to_string()];
+        let mut columns = HashMap::new();
+        columns.insert(
+            "orders".to_string(),
+            vec![
+                ("id".to_string(), "integer".to_string()),
+                ("user_id".to_string(), "integer".to_string()),
+            ],
+        );
+
+        let mut pks = HashSet::new();
+        pks.insert(("orders".to_string(), "id".to_string()));
+
+        let mut fks: HashMap<(String, String), ForeignKey> = HashMap::new();
+        fks.insert(
+            ("orders".to_string(), "user_id".to_string()),
+            ForeignKey {
+                target_table: "users".to_string(),
+                target_column: "id".to_string(),
+            },
+        );
+
+        let row_counts = HashMap::new();
+
+        let tables = assemble_tables("public", names, columns, pks, fks, &row_counts);
+        assert_eq!(tables.len(), 1);
+
+        let order_table = &tables[0];
+        assert!(order_table.columns[0].is_primary_key);
+        assert!(order_table.columns[1].foreign_key.is_some());
+        let fk = order_table.columns[1].foreign_key.as_ref().unwrap();
+        assert_eq!(fk.target_table, "users");
+        assert_eq!(fk.target_column, "id");
+    }
+
+    #[test]
+    fn test_assemble_tables_missing_columns_creates_empty_table() {
+        let names = vec!["orphan".to_string()];
+        let columns = HashMap::new();
+        let pks = HashSet::new();
+        let fks = HashMap::new();
+        let row_counts = HashMap::new();
+
+        let tables = assemble_tables("public", names, columns, pks, fks, &row_counts);
+        assert_eq!(tables.len(), 1);
+        assert!(tables[0].columns.is_empty());
     }
 }

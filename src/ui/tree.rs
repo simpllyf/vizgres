@@ -118,15 +118,6 @@ impl TreeBrowser {
         self.rebuild_items();
     }
 
-    #[allow(dead_code)]
-    pub fn clear(&mut self) {
-        self.schema = None;
-        self.items.clear();
-        self.selected = 0;
-        self.scroll_offset = 0;
-        self.expanded.clear();
-    }
-
     fn rebuild_items(&mut self) {
         self.items.clear();
         let schema_tree = match &self.schema {

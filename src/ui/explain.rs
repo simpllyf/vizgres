@@ -57,6 +57,8 @@ pub struct ExplainViewer {
     view_mode: ViewMode,
     /// Maximum actual_time across all nodes, for color scaling
     max_time: f64,
+    /// Cached line count for raw text view (avoids O(n) recount on every keystroke)
+    raw_text_line_count: usize,
     page_height: Cell<usize>,
 }
 
@@ -80,6 +82,7 @@ impl ExplainViewer {
 
         // Build raw text representation
         let raw_text = Self::build_raw_text(&root_node, planning_time, execution_time_ms);
+        let raw_text_line_count = raw_text.lines().count();
 
         Some(Self {
             rows,
@@ -91,6 +94,7 @@ impl ExplainViewer {
             scroll_offset: 0,
             view_mode: ViewMode::Tree,
             max_time,
+            raw_text_line_count,
             page_height: Cell::new(20),
         })
     }
@@ -217,7 +221,7 @@ impl ExplainViewer {
     pub fn move_down(&mut self) {
         let max = match self.view_mode {
             ViewMode::Tree => self.rows.len().saturating_sub(1),
-            ViewMode::RawText => self.raw_text.lines().count().saturating_sub(1),
+            ViewMode::RawText => self.raw_text_line_count.saturating_sub(1),
         };
         if self.selected < max {
             self.selected += 1;
@@ -233,7 +237,7 @@ impl ExplainViewer {
         let page = self.page_height.get().max(1);
         let max = match self.view_mode {
             ViewMode::Tree => self.rows.len().saturating_sub(1),
-            ViewMode::RawText => self.raw_text.lines().count().saturating_sub(1),
+            ViewMode::RawText => self.raw_text_line_count.saturating_sub(1),
         };
         self.selected = (self.selected + page).min(max);
     }
@@ -245,7 +249,7 @@ impl ExplainViewer {
     pub fn go_to_bottom(&mut self) {
         let max = match self.view_mode {
             ViewMode::Tree => self.rows.len().saturating_sub(1),
-            ViewMode::RawText => self.raw_text.lines().count().saturating_sub(1),
+            ViewMode::RawText => self.raw_text_line_count.saturating_sub(1),
         };
         self.selected = max;
     }

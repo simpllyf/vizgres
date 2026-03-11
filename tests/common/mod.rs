@@ -10,11 +10,12 @@ use vizgres::db::types::DataType;
 /// Create a standard test schema for consistent testing
 pub fn test_schema() -> SchemaTree {
     SchemaTree {
-        schemas: vec![Schema {
+        schemas: PaginatedVec::from_vec(vec![Schema {
             name: "public".to_string(),
             tables: PaginatedVec::from_vec(vec![
                 Table {
                     name: "users".to_string(),
+                    row_count: Some(100),
                     columns: vec![
                         Column {
                             name: "id".to_string(),
@@ -44,6 +45,7 @@ pub fn test_schema() -> SchemaTree {
                 },
                 Table {
                     name: "orders".to_string(),
+                    row_count: Some(50),
                     columns: vec![
                         Column {
                             name: "id".to_string(),
@@ -63,7 +65,7 @@ pub fn test_schema() -> SchemaTree {
             views: PaginatedVec::default(),
             indexes: PaginatedVec::default(),
             functions: PaginatedVec::default(),
-        }],
+        }]),
     }
 }
 
@@ -77,6 +79,8 @@ pub fn test_connection_config() -> ConnectionConfig {
         username: "test_user".to_string(),
         password: Some("test_password".to_string()),
         ssl_mode: SslMode::Disable,
+        read_only: false,
+        is_saved: false,
     }
 }
 
@@ -88,8 +92,8 @@ mod tests {
     fn test_schema_has_tables() {
         let schema = test_schema();
         assert_eq!(schema.schemas.len(), 1);
-        assert_eq!(schema.schemas[0].tables.len(), 2);
-        assert!(!schema.schemas[0].tables.is_truncated());
+        assert_eq!(schema.schemas.items[0].tables.len(), 2);
+        assert!(!schema.schemas.items[0].tables.is_truncated());
     }
 
     #[test]

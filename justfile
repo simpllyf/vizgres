@@ -37,9 +37,9 @@ build:
 build-release:
     cargo build --release --all-features
 
-# Generate code coverage
+# Generate code coverage (lib tests only — integration tests run in their own CI job)
 coverage:
-    cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
+    cargo llvm-cov --all-features --workspace --lib --lcov --output-path lcov.info
 
 # Start test database
 db-up:

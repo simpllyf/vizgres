@@ -85,6 +85,9 @@ jobs:
           - target: aarch64-apple-darwin
             runner: macos-latest
             artifact: vizgres-macos-aarch64
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            artifact: vizgres-windows-x86_64
     steps:
       - uses: actions/checkout@v4
 
@@ -98,16 +101,32 @@ jobs:
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package artifact
+      - name: Package artifact (Unix)
+        if: runner.os != 'Windows'
         run: |
           mkdir staging
           cp target/${{ matrix.target }}/release/vizgres staging/
           tar -czf ${{ matrix.artifact }}.tar.gz -C staging vizgres
 
+      - name: Package artifact (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path staging
+          Copy-Item "target/${{ matrix.target }}/release/vizgres.exe" staging/
+          Compress-Archive -Path staging/vizgres.exe -DestinationPath "${{ matrix.artifact }}.zip"
+
       - uses: actions/upload-artifact@v4
+        if: runner.os != 'Windows'
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}.tar.gz
+
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}.zip
 
   upload-assets:
     name: Upload Release Assets
@@ -129,6 +148,7 @@ jobs:
             dist/vizgres-linux-x86_64/vizgres-linux-x86_64.tar.gz \
             dist/vizgres-macos-x86_64/vizgres-macos-x86_64.tar.gz \
             dist/vizgres-macos-aarch64/vizgres-macos-aarch64.tar.gz \
+            dist/vizgres-windows-x86_64/vizgres-windows-x86_64.zip \
             --clobber
 
   publish-crate:

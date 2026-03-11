@@ -80,15 +80,6 @@ impl ResultsViewer {
         self.results = None;
     }
 
-    /// Clear results (reserved for future use)
-    #[allow(dead_code)]
-    pub fn clear(&mut self) {
-        self.results = None;
-        self.selected_row = 0;
-        self.selected_col = 0;
-        self.col_widths.clear();
-    }
-
     /// Access the underlying query results (for export)
     pub fn results(&self) -> Option<&QueryResults> {
         self.results.as_ref()
@@ -242,18 +233,6 @@ impl ResultsViewer {
 
     fn col_count(&self) -> usize {
         self.results.as_ref().map_or(0, |r| r.columns.len())
-    }
-
-    #[allow(dead_code)]
-    fn ensure_visible(&mut self, visible_height: usize) {
-        if visible_height == 0 {
-            return;
-        }
-        if self.selected_row < self.scroll_offset {
-            self.scroll_offset = self.selected_row;
-        } else if self.selected_row >= self.scroll_offset + visible_height {
-            self.scroll_offset = self.selected_row - visible_height + 1;
-        }
     }
 }
 

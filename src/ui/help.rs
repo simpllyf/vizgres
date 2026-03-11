@@ -4,7 +4,7 @@
 //! Follows the same overlay pattern as Inspector.
 //! Reads actual bindings from KeyMap for dynamic display.
 
-use std::cell::Cell;
+use std::cell::RefCell;
 
 use crate::app::PanelFocus;
 use crate::keymap::{KeyAction, KeyMap};
@@ -16,8 +16,8 @@ use ratatui::widgets::Paragraph;
 pub struct HelpOverlay {
     visible: bool,
     scroll_offset: usize,
-    /// Cached line count from last build_lines call (Cell for interior mutability in render)
-    line_count: Cell<usize>,
+    /// Cached styled lines — built once on first render, cleared on hide
+    cached_lines: RefCell<Option<Vec<Line<'static>>>>,
 }
 
 impl HelpOverlay {
@@ -25,22 +25,29 @@ impl HelpOverlay {
         Self {
             visible: false,
             scroll_offset: 0,
-            line_count: Cell::new(52), // reasonable default, updated on render
+            cached_lines: RefCell::new(None),
         }
     }
 
     pub fn show(&mut self) {
         self.visible = true;
         self.scroll_offset = 0;
+        // Invalidate cache so lines are rebuilt with current theme/keymap
+        *self.cached_lines.get_mut() = None;
     }
 
     pub fn hide(&mut self) {
         self.visible = false;
         self.scroll_offset = 0;
+        *self.cached_lines.get_mut() = None;
     }
 
     pub fn is_visible(&self) -> bool {
         self.visible
+    }
+
+    fn line_count(&self) -> usize {
+        self.cached_lines.borrow().as_ref().map_or(0, |l| l.len())
     }
 
     pub fn scroll_up(&mut self) {
@@ -50,7 +57,7 @@ impl HelpOverlay {
     }
 
     pub fn scroll_down(&mut self) {
-        if self.scroll_offset + 1 < self.line_count.get() {
+        if self.scroll_offset + 1 < self.line_count() {
             self.scroll_offset += 1;
         }
     }
@@ -60,7 +67,7 @@ impl HelpOverlay {
     }
 
     pub fn page_down(&mut self) {
-        self.scroll_offset = (self.scroll_offset + 20).min(self.line_count.get().saturating_sub(1));
+        self.scroll_offset = (self.scroll_offset + 20).min(self.line_count().saturating_sub(1));
     }
 
     pub fn scroll_to_top(&mut self) {
@@ -68,7 +75,7 @@ impl HelpOverlay {
     }
 
     pub fn scroll_to_bottom(&mut self) {
-        self.scroll_offset = self.line_count.get().saturating_sub(1);
+        self.scroll_offset = self.line_count().saturating_sub(1);
     }
 
     /// Build styled help content lines using actual keybindings from the keymap
@@ -438,8 +445,16 @@ impl HelpOverlay {
             return;
         }
 
-        let lines = self.build_lines(theme, km);
-        self.line_count.set(lines.len());
+        // Build and cache lines on first render after show()
+        {
+            let mut cache = self.cached_lines.borrow_mut();
+            if cache.is_none() {
+                *cache = Some(self.build_lines(theme, km));
+            }
+        }
+
+        let cache = self.cached_lines.borrow();
+        let lines = cache.as_ref().expect("just populated");
         let visible_height = area.height as usize;
 
         for i in 0..visible_height {
@@ -496,6 +511,11 @@ mod tests {
         assert!(help.is_visible());
         assert_eq!(help.scroll_offset, 0);
 
+        // Populate cache so scroll works
+        let theme = Theme::default();
+        let km = KeyMap::default();
+        *help.cached_lines.get_mut() = Some(help.build_lines(&theme, &km));
+
         // Scroll down then hide — should reset
         help.scroll_down();
         assert_eq!(help.scroll_offset, 1);
@@ -510,6 +530,12 @@ mod tests {
         let mut help = HelpOverlay::new();
         help.show();
 
+        // Populate cache so line_count() works
+        let theme = Theme::default();
+        let km = KeyMap::default();
+        *help.cached_lines.get_mut() = Some(help.build_lines(&theme, &km));
+        let total = help.line_count();
+
         // scroll_up at top stays at 0
         help.scroll_up();
         assert_eq!(help.scroll_offset, 0);
@@ -520,11 +546,11 @@ mod tests {
 
         // scroll_to_bottom goes to last line
         help.scroll_to_bottom();
-        assert_eq!(help.scroll_offset, help.line_count.get() - 1);
+        assert_eq!(help.scroll_offset, total - 1);
 
         // scroll_down at bottom stays at bottom
         help.scroll_down();
-        assert_eq!(help.scroll_offset, help.line_count.get() - 1);
+        assert_eq!(help.scroll_offset, total - 1);
 
         // scroll_to_top resets
         help.scroll_to_top();
