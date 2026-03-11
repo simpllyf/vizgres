@@ -880,7 +880,9 @@ impl App {
 
             // ── Editor ───────────────────────────────────────
             KeyAction::ExecuteQuery => {
-                let sql = self.tab().editor.get_content();
+                let raw_sql = self.tab().editor.get_content();
+                // Translate psql meta-commands (e.g. \dt) to SQL
+                let sql = translate_meta_command(&raw_sql).unwrap_or(raw_sql);
                 if !sql.trim().is_empty() {
                     // Block writes in read-only mode
                     if self.read_only
@@ -1912,6 +1914,106 @@ fn is_write_query(sql: &str) -> Option<&'static str> {
         return Some("COMMENT");
     }
     None
+}
+
+/// Translate psql-style meta-commands to equivalent SQL queries.
+/// Returns Some(sql) if the input is a recognized meta-command, None otherwise.
+fn translate_meta_command(input: &str) -> Option<String> {
+    let trimmed = input.trim();
+    if !trimmed.starts_with('\\') {
+        return None;
+    }
+
+    // Split into command and optional argument
+    let (cmd, arg) = match trimmed.find(char::is_whitespace) {
+        Some(pos) => (&trimmed[..pos], Some(trimmed[pos..].trim())),
+        None => (trimmed, None),
+    };
+
+    match cmd {
+        "\\dt" => Some(
+            "SELECT n.nspname AS schema, c.relname AS name, \
+             pg_catalog.pg_get_userbyid(c.relowner) AS owner \
+             FROM pg_catalog.pg_class c \
+             JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+             WHERE c.relkind = 'r' \
+             AND n.nspname NOT IN ('pg_catalog', 'information_schema') \
+             ORDER BY schema, name"
+                .to_string(),
+        ),
+        "\\dv" => Some(
+            "SELECT n.nspname AS schema, c.relname AS name, \
+             CASE c.relkind WHEN 'v' THEN 'view' WHEN 'm' THEN 'materialized view' END AS type \
+             FROM pg_catalog.pg_class c \
+             JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+             WHERE c.relkind IN ('v', 'm') \
+             AND n.nspname NOT IN ('pg_catalog', 'information_schema') \
+             ORDER BY schema, name"
+                .to_string(),
+        ),
+        "\\di" => Some(
+            "SELECT n.nspname AS schema, ci.relname AS name, \
+             ct.relname AS table, \
+             am.amname AS method \
+             FROM pg_catalog.pg_index ix \
+             JOIN pg_catalog.pg_class ci ON ci.oid = ix.indexrelid \
+             JOIN pg_catalog.pg_class ct ON ct.oid = ix.indrelid \
+             JOIN pg_catalog.pg_namespace n ON n.oid = ci.relnamespace \
+             JOIN pg_catalog.pg_am am ON am.oid = ci.relam \
+             WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') \
+             ORDER BY schema, table, name"
+                .to_string(),
+        ),
+        "\\dn" => Some(
+            "SELECT n.nspname AS name, \
+             pg_catalog.pg_get_userbyid(n.nspowner) AS owner \
+             FROM pg_catalog.pg_namespace n \
+             WHERE n.nspname NOT LIKE 'pg_%' \
+             AND n.nspname <> 'information_schema' \
+             ORDER BY name"
+                .to_string(),
+        ),
+        "\\d" => {
+            let table = arg.filter(|a| !a.is_empty())?;
+            // Sanitize: allow only alphanumeric, underscore, dot (for schema.table)
+            if !table
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '.')
+            {
+                return None;
+            }
+            // Handle schema.table or just table
+            let (schema_filter, table_name) = if let Some(dot) = table.find('.') {
+                let s = &table[..dot];
+                let t = &table[dot + 1..];
+                if s.is_empty() || t.is_empty() || t.contains('.') {
+                    return None;
+                }
+                (format!("AND n.nspname = '{}'", s), t.to_string())
+            } else {
+                (
+                    "AND n.nspname NOT IN ('pg_catalog', 'information_schema')".to_string(),
+                    table.to_string(),
+                )
+            };
+            Some(format!(
+                "SELECT a.attname AS column, \
+                 pg_catalog.format_type(a.atttypid, a.atttypmod) AS type, \
+                 CASE WHEN a.attnotnull THEN 'not null' ELSE '' END AS nullable, \
+                 COALESCE(pg_catalog.pg_get_expr(d.adbin, d.adrelid), '') AS default \
+                 FROM pg_catalog.pg_attribute a \
+                 JOIN pg_catalog.pg_class c ON c.oid = a.attrelid \
+                 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+                 LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum \
+                 WHERE c.relname = '{}' \
+                 {} \
+                 AND a.attnum > 0 AND NOT a.attisdropped \
+                 ORDER BY a.attnum",
+                table_name, schema_filter
+            ))
+        }
+        _ => None,
+    }
 }
 
 /// Convert a 1-based byte offset (from PostgreSQL error) to (line, col) position.
@@ -4236,5 +4338,82 @@ mod tests {
             &settings,
         );
         assert!(app.read_only, "global read_only should override connection");
+    }
+
+    #[test]
+    fn test_translate_meta_command_dt() {
+        let sql = translate_meta_command("\\dt").unwrap();
+        assert!(sql.contains("relkind = 'r'"), "should query tables");
+        assert!(sql.contains("ORDER BY schema, name"));
+    }
+
+    #[test]
+    fn test_translate_meta_command_dv() {
+        let sql = translate_meta_command("\\dv").unwrap();
+        assert!(sql.contains("relkind IN ('v', 'm')"), "should query views");
+    }
+
+    #[test]
+    fn test_translate_meta_command_di() {
+        let sql = translate_meta_command("\\di").unwrap();
+        assert!(sql.contains("pg_index"), "should query indexes");
+        assert!(sql.contains("amname"));
+    }
+
+    #[test]
+    fn test_translate_meta_command_dn() {
+        let sql = translate_meta_command("\\dn").unwrap();
+        assert!(sql.contains("pg_namespace"), "should query schemas");
+    }
+
+    #[test]
+    fn test_translate_meta_command_d_table() {
+        let sql = translate_meta_command("\\d users").unwrap();
+        assert!(sql.contains("relname = 'users'"));
+        assert!(sql.contains("attnum > 0"));
+    }
+
+    #[test]
+    fn test_translate_meta_command_d_schema_table() {
+        let sql = translate_meta_command("\\d public.users").unwrap();
+        assert!(sql.contains("relname = 'users'"));
+        assert!(sql.contains("nspname = 'public'"));
+    }
+
+    #[test]
+    fn test_translate_meta_command_d_without_arg_returns_none() {
+        assert!(
+            translate_meta_command("\\d").is_none(),
+            "\\d alone needs a table name"
+        );
+    }
+
+    #[test]
+    fn test_translate_meta_command_rejects_invalid_table_name() {
+        assert!(translate_meta_command("\\d users; DROP TABLE--").is_none());
+        assert!(translate_meta_command("\\d 'injection'").is_none());
+        // Edge cases with dots
+        assert!(translate_meta_command("\\d .").is_none());
+        assert!(translate_meta_command("\\d schema.").is_none());
+        assert!(translate_meta_command("\\d .table").is_none());
+        assert!(translate_meta_command("\\d a.b.c").is_none());
+    }
+
+    #[test]
+    fn test_translate_meta_command_not_meta() {
+        assert!(translate_meta_command("SELECT 1").is_none());
+        assert!(translate_meta_command("").is_none());
+    }
+
+    #[test]
+    fn test_translate_meta_command_unknown() {
+        assert!(translate_meta_command("\\z").is_none());
+        assert!(translate_meta_command("\\c mydb").is_none());
+    }
+
+    #[test]
+    fn test_translate_meta_command_with_whitespace() {
+        assert!(translate_meta_command("  \\dt  ").is_some());
+        assert!(translate_meta_command("  \\d  users  ").is_some());
     }
 }
