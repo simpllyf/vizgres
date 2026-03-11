@@ -1986,6 +1986,9 @@ fn translate_meta_command(input: &str) -> Option<String> {
             let (schema_filter, table_name) = if let Some(dot) = table.find('.') {
                 let s = &table[..dot];
                 let t = &table[dot + 1..];
+                if s.is_empty() || t.is_empty() || t.contains('.') {
+                    return None;
+                }
                 (format!("AND n.nspname = '{}'", s), t.to_string())
             } else {
                 (
@@ -4389,6 +4392,11 @@ mod tests {
     fn test_translate_meta_command_rejects_invalid_table_name() {
         assert!(translate_meta_command("\\d users; DROP TABLE--").is_none());
         assert!(translate_meta_command("\\d 'injection'").is_none());
+        // Edge cases with dots
+        assert!(translate_meta_command("\\d .").is_none());
+        assert!(translate_meta_command("\\d schema.").is_none());
+        assert!(translate_meta_command("\\d .table").is_none());
+        assert!(translate_meta_command("\\d a.b.c").is_none());
     }
 
     #[test]
