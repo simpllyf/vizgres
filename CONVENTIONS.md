@@ -175,7 +175,7 @@ Before committing:
 - `Ctrl+E` — EXPLAIN ANALYZE
 - `Ctrl+L` — Clear editor
 - `Ctrl+Z` / `Ctrl+Shift+Z` — Undo / Redo
-- `Ctrl+Shift+F` — Format SQL
+- `Ctrl+Alt+F` — Format SQL
 - `Ctrl+Up/Down` — Query history
 - `Escape` — Cancel running query
 

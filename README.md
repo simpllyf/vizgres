@@ -74,7 +74,7 @@ Press `?` in-app for full keybinding help. All keybindings are configurable in `
 | Ctrl+L | Clear editor |
 | Ctrl+Z | Undo |
 | Ctrl+Shift+Z | Redo |
-| Ctrl+Shift+F | Format SQL |
+| Ctrl+Alt+F | Format SQL |
 | Ctrl+Up/Down | Query history |
 | Tab | Cycle autocomplete suggestions |
 | Right | Accept autocomplete |
@@ -102,8 +102,8 @@ Press `?` in-app for full keybinding help. All keybindings are configurable in `
 | v | Toggle view mode (vertical / explain tree↔text) |
 | Shift+H / Shift+L | Narrow / Widen column |
 | Shift+R | Reset column widths |
-| Ctrl+C | Copy cell |
-| Ctrl+Shift+C | Copy row |
+| y | Copy cell |
+| Y (Shift+y) | Copy row |
 | Ctrl+S | Export as CSV |
 | Ctrl+J | Export as JSON |
 | g/G | Jump to first/last row |

@@ -217,7 +217,7 @@ fn translate_describe_table(table_arg: &str) -> Option<String> {
          UNION ALL \
             SELECT 2, 'Index', ci.relname, \
                    pg_catalog.pg_get_indexdef(ix.indexrelid), \
-                   ci.relname::text::int4hash \
+                   0 \
             FROM tbl \
             JOIN pg_catalog.pg_index ix ON ix.indrelid = tbl.oid \
             JOIN pg_catalog.pg_class ci ON ci.oid = ix.indexrelid \
@@ -232,14 +232,14 @@ fn translate_describe_table(table_arg: &str) -> Option<String> {
                    END, \
                    con.conname, \
                    pg_catalog.pg_get_constraintdef(con.oid, true), \
-                   con.conname::text::int4hash \
+                   0 \
             FROM tbl \
             JOIN pg_catalog.pg_constraint con ON con.conrelid = tbl.oid \
          UNION ALL \
             SELECT 4, 'Referenced by', \
                    ref_n.nspname || '.' || ref_c.relname, \
                    pg_catalog.pg_get_constraintdef(con.oid, true), \
-                   con.conname::text::int4hash \
+                   0 \
             FROM tbl \
             JOIN pg_catalog.pg_constraint con ON con.confrelid = tbl.oid AND con.contype = 'f' \
             JOIN pg_catalog.pg_class ref_c ON ref_c.oid = con.conrelid \
@@ -247,7 +247,7 @@ fn translate_describe_table(table_arg: &str) -> Option<String> {
          UNION ALL \
             SELECT 5, 'Trigger', t.tgname, \
                    pg_catalog.pg_get_triggerdef(t.oid, true), \
-                   t.tgname::text::int4hash \
+                   0 \
             FROM tbl \
             JOIN pg_catalog.pg_trigger t ON t.tgrelid = tbl.oid \
             WHERE NOT t.tgisinternal \
