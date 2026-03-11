@@ -239,6 +239,36 @@ impl HelpOverlay {
             help_line(
                 &format!(
                     "  {}",
+                    fmt(Some(PanelFocus::ResultsViewer), KeyAction::WidenColumn)
+                ),
+                "Widen column",
+                key,
+                desc,
+            ),
+            help_line(
+                &format!(
+                    "  {}",
+                    fmt(Some(PanelFocus::ResultsViewer), KeyAction::NarrowColumn)
+                ),
+                "Narrow column",
+                key,
+                desc,
+            ),
+            help_line(
+                &format!(
+                    "  {}",
+                    fmt(
+                        Some(PanelFocus::ResultsViewer),
+                        KeyAction::ResetColumnWidths
+                    )
+                ),
+                "Reset column widths",
+                key,
+                desc,
+            ),
+            help_line(
+                &format!(
+                    "  {}",
                     fmt(Some(PanelFocus::ResultsViewer), KeyAction::CopyCell)
                 ),
                 "Copy cell",

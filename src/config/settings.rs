@@ -233,6 +233,9 @@ const DEFAULT_CONFIG_TEMPLATE: &str = r#"# vizgres configuration
 # "ctrl+j" = "export_json"
 # "n" = "next_page"
 # "p" = "prev_page"
+# "shift+l" = "widen_column"
+# "shift+h" = "narrow_column"
+# "shift+r" = "reset_column_widths"
 # "esc" = "cancel_query"
 
 [keybindings.tree]
