@@ -2050,11 +2050,11 @@ mod tests {
 
         // Navigate down to find Views category and expand it
         for _ in 0..20 {
-            if let Some(item) = tree.items.get(tree.selected) {
-                if item.label.starts_with("Views") {
-                    tree.expand_current();
-                    break;
-                }
+            if let Some(item) = tree.items.get(tree.selected)
+                && item.label.starts_with("Views")
+            {
+                tree.expand_current();
+                break;
             }
             tree.move_down();
         }
