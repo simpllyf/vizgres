@@ -46,6 +46,10 @@ pub struct SettingsInner {
     /// in connections.toml overrides this. Default: false.
     #[serde(default)]
     pub read_only: bool,
+    /// Show EXPLAIN output as a visual tree with color-coded timing.
+    /// When false, shows raw text output like psql. Default: true.
+    #[serde(default = "default_explain_visual")]
+    pub explain_visual: bool,
 }
 
 /// Keybinding overrides organized by panel context
@@ -93,6 +97,10 @@ fn default_confirm_destructive() -> bool {
     true
 }
 
+fn default_explain_visual() -> bool {
+    true
+}
+
 impl Default for SettingsInner {
     fn default() -> Self {
         Self {
@@ -105,6 +113,7 @@ impl Default for SettingsInner {
             statement_timeout_ms: default_statement_timeout_ms(),
             confirm_destructive: default_confirm_destructive(),
             read_only: false,
+            explain_visual: default_explain_visual(),
         }
     }
 }
@@ -182,6 +191,7 @@ const DEFAULT_CONFIG_TEMPLATE: &str = r#"# vizgres configuration
 # statement_timeout_ms = 60000  # 60 seconds server-side timeout, 0 = disabled
 # confirm_destructive = true    # prompt before DROP, TRUNCATE, DELETE without WHERE
 # read_only = false             # default read-only mode for all connections
+# explain_visual = true         # visual tree for EXPLAIN, false = raw text
 
 [keybindings.global]
 # "ctrl+q" = "quit"
@@ -239,6 +249,7 @@ mod tests {
         assert_eq!(settings.settings.tree_category_limit, 500);
         assert_eq!(settings.settings.statement_timeout_ms, 60000);
         assert!(settings.settings.confirm_destructive);
+        assert!(settings.settings.explain_visual);
         assert!(settings.keybindings.global.is_empty());
         assert!(settings.keybindings.editor.is_empty());
         assert!(settings.keybindings.results.is_empty());

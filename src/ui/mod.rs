@@ -5,6 +5,7 @@
 pub mod command_bar;
 pub mod connection_dialog;
 pub mod editor;
+pub mod explain;
 pub mod help;
 pub mod highlight;
 pub mod inspector;

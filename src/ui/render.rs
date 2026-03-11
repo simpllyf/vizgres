@@ -45,20 +45,29 @@ pub fn render(frame: &mut Frame, app: &App) {
         },
     );
 
-    // Results (active tab)
+    // Results or EXPLAIN viewer (active tab)
+    let results_title = if app.tab().explain_viewer.is_some() {
+        " Explain "
+    } else {
+        " Results "
+    };
     render_panel(
         frame,
         theme,
         layout.results,
-        " Results ",
+        results_title,
         app.focus == PanelFocus::ResultsViewer,
         |f, inner| {
-            app.tab().results_viewer.render(
-                f,
-                inner,
-                app.focus == PanelFocus::ResultsViewer,
-                theme,
-            );
+            if let Some(ref ev) = app.tab().explain_viewer {
+                ev.render(f, inner, app.focus == PanelFocus::ResultsViewer, theme);
+            } else {
+                app.tab().results_viewer.render(
+                    f,
+                    inner,
+                    app.focus == PanelFocus::ResultsViewer,
+                    theme,
+                );
+            }
         },
     );
 

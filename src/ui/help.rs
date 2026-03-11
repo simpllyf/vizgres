@@ -232,7 +232,7 @@ impl HelpOverlay {
                     "  {}",
                     fmt(Some(PanelFocus::ResultsViewer), KeyAction::ToggleViewMode)
                 ),
-                "Toggle vertical view",
+                "Toggle view mode (vertical / explain tree↔text)",
                 key,
                 desc,
             ),
