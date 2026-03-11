@@ -348,7 +348,7 @@ impl App {
             history: QueryHistory::load(settings.settings.history_size),
             max_tabs: settings.settings.max_tabs,
             keymap,
-            theme: Theme::default(),
+            theme: Theme::by_name(&settings.settings.theme).unwrap_or_default(),
             query_timeout_ms: settings.settings.query_timeout_ms,
             max_result_rows: settings.settings.max_result_rows,
             statement_timeout_ms: settings.settings.statement_timeout_ms,

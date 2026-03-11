@@ -50,6 +50,9 @@ pub struct SettingsInner {
     /// When false, shows raw text output like psql. Default: true.
     #[serde(default = "default_explain_visual")]
     pub explain_visual: bool,
+    /// Color theme. Options: dark, light, midnight, ember. Default: dark.
+    #[serde(default = "default_theme")]
+    pub theme: String,
 }
 
 /// Keybinding overrides organized by panel context
@@ -101,6 +104,10 @@ fn default_explain_visual() -> bool {
     true
 }
 
+fn default_theme() -> String {
+    "dark".to_string()
+}
+
 impl Default for SettingsInner {
     fn default() -> Self {
         Self {
@@ -114,6 +121,7 @@ impl Default for SettingsInner {
             confirm_destructive: default_confirm_destructive(),
             read_only: false,
             explain_visual: default_explain_visual(),
+            theme: default_theme(),
         }
     }
 }
@@ -192,6 +200,7 @@ const DEFAULT_CONFIG_TEMPLATE: &str = r#"# vizgres configuration
 # confirm_destructive = true    # prompt before DROP, TRUNCATE, DELETE without WHERE
 # read_only = false             # default read-only mode for all connections
 # explain_visual = true         # visual tree for EXPLAIN, false = raw text
+# theme = "dark"                # color theme: dark, light, midnight, ember
 
 [keybindings.global]
 # "ctrl+q" = "quit"
@@ -250,6 +259,7 @@ mod tests {
         assert_eq!(settings.settings.statement_timeout_ms, 60000);
         assert!(settings.settings.confirm_destructive);
         assert!(settings.settings.explain_visual);
+        assert_eq!(settings.settings.theme, "dark");
         assert!(settings.keybindings.global.is_empty());
         assert!(settings.keybindings.editor.is_empty());
         assert!(settings.keybindings.results.is_empty());
