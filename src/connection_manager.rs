@@ -109,4 +109,87 @@ impl ConnectionManager {
         }
         std::task::Poll::Pending
     }
+
+    /// Whether any tab has a connection.
+    pub fn has_connections(&self) -> bool {
+        !self.tabs.is_empty()
+    }
+
+    /// Whether a config is set.
+    pub fn has_config(&self) -> bool {
+        self.config.is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::connections::SslMode;
+
+    fn test_config() -> ConnectionConfig {
+        ConnectionConfig {
+            name: "test".to_string(),
+            host: "localhost".to_string(),
+            port: 5432,
+            database: "testdb".to_string(),
+            username: "user".to_string(),
+            password: None,
+            ssl_mode: SslMode::Disable,
+            read_only: false,
+            is_saved: false,
+        }
+    }
+
+    #[test]
+    fn test_new_without_config() {
+        let mgr = ConnectionManager::new(None, 30000);
+        assert!(!mgr.has_config());
+        assert!(!mgr.has_connections());
+        assert!(mgr.get(0).is_none());
+        assert!(mgr.any_provider().is_none());
+    }
+
+    #[test]
+    fn test_new_with_config() {
+        let mgr = ConnectionManager::new(Some(test_config()), 5000);
+        assert!(mgr.has_config());
+        assert!(!mgr.has_connections());
+    }
+
+    #[test]
+    fn test_set_config() {
+        let mut mgr = ConnectionManager::new(None, 0);
+        assert!(!mgr.has_config());
+
+        mgr.set_config(test_config(), 10000);
+        assert!(mgr.has_config());
+        assert_eq!(mgr.statement_timeout_ms, 10000);
+    }
+
+    #[test]
+    fn test_disconnect_all_clears_config() {
+        let mut mgr = ConnectionManager::new(Some(test_config()), 5000);
+        assert!(mgr.has_config());
+
+        mgr.disconnect_all();
+        assert!(!mgr.has_config());
+        assert!(!mgr.has_connections());
+    }
+
+    #[test]
+    fn test_remove_nonexistent_tab() {
+        let mut mgr = ConnectionManager::new(None, 0);
+        mgr.remove(999); // should not panic
+        assert!(!mgr.has_connections());
+    }
+
+    #[tokio::test]
+    async fn test_ensure_connected_no_config() {
+        let mut mgr = ConnectionManager::new(None, 0);
+        let result = mgr.ensure_connected(0).await;
+        match result {
+            Err(msg) => assert_eq!(msg, "Not connected"),
+            Ok(_) => panic!("Expected error when no config is set"),
+        }
+    }
 }
