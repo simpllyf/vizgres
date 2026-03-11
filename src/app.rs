@@ -18,6 +18,7 @@ use crate::ui::ComponentAction;
 use crate::ui::command_bar::CommandBar;
 use crate::ui::connection_dialog::{ConnectionDialog, DialogAction};
 use crate::ui::editor::QueryEditor;
+use crate::ui::explain::ExplainViewer;
 use crate::ui::help::HelpOverlay;
 use crate::ui::inspector::Inspector;
 use crate::ui::results::ResultsViewer;
@@ -79,6 +80,10 @@ pub struct Tab {
     pub transaction_state: TransactionState,
     /// Pagination state for the current result set
     pub pagination: Option<PaginationState>,
+    /// Visual EXPLAIN tree viewer (replaces results panel when present)
+    pub explain_viewer: Option<ExplainViewer>,
+    /// Whether the last query was an EXPLAIN (for routing results)
+    explain_pending: bool,
 }
 
 impl Tab {
@@ -92,6 +97,8 @@ impl Tab {
             query_start: None,
             transaction_state: TransactionState::Idle,
             pagination: None,
+            explain_viewer: None,
+            explain_pending: false,
         }
     }
 }
@@ -159,6 +166,9 @@ pub struct App {
 
     /// Global default for read-only mode (from settings)
     default_read_only: bool,
+
+    /// Whether to show EXPLAIN as visual tree (true) or raw text (false)
+    explain_visual: bool,
 
     /// SQL pending destructive-query confirmation (waiting for y/n)
     pending_confirm_sql: Option<PendingConfirm>,
@@ -345,6 +355,7 @@ impl App {
             confirm_destructive: settings.settings.confirm_destructive,
             read_only: settings.settings.read_only,
             default_read_only: settings.settings.read_only,
+            explain_visual: settings.settings.explain_visual,
             pending_confirm_sql: None,
             status_message: None,
             clipboard,
@@ -420,6 +431,38 @@ impl App {
                         None
                     };
 
+                    // Route EXPLAIN JSON results to the visual tree viewer
+                    if self.tabs[idx].explain_pending {
+                        self.tabs[idx].explain_pending = false;
+                        let json_str = results
+                            .rows
+                            .first()
+                            .and_then(|r| r.values.first())
+                            .and_then(|v| match v {
+                                crate::db::types::CellValue::Text(s) => Some(s.as_str()),
+                                crate::db::types::CellValue::Json(s) => Some(s.as_str()),
+                                _ => None,
+                            });
+                        if let Some(viewer) =
+                            json_str.and_then(|s| ExplainViewer::from_json(s, time))
+                        {
+                            self.tabs[idx].explain_viewer = Some(viewer);
+                            if idx == self.active_tab {
+                                self.focus = PanelFocus::ResultsViewer;
+                            }
+                            self.set_status(
+                                format!(
+                                    "EXPLAIN in {:.1}ms — t to toggle raw text",
+                                    time.as_secs_f64() * 1000.0
+                                ),
+                                StatusLevel::Success,
+                            );
+                            return Ok(Action::None);
+                        }
+                        // JSON parse failed — fall through to normal results display
+                    }
+
+                    self.tabs[idx].explain_viewer = None;
                     self.tabs[idx].results_viewer.set_results(results);
                     self.tabs[idx]
                         .results_viewer
@@ -799,7 +842,14 @@ impl App {
             // ── Navigation ───────────────────────────────────
             KeyAction::MoveUp => {
                 match self.focus {
-                    PanelFocus::ResultsViewer => self.tab_mut().results_viewer.move_up(),
+                    PanelFocus::ResultsViewer => {
+                        let tab = self.tab_mut();
+                        if let Some(ref mut ev) = tab.explain_viewer {
+                            ev.move_up();
+                        } else {
+                            tab.results_viewer.move_up();
+                        }
+                    }
                     PanelFocus::TreeBrowser => self.tree_browser.move_up(),
                     PanelFocus::Inspector => self.inspector.scroll_up(),
                     PanelFocus::Help => self.help.scroll_up(),
@@ -809,7 +859,14 @@ impl App {
             }
             KeyAction::MoveDown => {
                 match self.focus {
-                    PanelFocus::ResultsViewer => self.tab_mut().results_viewer.move_down(),
+                    PanelFocus::ResultsViewer => {
+                        let tab = self.tab_mut();
+                        if let Some(ref mut ev) = tab.explain_viewer {
+                            ev.move_down();
+                        } else {
+                            tab.results_viewer.move_down();
+                        }
+                    }
                     PanelFocus::TreeBrowser => self.tree_browser.move_down(),
                     PanelFocus::Inspector => self.inspector.scroll_down(),
                     PanelFocus::Help => self.help.scroll_down(),
@@ -818,20 +875,27 @@ impl App {
                 Action::None
             }
             KeyAction::MoveLeft => {
-                if self.focus == PanelFocus::ResultsViewer {
+                if self.focus == PanelFocus::ResultsViewer && self.tab().explain_viewer.is_none() {
                     self.tab_mut().results_viewer.move_left();
                 }
                 Action::None
             }
             KeyAction::MoveRight => {
-                if self.focus == PanelFocus::ResultsViewer {
+                if self.focus == PanelFocus::ResultsViewer && self.tab().explain_viewer.is_none() {
                     self.tab_mut().results_viewer.move_right();
                 }
                 Action::None
             }
             KeyAction::PageUp => {
                 match self.focus {
-                    PanelFocus::ResultsViewer => self.tab_mut().results_viewer.page_up(),
+                    PanelFocus::ResultsViewer => {
+                        let tab = self.tab_mut();
+                        if let Some(ref mut ev) = tab.explain_viewer {
+                            ev.page_up();
+                        } else {
+                            tab.results_viewer.page_up();
+                        }
+                    }
                     PanelFocus::Inspector => self.inspector.page_up(),
                     PanelFocus::Help => self.help.page_up(),
                     _ => {}
@@ -840,7 +904,14 @@ impl App {
             }
             KeyAction::PageDown => {
                 match self.focus {
-                    PanelFocus::ResultsViewer => self.tab_mut().results_viewer.page_down(),
+                    PanelFocus::ResultsViewer => {
+                        let tab = self.tab_mut();
+                        if let Some(ref mut ev) = tab.explain_viewer {
+                            ev.page_down();
+                        } else {
+                            tab.results_viewer.page_down();
+                        }
+                    }
                     PanelFocus::Inspector => self.inspector.page_down(),
                     PanelFocus::Help => self.help.page_down(),
                     _ => {}
@@ -849,7 +920,14 @@ impl App {
             }
             KeyAction::GoToTop => {
                 match self.focus {
-                    PanelFocus::ResultsViewer => self.tab_mut().results_viewer.go_to_top(),
+                    PanelFocus::ResultsViewer => {
+                        let tab = self.tab_mut();
+                        if let Some(ref mut ev) = tab.explain_viewer {
+                            ev.go_to_top();
+                        } else {
+                            tab.results_viewer.go_to_top();
+                        }
+                    }
                     PanelFocus::Inspector => self.inspector.scroll_to_top(),
                     PanelFocus::Help => self.help.scroll_to_top(),
                     _ => {}
@@ -858,7 +936,14 @@ impl App {
             }
             KeyAction::GoToBottom => {
                 match self.focus {
-                    PanelFocus::ResultsViewer => self.tab_mut().results_viewer.go_to_bottom(),
+                    PanelFocus::ResultsViewer => {
+                        let tab = self.tab_mut();
+                        if let Some(ref mut ev) = tab.explain_viewer {
+                            ev.go_to_bottom();
+                        } else {
+                            tab.results_viewer.go_to_bottom();
+                        }
+                    }
                     PanelFocus::Inspector => self.inspector.scroll_to_bottom(),
                     PanelFocus::Help => self.help.scroll_to_bottom(),
                     _ => {}
@@ -919,7 +1004,12 @@ impl App {
             KeyAction::ExplainQuery => {
                 let sql = self.tab().editor.get_content();
                 if !sql.trim().is_empty() {
-                    let explain = format!("EXPLAIN ANALYZE {}", sql.trim());
+                    let explain = if self.explain_visual {
+                        self.tab_mut().explain_pending = true;
+                        format!("EXPLAIN (ANALYZE, FORMAT JSON) {}", sql.trim())
+                    } else {
+                        format!("EXPLAIN ANALYZE {}", sql.trim())
+                    };
                     self.set_status("Running EXPLAIN ANALYZE...".to_string(), StatusLevel::Info);
                     self.prepare_execute_query(explain)
                 } else {
@@ -1022,7 +1112,12 @@ impl App {
                 Action::None
             }
             KeyAction::ToggleViewMode => {
-                self.tab_mut().results_viewer.toggle_view_mode();
+                let tab = self.tab_mut();
+                if let Some(ref mut ev) = tab.explain_viewer {
+                    ev.toggle_view_mode();
+                } else {
+                    tab.results_viewer.toggle_view_mode();
+                }
                 Action::None
             }
             KeyAction::CopyCell => {
@@ -2341,13 +2436,52 @@ mod tests {
         let action = app.handle_key(ctrl_e);
         match action {
             Action::ExecuteQuery { sql, .. } => {
-                assert_eq!(sql, "EXPLAIN ANALYZE SELECT * FROM users");
+                assert_eq!(sql, "EXPLAIN (ANALYZE, FORMAT JSON) SELECT * FROM users");
             }
             other => panic!(
                 "Expected ExecuteQuery, got {:?}",
                 std::mem::discriminant(&other)
             ),
         }
+    }
+
+    #[test]
+    fn test_explain_visual_disabled_uses_plain_format() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.explain_visual = false;
+        app.focus = PanelFocus::QueryEditor;
+        app.tabs[0].editor.set_content("SELECT 1".to_string());
+
+        let ctrl_e = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL);
+        let action = app.handle_key(ctrl_e);
+        match action {
+            Action::ExecuteQuery { sql, .. } => {
+                assert_eq!(sql, "EXPLAIN ANALYZE SELECT 1");
+                assert!(!sql.contains("FORMAT JSON"));
+            }
+            other => panic!(
+                "Expected ExecuteQuery, got {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+    }
+
+    #[test]
+    fn test_explain_visual_sets_pending_flag() {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::new();
+        app.focus = PanelFocus::QueryEditor;
+        app.tabs[0].editor.set_content("SELECT 1".to_string());
+
+        let ctrl_e = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL);
+        let _action = app.handle_key(ctrl_e);
+        assert!(
+            app.tab().explain_pending,
+            "visual explain should set pending flag"
+        );
     }
 
     #[test]
@@ -3280,7 +3414,7 @@ mod tests {
             Action::ExecuteQuery {
                 timeout_ms, sql, ..
             } => {
-                assert!(sql.starts_with("EXPLAIN ANALYZE"));
+                assert!(sql.starts_with("EXPLAIN"));
                 assert_eq!(timeout_ms, 30000);
             }
             other => panic!(
@@ -3993,7 +4127,7 @@ mod tests {
 
         match action {
             Action::ExecuteQuery { sql, .. } => {
-                assert!(sql.starts_with("EXPLAIN ANALYZE"));
+                assert!(sql.starts_with("EXPLAIN"));
                 // EXPLAIN should NOT have LIMIT/OFFSET appended
                 assert!(!sql.contains("OFFSET"));
             }
