@@ -15,7 +15,7 @@ use vizgres::app::{Action, App, AppEvent, LoadMoreItems, StatusLevel};
 use vizgres::config::{self, ConnectionConfig, Settings};
 use vizgres::connection_manager::ConnectionManager;
 use vizgres::db::{self, Database};
-use vizgres::error::DbError;
+use vizgres::error::{DbError, connection_hint};
 
 /// A fast, keyboard-driven PostgreSQL client for the terminal
 #[derive(Parser)]
@@ -86,7 +86,13 @@ async fn main() -> Result<()> {
         let (prov, rx) =
             db::PostgresProvider::connect(&conn_config, settings.settings.statement_timeout_ms)
                 .await
-                .map_err(|e| anyhow::anyhow!("Connection failed: {}", e))?;
+                .map_err(|e| {
+                    let msg = e.to_string();
+                    let hint = connection_hint(&msg)
+                        .map(|h| format!("\n  hint: {}", h))
+                        .unwrap_or_default();
+                    anyhow::anyhow!("Connection failed: {}{}", msg, hint)
+                })?;
         let prov = Arc::new(prov);
 
         let schema = prov
@@ -413,7 +419,14 @@ async fn run_app(
                         }
                     }
                     Err(e) => {
-                        app.set_status(format!("Connection failed: {}", e), StatusLevel::Error);
+                        let msg = e.to_string();
+                        let hint = connection_hint(&msg)
+                            .map(|h| format!(" ({})", h))
+                            .unwrap_or_default();
+                        app.set_status(
+                            format!("Connection failed: {}{}", msg, hint),
+                            StatusLevel::Error,
+                        );
                     }
                 }
             }
