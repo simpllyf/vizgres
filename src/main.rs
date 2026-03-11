@@ -427,8 +427,28 @@ async fn run_app(
                 match conn_mgr.ensure_connected(tab_id).await {
                     Ok(db) => {
                         let tx = event_tx.clone();
+                        // Progress channel: db task sends row counts, we forward as AppEvents
+                        let (progress_tx, mut progress_rx) =
+                            tokio::sync::mpsc::unbounded_channel::<usize>();
+                        let progress_fwd = event_tx.clone();
                         tokio::spawn(async move {
-                            match db.execute_query(&sql, timeout_ms, max_rows).await {
+                            while let Some(count) = progress_rx.recv().await {
+                                let _ = progress_fwd.send(AppEvent::QueryProgress {
+                                    rows_fetched: count,
+                                    tab_id,
+                                });
+                            }
+                        });
+                        tokio::spawn(async move {
+                            match db
+                                .execute_query_with_progress(
+                                    &sql,
+                                    timeout_ms,
+                                    max_rows,
+                                    progress_tx,
+                                )
+                                .await
+                            {
                                 Ok(results) => {
                                     let _ = tx.send(AppEvent::QueryCompleted { results, tab_id });
                                 }

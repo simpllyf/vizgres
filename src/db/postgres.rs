@@ -285,7 +285,12 @@ impl PostgresProvider {
     ///
     /// Server-side `statement_timeout` is set at connection level (via the
     /// connection string) so every query is automatically protected.
-    async fn execute_query_inner(&self, sql: &str, max_rows: usize) -> DbResult<QueryResults> {
+    async fn execute_query_inner(
+        &self,
+        sql: &str,
+        max_rows: usize,
+        progress: Option<mpsc::UnboundedSender<usize>>,
+    ) -> DbResult<QueryResults> {
         use futures::TryStreamExt;
 
         let start = std::time::Instant::now();
@@ -323,6 +328,7 @@ impl PostgresProvider {
             usize::MAX
         };
 
+        let mut last_progress = std::time::Instant::now();
         futures::pin_mut!(row_stream);
         while let Some(pg_row) = row_stream.try_next().await.map_err(extract_query_error)? {
             if rows.len() >= fetch_limit {
@@ -337,6 +343,15 @@ impl PostgresProvider {
                 values.push(value);
             }
             rows.push(Row { values });
+
+            // Send progress at most every 500ms to avoid flooding the event channel
+            if let Some(ref tx) = progress {
+                let now = std::time::Instant::now();
+                if now.duration_since(last_progress).as_millis() >= 500 {
+                    let _ = tx.send(rows.len());
+                    last_progress = now;
+                }
+            }
         }
 
         // If we fetched max_rows + 1, truncate to max_rows
@@ -1289,6 +1304,32 @@ impl PostgresProvider {
     }
 }
 
+impl PostgresProvider {
+    /// Execute a query with timeout and periodic progress reporting.
+    /// Progress sends the current row count through the channel at most every 500ms.
+    pub async fn execute_query_with_progress(
+        &self,
+        sql: &str,
+        timeout_ms: u64,
+        max_rows: usize,
+        progress: mpsc::UnboundedSender<usize>,
+    ) -> DbResult<QueryResults> {
+        let query_future = self.execute_query_inner(sql, max_rows, Some(progress));
+
+        if timeout_ms == 0 {
+            query_future.await
+        } else {
+            match timeout(Duration::from_millis(timeout_ms), query_future).await {
+                Ok(result) => result,
+                Err(_) => {
+                    let _ = self.cancel_query_enhanced(false).await;
+                    Err(DbError::Timeout(timeout_ms))
+                }
+            }
+        }
+    }
+}
+
 impl Database for PostgresProvider {
     async fn execute_query(
         &self,
@@ -1296,7 +1337,7 @@ impl Database for PostgresProvider {
         timeout_ms: u64,
         max_rows: usize,
     ) -> DbResult<QueryResults> {
-        let query_future = self.execute_query_inner(sql, max_rows);
+        let query_future = self.execute_query_inner(sql, max_rows, None);
 
         if timeout_ms == 0 {
             query_future.await

@@ -84,6 +84,8 @@ pub struct Tab {
     pub explain_viewer: Option<ExplainViewer>,
     /// Whether the last query was an EXPLAIN (for routing results)
     explain_pending: bool,
+    /// Row count received during streaming (for progress display)
+    pub rows_streaming: Option<usize>,
 }
 
 impl Tab {
@@ -99,6 +101,7 @@ impl Tab {
             pagination: None,
             explain_viewer: None,
             explain_pending: false,
+            rows_streaming: None,
         }
     }
 }
@@ -238,6 +241,8 @@ pub enum AppEvent {
     Key(KeyEvent),
     /// Terminal resize event
     Resize,
+    /// Row count progress during streaming query execution
+    QueryProgress { rows_fetched: usize, tab_id: usize },
     /// Query execution completed successfully
     QueryCompleted {
         results: QueryResults,
@@ -400,6 +405,15 @@ impl App {
                 Ok(Action::None)
             }
             AppEvent::Resize => Ok(Action::None),
+            AppEvent::QueryProgress {
+                rows_fetched,
+                tab_id,
+            } => {
+                if let Some(idx) = self.tab_index_by_id(tab_id) {
+                    self.tabs[idx].rows_streaming = Some(rows_fetched);
+                }
+                Ok(Action::None)
+            }
             AppEvent::QueryCompleted {
                 mut results,
                 tab_id,
@@ -409,6 +423,7 @@ impl App {
                 if let Some(idx) = self.tab_index_by_id(tab_id) {
                     self.tabs[idx].query_running = false;
                     self.tabs[idx].query_start = None;
+                    self.tabs[idx].rows_streaming = None;
 
                     // Process pagination: trim the +1 probe row and update state
                     let pagination_info = if let Some(ref mut pg) = self.tabs[idx].pagination {
@@ -555,6 +570,7 @@ impl App {
                 let cancelled = error.contains("canceling statement due to user request");
 
                 if let Some(idx) = self.tab_index_by_id(tab_id) {
+                    self.tabs[idx].rows_streaming = None;
                     // Transition to Failed if this tab is inside a transaction
                     if self.tabs[idx].transaction_state == TransactionState::InTransaction
                         && !cancelled
@@ -2544,6 +2560,68 @@ mod tests {
         app.handle_event(AppEvent::QueryCompleted { results, tab_id: 0 })
             .unwrap();
         assert!(!app.tabs[0].query_running);
+    }
+
+    #[test]
+    fn test_query_progress_updates_rows_streaming() {
+        let mut app = App::new();
+        app.tabs[0].query_running = true;
+        assert!(app.tabs[0].rows_streaming.is_none());
+
+        app.handle_event(AppEvent::QueryProgress {
+            rows_fetched: 500,
+            tab_id: 0,
+        })
+        .unwrap();
+        assert_eq!(app.tabs[0].rows_streaming, Some(500));
+
+        // Second progress update replaces the count
+        app.handle_event(AppEvent::QueryProgress {
+            rows_fetched: 1200,
+            tab_id: 0,
+        })
+        .unwrap();
+        assert_eq!(app.tabs[0].rows_streaming, Some(1200));
+    }
+
+    #[test]
+    fn test_query_completed_clears_rows_streaming() {
+        let mut app = App::new();
+        app.tabs[0].query_running = true;
+        app.tabs[0].rows_streaming = Some(750);
+
+        let results =
+            crate::db::QueryResults::new(vec![], vec![], std::time::Duration::from_millis(10), 0);
+        app.handle_event(AppEvent::QueryCompleted { results, tab_id: 0 })
+            .unwrap();
+        assert!(app.tabs[0].rows_streaming.is_none());
+    }
+
+    #[test]
+    fn test_query_failed_clears_rows_streaming() {
+        let mut app = App::new();
+        app.tabs[0].query_running = true;
+        app.tabs[0].rows_streaming = Some(300);
+
+        app.handle_event(AppEvent::QueryFailed {
+            error: "some error".to_string(),
+            position: None,
+            tab_id: 0,
+        })
+        .unwrap();
+        assert!(app.tabs[0].rows_streaming.is_none());
+    }
+
+    #[test]
+    fn test_query_progress_ignores_unknown_tab() {
+        let mut app = App::new();
+        // Progress for non-existent tab should not panic
+        app.handle_event(AppEvent::QueryProgress {
+            rows_fetched: 100,
+            tab_id: 99,
+        })
+        .unwrap();
+        assert!(app.tabs[0].rows_streaming.is_none());
     }
 
     #[test]
