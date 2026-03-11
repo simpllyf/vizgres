@@ -623,6 +623,7 @@ mod tests {
                         is_primary_key: false,
                         foreign_key: None,
                     }],
+                    row_count: None,
                 }]),
                 views: PaginatedVec::default(),
                 indexes: PaginatedVec::default(),

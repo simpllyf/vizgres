@@ -473,10 +473,37 @@ impl PostgresProvider {
             index_counts = HashMap::new();
         }
 
+        // Estimated row counts from pg_stat_user_tables (fast, no seq scan)
+        let row_count_rows = self
+            .client
+            .query(
+                "SELECT schemaname, relname, n_live_tup::bigint \
+                 FROM pg_stat_user_tables \
+                 WHERE schemaname = ANY($1)",
+                &[&schema_names],
+            )
+            .await
+            .map_err(&map_err)?;
+        let mut row_counts_by_schema: HashMap<String, HashMap<String, i64>> = HashMap::new();
+        for row in &row_count_rows {
+            let schema: String = row.get(0);
+            let relname: String = row.get(1);
+            let count: i64 = row.get(2);
+            row_counts_by_schema
+                .entry(schema)
+                .or_default()
+                .insert(relname, count);
+        }
+
         // Build schemas using two-phase loading for efficiency
         let mut schemas = Vec::new();
 
         for schema_name in &schema_names {
+            let row_counts = row_counts_by_schema
+                .get(schema_name)
+                .cloned()
+                .unwrap_or_default();
+
             // Phase 1: Get limited table/view names
             let table_names = self.load_relation_names(schema_name, "r", 0, limit).await?;
             let view_names = self
@@ -493,7 +520,14 @@ impl PostgresProvider {
                 let (pk_set, fk_map) = self
                     .load_constraints_for_tables(schema_name, &table_names)
                     .await?;
-                assemble_tables(schema_name, table_names, columns, pk_set, fk_map)
+                assemble_tables(
+                    schema_name,
+                    table_names,
+                    columns,
+                    pk_set,
+                    fk_map,
+                    &row_counts,
+                )
             };
 
             let views = if view_names.is_empty() {
@@ -502,13 +536,14 @@ impl PostgresProvider {
                 let columns = self
                     .load_columns_for_relations(schema_name, &view_names)
                     .await?;
-                // Views don't have PK/FK constraints
+                // Views don't have PK/FK constraints or row counts
                 assemble_tables(
                     schema_name,
                     view_names,
                     columns,
                     HashSet::new(),
                     HashMap::new(),
+                    &HashMap::new(),
                 )
             };
 
@@ -1121,6 +1156,7 @@ impl PostgresProvider {
                         let table = Table {
                             name: relname.clone(),
                             columns,
+                            row_count: None,
                         };
                         match relkind.as_str() {
                             "r" => tables.push(table),
@@ -1153,6 +1189,9 @@ impl PostgresProvider {
         offset: usize,
         limit: usize,
     ) -> DbResult<Vec<Table>> {
+        let map_err =
+            |e: tokio_postgres::Error| crate::error::DbError::SchemaLoadFailed(e.to_string());
+
         // Phase 1: Get table names with offset/limit
         let table_names = self
             .load_relation_names(schema_name, "r", offset, limit)
@@ -1160,6 +1199,22 @@ impl PostgresProvider {
         if table_names.is_empty() {
             return Ok(Vec::new());
         }
+
+        // Get row counts for these tables
+        let row_count_rows = self
+            .client
+            .query(
+                "SELECT relname, n_live_tup::bigint \
+                 FROM pg_stat_user_tables \
+                 WHERE schemaname = $1 AND relname = ANY($2)",
+                &[&schema_name, &table_names],
+            )
+            .await
+            .map_err(&map_err)?;
+        let row_counts: HashMap<String, i64> = row_count_rows
+            .iter()
+            .map(|r| (r.get::<_, String>(0), r.get::<_, i64>(1)))
+            .collect();
 
         // Phase 2: Get columns and constraints for those tables
         let columns = self
@@ -1175,6 +1230,7 @@ impl PostgresProvider {
             columns,
             pk_set,
             fk_map,
+            &row_counts,
         ))
     }
 
@@ -1205,6 +1261,7 @@ impl PostgresProvider {
             columns,
             HashSet::new(),
             HashMap::new(),
+            &HashMap::new(), // views don't have row counts
         ))
     }
 
@@ -1303,18 +1360,20 @@ impl Database for PostgresProvider {
     }
 }
 
-/// Assemble Table structs from names, columns, and constraints.
+/// Assemble Table structs from names, columns, constraints, and optional row counts.
 fn assemble_tables(
     schema_name: &str,
     table_names: Vec<String>,
     mut columns: HashMap<String, Vec<(String, String)>>,
     pk_set: HashSet<(String, String)>,
     mut fk_map: HashMap<(String, String), ForeignKey>,
+    row_counts: &HashMap<String, i64>,
 ) -> Vec<Table> {
     let _ = schema_name; // May be used for FK formatting in future
     table_names
         .into_iter()
         .map(|name| {
+            let row_count = row_counts.get(&name).copied();
             let cols = columns.remove(&name).unwrap_or_default();
             let columns = cols
                 .into_iter()
@@ -1329,7 +1388,11 @@ fn assemble_tables(
                     }
                 })
                 .collect();
-            Table { name, columns }
+            Table {
+                name,
+                columns,
+                row_count,
+            }
         })
         .collect()
 }

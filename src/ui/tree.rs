@@ -221,8 +221,12 @@ impl TreeBrowser {
                 if self.expanded.contains(&cat_path) {
                     for table in schema.tables.iter() {
                         let table_path = format!("{}.{}", cat_path, table.name);
+                        let label = match table.row_count {
+                            Some(n) => format!("{} (~{})", table.name, format_count(n)),
+                            None => table.name.clone(),
+                        };
                         self.items.push(TreeItem {
-                            label: table.name.clone(),
+                            label,
                             kind: NodeKind::Table,
                             depth: 2,
                             path: table_path.clone(),
@@ -1089,6 +1093,22 @@ fn format_column_label(col: &crate::db::schema::Column) -> String {
     )
 }
 
+/// Format a row count with thousands separators (e.g. 1234567 → "1,234,567")
+fn format_count(n: i64) -> String {
+    if n < 0 {
+        return format!("-{}", format_count(-n));
+    }
+    let s = n.to_string();
+    let mut result = String::with_capacity(s.len() + s.len() / 3);
+    for (i, ch) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            result.push(',');
+        }
+        result.push(ch);
+    }
+    result
+}
+
 impl Default for TreeBrowser {
     fn default() -> Self {
         Self::new()
@@ -1260,6 +1280,7 @@ mod tests {
                                 foreign_key: None,
                             },
                         ],
+                        row_count: Some(1500),
                     },
                     Table {
                         name: "orders".to_string(),
@@ -1280,6 +1301,7 @@ mod tests {
                                 }),
                             },
                         ],
+                        row_count: Some(42000),
                     },
                 ]),
                 views: PaginatedVec::from_vec(vec![Table {
@@ -1290,6 +1312,7 @@ mod tests {
                         is_primary_key: false,
                         foreign_key: None,
                     }],
+                    row_count: None,
                 }]),
                 indexes: PaginatedVec::from_vec(vec![Index {
                     name: "users_pkey".to_string(),
@@ -1341,7 +1364,11 @@ mod tests {
         let mut tree = TreeBrowser::new();
         tree.set_schema(sample_schema());
         // Find "users" table and expand it
-        let users_idx = tree.items.iter().position(|i| i.label == "users").unwrap();
+        let users_idx = tree
+            .items
+            .iter()
+            .position(|i| i.label.starts_with("users"))
+            .unwrap();
         tree.selected = users_idx;
         tree.toggle_expand();
         // Should show columns under users
@@ -1426,7 +1453,11 @@ mod tests {
         let mut tree = TreeBrowser::new();
         tree.set_schema(sample_schema());
         // Select the "users" table
-        let users_idx = tree.items.iter().position(|i| i.label == "users").unwrap();
+        let users_idx = tree
+            .items
+            .iter()
+            .position(|i| i.label.starts_with("users"))
+            .unwrap();
         tree.selected = users_idx;
         assert_eq!(
             tree.preview_query(),
@@ -1488,7 +1519,11 @@ mod tests {
         let mut tree = TreeBrowser::new();
         tree.set_schema(sample_schema());
         // Expand users table to get columns
-        let users_idx = tree.items.iter().position(|i| i.label == "users").unwrap();
+        let users_idx = tree
+            .items
+            .iter()
+            .position(|i| i.label.starts_with("users"))
+            .unwrap();
         tree.selected = users_idx;
         tree.toggle_expand();
         // Select a column
@@ -1509,6 +1544,7 @@ mod tests {
                 tables: PaginatedVec::from_vec(vec![Table {
                     name: "t".to_string(),
                     columns: vec![],
+                    row_count: None,
                 }]),
                 views: PaginatedVec::default(),
                 indexes: PaginatedVec::default(),
@@ -1529,7 +1565,11 @@ mod tests {
     fn test_preview_query_uses_configured_limit() {
         let mut tree = TreeBrowser::with_preview_rows(50);
         tree.set_schema(sample_schema());
-        let users_idx = tree.items.iter().position(|i| i.label == "users").unwrap();
+        let users_idx = tree
+            .items
+            .iter()
+            .position(|i| i.label.starts_with("users"))
+            .unwrap();
         tree.selected = users_idx;
         assert_eq!(
             tree.preview_query(),
@@ -1541,7 +1581,11 @@ mod tests {
     fn test_selected_qualified_name_for_table() {
         let mut tree = TreeBrowser::new();
         tree.set_schema(sample_schema());
-        let users_idx = tree.items.iter().position(|i| i.label == "users").unwrap();
+        let users_idx = tree
+            .items
+            .iter()
+            .position(|i| i.label.starts_with("users"))
+            .unwrap();
         tree.selected = users_idx;
         assert_eq!(
             tree.selected_qualified_name(),
@@ -1554,7 +1598,11 @@ mod tests {
         let mut tree = TreeBrowser::new();
         tree.set_schema(sample_schema());
         // Find users table and expand it
-        let users_idx = tree.items.iter().position(|i| i.label == "users").unwrap();
+        let users_idx = tree
+            .items
+            .iter()
+            .position(|i| i.label.starts_with("users"))
+            .unwrap();
         tree.selected = users_idx;
         tree.expand_current();
         // Find the id column
@@ -1598,7 +1646,11 @@ mod tests {
     fn test_selected_table_info_for_table() {
         let mut tree = TreeBrowser::new();
         tree.set_schema(sample_schema());
-        let users_idx = tree.items.iter().position(|i| i.label == "users").unwrap();
+        let users_idx = tree
+            .items
+            .iter()
+            .position(|i| i.label.starts_with("users"))
+            .unwrap();
         tree.selected = users_idx;
         assert_eq!(
             tree.selected_table_info(),
@@ -1610,7 +1662,11 @@ mod tests {
     fn test_selected_table_info_none_for_column() {
         let mut tree = TreeBrowser::new();
         tree.set_schema(sample_schema());
-        let users_idx = tree.items.iter().position(|i| i.label == "users").unwrap();
+        let users_idx = tree
+            .items
+            .iter()
+            .position(|i| i.label.starts_with("users"))
+            .unwrap();
         tree.selected = users_idx;
         tree.expand_current();
         let col_idx = tree
@@ -1660,14 +1716,18 @@ mod tests {
         tree.filter_insert_char('r');
 
         // Should contain all items matching "user"
-        assert!(tree.items.iter().any(|i| i.label == "users")); // table
+        assert!(tree.items.iter().any(|i| i.label.starts_with("users"))); // table
         assert!(tree.items.iter().any(|i| i.label.contains("user_id"))); // column
         assert!(tree.items.iter().any(|i| i.label == "active_users")); // view
         assert!(tree.items.iter().any(|i| i.label.starts_with("users_pkey"))); // index
         assert!(tree.items.iter().any(|i| i.label.starts_with("get_user"))); // function
 
         // Matching items should have matches_filter = true
-        let users_item = tree.items.iter().find(|i| i.label == "users").unwrap();
+        let users_item = tree
+            .items
+            .iter()
+            .find(|i| i.label.starts_with("users"))
+            .unwrap();
         assert!(users_item.matches_filter);
 
         // Ancestor items (like schema, categories) should have matches_filter = false
@@ -1734,6 +1794,7 @@ mod tests {
                 tables: PaginatedVec::from_vec(vec![Table {
                     name: "search_table".to_string(),
                     columns: vec![],
+                    row_count: None,
                 }]),
                 views: PaginatedVec::default(),
                 indexes: PaginatedVec::default(),
@@ -1766,6 +1827,7 @@ mod tests {
                 tables: PaginatedVec::from_vec(vec![Table {
                     name: "other_table".to_string(),
                     columns: vec![],
+                    row_count: None,
                 }]),
                 views: PaginatedVec::default(),
                 indexes: PaginatedVec::default(),
@@ -1797,6 +1859,7 @@ mod tests {
                 name: "test_schema".to_string(),
                 tables: PaginatedVec::from_vec(vec![Table {
                     name: "test_table".to_string(),
+                    row_count: None,
                     columns: vec![Column {
                         name: "test_col".to_string(),
                         data_type: DataType::Text,
@@ -1899,6 +1962,7 @@ mod tests {
         let new_table = Table {
             name: "new_table".to_string(),
             columns: vec![],
+            row_count: None,
         };
         tree.extend_tables("public", vec![new_table]);
 
@@ -1915,6 +1979,7 @@ mod tests {
             vec![Table {
                 name: "table1".to_string(),
                 columns: vec![],
+                row_count: None,
             }],
             10, // total is 10, but only 1 loaded
         );
@@ -1941,5 +2006,63 @@ mod tests {
             tables_category.unwrap().label.contains("1 of 10"),
             "Category should show 'X of Y' when truncated"
         );
+    }
+
+    #[test]
+    fn test_format_count_small() {
+        assert_eq!(format_count(0), "0");
+        assert_eq!(format_count(42), "42");
+        assert_eq!(format_count(999), "999");
+    }
+
+    #[test]
+    fn test_format_count_thousands() {
+        assert_eq!(format_count(1_000), "1,000");
+        assert_eq!(format_count(1_234), "1,234");
+        assert_eq!(format_count(12_345), "12,345");
+        assert_eq!(format_count(123_456), "123,456");
+        assert_eq!(format_count(1_234_567), "1,234,567");
+    }
+
+    #[test]
+    fn test_table_label_with_row_count() {
+        let mut tree = TreeBrowser::new();
+        tree.set_schema(sample_schema());
+        tree.expand_current(); // Schema
+        tree.move_down();
+        tree.expand_current(); // Tables category
+
+        // Find a table item — sample_schema sets row_count: Some(1500)
+        let table_item = tree
+            .items
+            .iter()
+            .find(|i| matches!(i.kind, NodeKind::Table) && i.label.contains("users"))
+            .expect("should find users table");
+        assert_eq!(table_item.label, "users (~1,500)");
+    }
+
+    #[test]
+    fn test_view_label_without_row_count() {
+        let mut tree = TreeBrowser::new();
+        tree.set_schema(sample_schema());
+        tree.expand_current(); // Schema
+        tree.move_down();
+
+        // Navigate down to find Views category and expand it
+        for _ in 0..20 {
+            if let Some(item) = tree.items.get(tree.selected) {
+                if item.label.starts_with("Views") {
+                    tree.expand_current();
+                    break;
+                }
+            }
+            tree.move_down();
+        }
+
+        let view_item = tree.items.iter().find(|i| i.label.contains("active_users"));
+        if let Some(item) = view_item {
+            // Views have row_count: None, so no (~N) suffix
+            assert_eq!(item.label, "active_users");
+        }
     }
 }
