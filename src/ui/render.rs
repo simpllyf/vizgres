@@ -391,18 +391,27 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         return;
     }
 
-    // Show live elapsed time when query is running
+    // Show live elapsed time and row counter when query is running
     let active_tab = &app.tabs[app.active_tab];
     if active_tab.query_running
         && let Some(start) = active_tab.query_start
     {
         let elapsed = start.elapsed();
         let cancel_key = key_hint(&app.keymap, None, KeyAction::CancelQuery);
-        let msg = format!(
-            "Executing... ({:.1}s) - {} to cancel",
-            elapsed.as_secs_f64(),
-            cancel_key
-        );
+        let msg = if let Some(rows) = active_tab.rows_streaming {
+            format!(
+                "Streaming... {:>} rows ({:.1}s) - {} to cancel",
+                format_row_count(rows),
+                elapsed.as_secs_f64(),
+                cancel_key
+            )
+        } else {
+            format!(
+                "Executing... ({:.1}s) - {} to cancel",
+                elapsed.as_secs_f64(),
+                cancel_key
+            )
+        };
         frame.render_widget(
             Paragraph::new(msg).style(theme.status_info),
             Rect::new(area.x, area.y, max_left_width, 1),
@@ -462,4 +471,45 @@ fn key_hint(
     keys.into_iter()
         .next()
         .unwrap_or_else(|| "(unset)".to_string())
+}
+
+/// Format a row count with thousands separators (e.g., 4523 → "4,523")
+fn format_row_count(n: usize) -> String {
+    if n < 1_000 {
+        return n.to_string();
+    }
+    let s = n.to_string();
+    let mut result = String::with_capacity(s.len() + s.len() / 3);
+    for (i, ch) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            result.push(',');
+        }
+        result.push(ch);
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_row_count_small() {
+        assert_eq!(format_row_count(0), "0");
+        assert_eq!(format_row_count(1), "1");
+        assert_eq!(format_row_count(999), "999");
+    }
+
+    #[test]
+    fn test_format_row_count_thousands() {
+        assert_eq!(format_row_count(1_000), "1,000");
+        assert_eq!(format_row_count(4_523), "4,523");
+        assert_eq!(format_row_count(999_999), "999,999");
+    }
+
+    #[test]
+    fn test_format_row_count_millions() {
+        assert_eq!(format_row_count(1_000_000), "1,000,000");
+        assert_eq!(format_row_count(12_345_678), "12,345,678");
+    }
 }
