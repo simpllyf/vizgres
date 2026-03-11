@@ -11,5 +11,7 @@
 //! - TEST_DB_USER: test_user
 //! - TEST_DB_PASSWORD: test_password
 
+mod common;
+
 #[path = "integration/postgres_tests.rs"]
 mod postgres_tests;
