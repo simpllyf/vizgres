@@ -36,7 +36,7 @@ cargo install vizgres
 cargo install --path .
 ```
 
-Requires Rust 1.93+ (2024 edition).
+Requires Rust 1.93+ (2024 edition). Tested against PostgreSQL 18; compatible with PostgreSQL 11+.
 
 ## Usage
 
