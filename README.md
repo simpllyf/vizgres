@@ -6,6 +6,8 @@
 
 A fast, keyboard-driven PostgreSQL client for the terminal.
 
+![vizgres screenshot](site/assets/screenshot-hero.png)
+
 ## Features
 
 - **Schema Browser**: Navigate schemas, tables, views, functions, indexes with expand/collapse
