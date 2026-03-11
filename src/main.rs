@@ -78,9 +78,14 @@ async fn main() -> Result<()> {
         original_hook(panic_info);
     }));
 
-    // Resolve connection target: CLI arg > PG* env vars > connection dialog
+    // Resolve connection target: CLI arg > DATABASE_URL > PG* env vars > dialog
     let conn_config = if let Some(ref target) = cli.connect.target {
         Some(resolve_connection(target)?)
+    } else if let Ok(url) = std::env::var("DATABASE_URL") {
+        Some(
+            ConnectionConfig::from_url(&url)
+                .map_err(|e| anyhow::anyhow!("Invalid DATABASE_URL: {}", e))?,
+        )
     } else {
         ConnectionConfig::from_env()
     };

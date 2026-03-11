@@ -47,7 +47,11 @@ vizgres postgres://user:pass@localhost:5432/mydb
 # Connect to saved profile
 vizgres myprofile
 
-# Connect via PG* environment variables (PGHOST, PGDATABASE, PGUSER, etc.)
+# Connect via DATABASE_URL (common in containers/PaaS)
+export DATABASE_URL=postgres://user:pass@localhost:5432/mydb
+vizgres
+
+# Connect via PG* environment variables
 export PGDATABASE=mydb PGHOST=localhost PGUSER=me
 vizgres
 
