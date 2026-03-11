@@ -616,57 +616,29 @@ impl PostgresProvider {
         let map_err =
             |e: tokio_postgres::Error| crate::error::DbError::SchemaLoadFailed(e.to_string());
 
-        let (relkind_clause, query) = if relkind == "r" {
-            (
-                "c.relkind = 'r'",
-                if limit > 0 {
-                    "SELECT c.relname
-                     FROM pg_class c
-                     JOIN pg_namespace n ON n.oid = c.relnamespace
-                     WHERE c.relkind = 'r'
-                       AND n.nspname = $1
-                     ORDER BY c.relname
-                     OFFSET $2 LIMIT $3"
-                } else {
-                    "SELECT c.relname
-                     FROM pg_class c
-                     JOIN pg_namespace n ON n.oid = c.relnamespace
-                     WHERE c.relkind = 'r'
-                       AND n.nspname = $1
-                     ORDER BY c.relname"
-                },
-            )
+        let relkind_filter = if relkind == "r" {
+            "c.relkind = 'r'"
         } else {
-            (
-                "c.relkind IN ('v', 'm')",
-                if limit > 0 {
-                    "SELECT c.relname
-                     FROM pg_class c
-                     JOIN pg_namespace n ON n.oid = c.relnamespace
-                     WHERE c.relkind IN ('v', 'm')
-                       AND n.nspname = $1
-                     ORDER BY c.relname
-                     OFFSET $2 LIMIT $3"
-                } else {
-                    "SELECT c.relname
-                     FROM pg_class c
-                     JOIN pg_namespace n ON n.oid = c.relnamespace
-                     WHERE c.relkind IN ('v', 'm')
-                       AND n.nspname = $1
-                     ORDER BY c.relname"
-                },
-            )
+            "c.relkind IN ('v', 'm')"
         };
-        let _ = relkind_clause; // Suppress warning
+        let base = format!(
+            "SELECT c.relname \
+             FROM pg_class c \
+             JOIN pg_namespace n ON n.oid = c.relnamespace \
+             WHERE {} AND n.nspname = $1 \
+             ORDER BY c.relname",
+            relkind_filter
+        );
 
         let rows = if limit > 0 {
+            let query = format!("{} OFFSET $2 LIMIT $3", base);
             self.client
-                .query(query, &[&schema_name, &(offset as i64), &(limit as i64)])
+                .query(&query, &[&schema_name, &(offset as i64), &(limit as i64)])
                 .await
                 .map_err(&map_err)?
         } else {
             self.client
-                .query(query, &[&schema_name])
+                .query(&base, &[&schema_name])
                 .await
                 .map_err(&map_err)?
         };
