@@ -1829,7 +1829,10 @@ mod tests {
         assert_eq!(pg_type_to_datatype(&Type::BOOL), DataType::Boolean);
         assert_eq!(pg_type_to_datatype(&Type::UUID), DataType::Uuid);
         assert_eq!(pg_type_to_datatype(&Type::JSONB), DataType::Jsonb);
-        assert_eq!(pg_type_to_datatype(&Type::TIMESTAMPTZ), DataType::TimestampTz);
+        assert_eq!(
+            pg_type_to_datatype(&Type::TIMESTAMPTZ),
+            DataType::TimestampTz
+        );
     }
 
     #[test]

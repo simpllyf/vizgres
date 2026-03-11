@@ -2501,13 +2501,19 @@ fn test_translate_meta_command_dn() {
 #[test]
 fn test_translate_meta_command_d_table() {
     let sql = translate_meta_command("\\d users").unwrap();
-    assert!(sql.contains("relname = 'users'"), "should filter by table name");
+    assert!(
+        sql.contains("relname = 'users'"),
+        "should filter by table name"
+    );
     assert!(sql.contains("attnum > 0"), "should include columns");
     // Expanded: indexes, constraints, referenced-by, triggers
     assert!(sql.contains("pg_index"), "should include indexes");
     assert!(sql.contains("pg_constraint"), "should include constraints");
     assert!(sql.contains("pg_trigger"), "should include triggers");
-    assert!(sql.contains("'Referenced by'"), "should include referenced-by");
+    assert!(
+        sql.contains("'Referenced by'"),
+        "should include referenced-by"
+    );
 }
 
 #[test]
