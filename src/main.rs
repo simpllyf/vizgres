@@ -328,10 +328,10 @@ async fn run_app(
                 action = app.handle_event(event)?;
             }
 
-            // Background connection died on any tab
+            // Background connection died on a specific tab
             result = std::future::poll_fn(|cx| conn_mgr.poll_connection_errors(cx)) => {
-                let (_tab_id, msg) = result;
-                action = app.handle_event(AppEvent::ConnectionLost(msg))?;
+                let (tab_id, msg) = result;
+                action = app.handle_event(AppEvent::ConnectionLost { tab_id, message: msg })?;
             }
 
             // Check for terminal input; drain all buffered events before rendering
@@ -580,6 +580,10 @@ async fn run_app(
                 }
             }
             Action::TabClosed { tab_id } => {
+                conn_mgr.remove(tab_id);
+            }
+            Action::ReconnectTab { tab_id } => {
+                // Drop the dead connection; ensure_connected() will create a fresh one
                 conn_mgr.remove(tab_id);
             }
             Action::Disconnect => {

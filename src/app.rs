@@ -272,8 +272,8 @@ pub enum AppEvent {
     LoadMoreFailed(String),
     /// Bracketed paste event
     Paste(String),
-    /// Background database connection lost
-    ConnectionLost(String),
+    /// Background database connection lost on a specific tab
+    ConnectionLost { tab_id: usize, message: String },
 }
 
 /// Items loaded by load_more operations
@@ -314,7 +314,11 @@ pub enum Action {
         tab_id: usize,
     },
     Connect(ConnectionConfig),
-    /// Signal to clear provider and show reconnect dialog (on connection loss)
+    /// Drop a single tab's dead connection so it auto-reconnects on next query
+    ReconnectTab {
+        tab_id: usize,
+    },
+    /// Signal to clear all providers and show reconnect dialog
     Disconnect,
     Quit,
     None,
@@ -701,18 +705,17 @@ impl App {
                 self.set_status(format!("Load more failed: {}", err), StatusLevel::Error);
                 Ok(Action::None)
             }
-            AppEvent::ConnectionLost(msg) => {
-                // Reset all tabs' transaction state — connection is gone
-                for tab in &mut self.tabs {
-                    tab.transaction_state = TransactionState::Idle;
+            AppEvent::ConnectionLost { tab_id, .. } => {
+                // Reset only the affected tab's transaction state
+                if let Some(idx) = self.tab_index_by_id(tab_id) {
+                    self.tabs[idx].transaction_state = TransactionState::Idle;
+                    self.tabs[idx].rows_streaming = None;
                 }
-                self.connection_name = None;
-                self.is_saved_connection = false;
-                self.pending_save_query = false;
-                self.pending_export = None;
-                self.set_status(format!("Connection lost: {}", msg), StatusLevel::Error);
-                self.show_connection_dialog();
-                Ok(Action::Disconnect)
+                self.set_status(
+                    "Connection lost — will reconnect on next query".to_string(),
+                    StatusLevel::Warning,
+                );
+                Ok(Action::ReconnectTab { tab_id })
             }
         }
     }
@@ -2233,7 +2236,7 @@ mod tests {
     }
 
     #[test]
-    fn test_connection_lost_clears_saved_flag() {
+    fn test_connection_lost_preserves_connection_info() {
         use crate::db::schema::SchemaTree;
 
         let mut app = App::with_connection(
@@ -2246,10 +2249,14 @@ mod tests {
         assert!(app.is_saved_connection);
         assert!(app.connection_name.is_some());
 
-        app.handle_event(AppEvent::ConnectionLost("gone".to_string()))
-            .unwrap();
-        assert!(!app.is_saved_connection);
-        assert!(app.connection_name.is_none());
+        app.handle_event(AppEvent::ConnectionLost {
+            tab_id: 0,
+            message: "gone".to_string(),
+        })
+        .unwrap();
+        // Auto-reconnect preserves connection info for transparent reconnection
+        assert!(app.is_saved_connection);
+        assert!(app.connection_name.is_some());
     }
 
     #[test]
@@ -2287,51 +2294,61 @@ mod tests {
         app.focus = PanelFocus::QueryEditor;
 
         let action = app
-            .handle_event(AppEvent::ConnectionLost("server closed".to_string()))
+            .handle_event(AppEvent::ConnectionLost {
+                tab_id: 0,
+                message: "server closed".to_string(),
+            })
             .unwrap();
 
-        // Should return Disconnect action
-        assert!(matches!(action, Action::Disconnect));
+        // Should return ReconnectTab (not Disconnect)
+        assert!(matches!(action, Action::ReconnectTab { tab_id: 0 }));
 
-        // Connection dialog should be shown
-        assert!(app.connection_dialog.is_visible());
-        assert_eq!(app.focus, PanelFocus::ConnectionDialog);
+        // Should NOT show connection dialog — auto-reconnect is transparent
+        assert!(!app.connection_dialog.is_visible());
+        assert_eq!(app.focus, PanelFocus::QueryEditor);
 
-        // Status message should be set with "Connection lost:" prefix
+        // Status message should be a warning about reconnection
         let msg = &app.status_message.as_ref().unwrap();
-        assert!(msg.message.contains("Connection lost:"));
-        assert!(msg.message.contains("server closed"));
-        assert_eq!(msg.level, StatusLevel::Error);
+        assert!(msg.message.contains("reconnect"));
+        assert_eq!(msg.level, StatusLevel::Warning);
     }
 
     #[test]
-    fn test_connection_lost_preserves_previous_focus() {
+    fn test_connection_lost_preserves_focus() {
         let mut app = App::new();
         app.focus = PanelFocus::ResultsViewer;
 
-        app.handle_event(AppEvent::ConnectionLost("timeout".to_string()))
-            .unwrap();
+        app.handle_event(AppEvent::ConnectionLost {
+            tab_id: 0,
+            message: "timeout".to_string(),
+        })
+        .unwrap();
 
-        // previous_focus should be preserved for when dialog is dismissed
-        assert_eq!(app.previous_focus, PanelFocus::ResultsViewer);
-        assert_eq!(app.focus, PanelFocus::ConnectionDialog);
+        // Focus should stay where it was — no dialog interruption
+        assert_eq!(app.focus, PanelFocus::ResultsViewer);
     }
 
     #[test]
     fn test_connection_lost_while_query_running() {
         let mut app = App::new();
         app.tabs[0].query_running = true;
+        app.tabs[0].rows_streaming = Some(500);
 
         let action = app
-            .handle_event(AppEvent::ConnectionLost("connection reset".to_string()))
+            .handle_event(AppEvent::ConnectionLost {
+                tab_id: 0,
+                message: "connection reset".to_string(),
+            })
             .unwrap();
 
-        // Should still return Disconnect and show dialog
-        assert!(matches!(action, Action::Disconnect));
-        assert!(app.connection_dialog.is_visible());
+        // Should return ReconnectTab, not show dialog
+        assert!(matches!(action, Action::ReconnectTab { tab_id: 0 }));
+        assert!(!app.connection_dialog.is_visible());
 
-        // Query running flag should still be true (will be cleared when query fails)
+        // Query running flag still true (cleared when QueryFailed arrives)
         assert!(app.tabs[0].query_running);
+        // Streaming state cleared immediately
+        assert!(app.tabs[0].rows_streaming.is_none());
     }
 
     #[test]
@@ -2340,23 +2357,68 @@ mod tests {
         app.focus = PanelFocus::QueryEditor;
 
         // First connection loss
-        app.handle_event(AppEvent::ConnectionLost("first error".to_string()))
-            .unwrap();
-        assert!(app.connection_dialog.is_visible());
-        assert_eq!(app.focus, PanelFocus::ConnectionDialog);
+        app.handle_event(AppEvent::ConnectionLost {
+            tab_id: 0,
+            message: "first error".to_string(),
+        })
+        .unwrap();
+        assert_eq!(app.focus, PanelFocus::QueryEditor);
 
-        // Second connection loss (should be idempotent)
+        // Second connection loss (should be idempotent, no panic)
         let action = app
-            .handle_event(AppEvent::ConnectionLost("second error".to_string()))
+            .handle_event(AppEvent::ConnectionLost {
+                tab_id: 0,
+                message: "second error".to_string(),
+            })
             .unwrap();
 
-        // Should still work without panic
-        assert!(matches!(action, Action::Disconnect));
-        assert!(app.connection_dialog.is_visible());
-
-        // Status message should reflect the latest error
+        assert!(matches!(action, Action::ReconnectTab { tab_id: 0 }));
+        // Status message updated to latest
         let msg = &app.status_message.as_ref().unwrap();
-        assert!(msg.message.contains("second error"));
+        assert!(msg.message.contains("reconnect"));
+    }
+
+    #[test]
+    fn test_connection_lost_unknown_tab_no_panic() {
+        let mut app = App::new();
+        // Tab 99 doesn't exist — should not panic
+        let action = app
+            .handle_event(AppEvent::ConnectionLost {
+                tab_id: 99,
+                message: "gone".to_string(),
+            })
+            .unwrap();
+        assert!(matches!(action, Action::ReconnectTab { tab_id: 99 }));
+    }
+
+    #[test]
+    fn test_connection_lost_isolates_tabs() {
+        let mut app = App::new();
+        app.new_tab();
+        let tab1_id = app.tabs[1].id;
+
+        app.tabs[0].transaction_state = TransactionState::InTransaction;
+        app.tabs[1].transaction_state = TransactionState::InTransaction;
+        app.tabs[0].rows_streaming = Some(100);
+        app.tabs[1].rows_streaming = Some(200);
+
+        // Only tab 1 loses connection
+        app.handle_event(AppEvent::ConnectionLost {
+            tab_id: tab1_id,
+            message: "reset".to_string(),
+        })
+        .unwrap();
+
+        // Tab 0 completely unaffected
+        assert_eq!(
+            app.tabs[0].transaction_state,
+            TransactionState::InTransaction
+        );
+        assert_eq!(app.tabs[0].rows_streaming, Some(100));
+
+        // Tab 1 reset
+        assert_eq!(app.tabs[1].transaction_state, TransactionState::Idle);
+        assert!(app.tabs[1].rows_streaming.is_none());
     }
 
     #[test]
@@ -2364,12 +2426,15 @@ mod tests {
         let mut app = App::new();
         app.focus = PanelFocus::TreeBrowser;
 
-        app.handle_event(AppEvent::ConnectionLost("server shutdown".to_string()))
-            .unwrap();
+        app.handle_event(AppEvent::ConnectionLost {
+            tab_id: 0,
+            message: "server shutdown".to_string(),
+        })
+        .unwrap();
 
-        assert!(app.connection_dialog.is_visible());
-        assert_eq!(app.focus, PanelFocus::ConnectionDialog);
-        assert_eq!(app.previous_focus, PanelFocus::TreeBrowser);
+        // Focus stays on tree browser — no dialog interruption
+        assert!(!app.connection_dialog.is_visible());
+        assert_eq!(app.focus, PanelFocus::TreeBrowser);
     }
 
     #[test]
@@ -3702,8 +3767,11 @@ mod tests {
     fn test_transaction_state_reset_on_connection_lost() {
         let mut app = App::new();
         app.tabs[0].transaction_state = TransactionState::InTransaction;
-        app.handle_event(AppEvent::ConnectionLost("gone".to_string()))
-            .unwrap();
+        app.handle_event(AppEvent::ConnectionLost {
+            tab_id: 0,
+            message: "gone".to_string(),
+        })
+        .unwrap();
         assert_eq!(app.tabs[0].transaction_state, TransactionState::Idle);
     }
 
@@ -3991,7 +4059,7 @@ mod tests {
     }
 
     #[test]
-    fn test_connection_lost_resets_all_tabs_transaction_state() {
+    fn test_connection_lost_resets_only_affected_tab() {
         let mut app = App::new();
         app.new_tab();
 
@@ -3999,11 +4067,16 @@ mod tests {
         app.tabs[0].transaction_state = TransactionState::InTransaction;
         app.tabs[1].transaction_state = TransactionState::Failed;
 
-        app.handle_event(AppEvent::ConnectionLost("server crashed".to_string()))
-            .unwrap();
+        // Only tab 0 loses its connection
+        app.handle_event(AppEvent::ConnectionLost {
+            tab_id: 0,
+            message: "server crashed".to_string(),
+        })
+        .unwrap();
 
+        // Tab 0 reset, tab 1 unaffected
         assert_eq!(app.tabs[0].transaction_state, TransactionState::Idle);
-        assert_eq!(app.tabs[1].transaction_state, TransactionState::Idle);
+        assert_eq!(app.tabs[1].transaction_state, TransactionState::Failed);
     }
 
     // ── Saved queries tests ──────────────────────────
