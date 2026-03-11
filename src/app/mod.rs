@@ -592,7 +592,7 @@ impl App {
     /// Recompute completions based on current cursor context.
     fn update_completions(&mut self) {
         let idx = self.active_tab;
-        let (line_idx, col) = self.tabs[idx].editor.cursor();
+        let (line_idx, char_col) = self.tabs[idx].editor.cursor();
         let line = match self.tabs[idx].editor.line(line_idx) {
             Some(l) => l.to_string(),
             None => {
@@ -600,6 +600,13 @@ impl App {
                 return;
             }
         };
+
+        // Convert char-based cursor to byte offset for string operations
+        let col: usize = line
+            .char_indices()
+            .nth(char_col)
+            .map(|(i, _)| i)
+            .unwrap_or(line.len());
 
         // Only complete at end-of-word: next char (if any) should not be alphanumeric/underscore
         let bytes = line.as_bytes();
