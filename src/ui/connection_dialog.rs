@@ -24,6 +24,7 @@ pub enum DialogAction {
 enum DialogFocus {
     UrlInput,
     NameInput,
+    ReadOnlyToggle,
     SavedList,
 }
 
@@ -34,6 +35,7 @@ pub struct ConnectionDialog {
     url_cursor: usize,
     name_input: String,
     name_cursor: usize,
+    read_only: bool,
     connections: Vec<ConnectionConfig>,
     selected: usize,
     focus: DialogFocus,
@@ -48,6 +50,7 @@ impl ConnectionDialog {
             url_cursor: 0,
             name_input: String::new(),
             name_cursor: 0,
+            read_only: false,
             connections: Vec::new(),
             selected: 0,
             focus: DialogFocus::UrlInput,
@@ -62,6 +65,7 @@ impl ConnectionDialog {
         self.url_cursor = 0;
         self.name_input.clear();
         self.name_cursor = 0;
+        self.read_only = false;
         self.error = None;
         self.focus = DialogFocus::UrlInput;
         self.connections = load_connections().unwrap_or_default();
@@ -75,6 +79,7 @@ impl ConnectionDialog {
         self.url_cursor = 0;
         self.name_input.clear();
         self.name_cursor = 0;
+        self.read_only = false;
         self.error = None;
         self.connections.clear();
         self.selected = 0;
@@ -93,7 +98,8 @@ impl ConnectionDialog {
             KeyCode::Tab if key.modifiers == KeyModifiers::NONE => {
                 self.focus = match self.focus {
                     DialogFocus::UrlInput => DialogFocus::NameInput,
-                    DialogFocus::NameInput => {
+                    DialogFocus::NameInput => DialogFocus::ReadOnlyToggle,
+                    DialogFocus::ReadOnlyToggle => {
                         if self.connections.is_empty() {
                             DialogFocus::UrlInput
                         } else {
@@ -109,13 +115,14 @@ impl ConnectionDialog {
                 self.focus = match self.focus {
                     DialogFocus::UrlInput => {
                         if self.connections.is_empty() {
-                            DialogFocus::NameInput
+                            DialogFocus::ReadOnlyToggle
                         } else {
                             DialogFocus::SavedList
                         }
                     }
                     DialogFocus::NameInput => DialogFocus::UrlInput,
-                    DialogFocus::SavedList => DialogFocus::NameInput,
+                    DialogFocus::ReadOnlyToggle => DialogFocus::NameInput,
+                    DialogFocus::SavedList => DialogFocus::ReadOnlyToggle,
                 };
                 self.error = None;
                 return DialogAction::Consumed;
@@ -130,19 +137,26 @@ impl ConnectionDialog {
         match self.focus {
             DialogFocus::UrlInput => self.handle_text_input_key(key, true),
             DialogFocus::NameInput => self.handle_text_input_key(key, false),
+            DialogFocus::ReadOnlyToggle => {
+                if key.code == crossterm::event::KeyCode::Char(' ') {
+                    self.read_only = !self.read_only;
+                }
+                DialogAction::Consumed
+            }
             DialogFocus::SavedList => self.handle_list_key(key),
         }
     }
 
     fn handle_enter(&mut self) -> DialogAction {
         match self.focus {
-            DialogFocus::UrlInput | DialogFocus::NameInput => {
+            DialogFocus::UrlInput | DialogFocus::NameInput | DialogFocus::ReadOnlyToggle => {
                 if self.url_input.trim().is_empty() {
                     self.error = Some("URL is required".to_string());
                     return DialogAction::Consumed;
                 }
                 match ConnectionConfig::from_url(&self.url_input) {
                     Ok(mut config) => {
+                        config.read_only = self.read_only;
                         // If name is provided, save with that name
                         let name = self.name_input.trim().to_string();
                         if !name.is_empty() {
@@ -165,6 +179,7 @@ impl ConnectionDialog {
                     self.url_cursor = self.url_input.len();
                     self.name_input = conn.name.clone();
                     self.name_cursor = self.name_input.len();
+                    self.read_only = conn.read_only;
                     self.focus = DialogFocus::UrlInput;
                     self.error = None;
                 }
@@ -363,6 +378,21 @@ impl ConnectionDialog {
 
         y += 1;
 
+        // Read-only toggle
+        let check = if self.read_only { "x" } else { " " };
+        let ro_label = format!("  [{}] Read-only (block writes)", check);
+        let ro_style = if self.focus == DialogFocus::ReadOnlyToggle {
+            theme.dialog_input_focused
+        } else {
+            theme.dialog_input
+        };
+        frame.render_widget(
+            Paragraph::new(Span::styled(ro_label, ro_style)),
+            Rect::new(x, y, inner_width, 1),
+        );
+
+        y += 1;
+
         // Error message (if any)
         if let Some(ref err) = self.error {
             y += 1;
@@ -471,7 +501,7 @@ impl ConnectionDialog {
         if y < area.y + area.height {
             frame.render_widget(
                 Paragraph::new(Span::styled(
-                    "  Enter=connect  Tab=next  d=delete  Esc=cancel",
+                    "  Enter=connect  Tab=next  Space=toggle  d=delete  Esc=cancel",
                     theme.dialog_hint,
                 )),
                 Rect::new(x, y, inner_width, 1),
@@ -580,7 +610,10 @@ mod tests {
         dialog.handle_key(key(KeyCode::Tab));
         assert_eq!(dialog.focus, DialogFocus::NameInput);
 
-        // With no connections, Tab from Name goes back to URL
+        dialog.handle_key(key(KeyCode::Tab));
+        assert_eq!(dialog.focus, DialogFocus::ReadOnlyToggle);
+
+        // With no connections, Tab from ReadOnly goes back to URL
         dialog.handle_key(key(KeyCode::Tab));
         assert_eq!(dialog.focus, DialogFocus::UrlInput);
     }
@@ -604,7 +637,10 @@ mod tests {
         dialog.handle_key(key(KeyCode::Tab)); // URL → Name
         assert_eq!(dialog.focus, DialogFocus::NameInput);
 
-        dialog.handle_key(key(KeyCode::Tab)); // Name → List
+        dialog.handle_key(key(KeyCode::Tab)); // Name → ReadOnly
+        assert_eq!(dialog.focus, DialogFocus::ReadOnlyToggle);
+
+        dialog.handle_key(key(KeyCode::Tab)); // ReadOnly → List
         assert_eq!(dialog.focus, DialogFocus::SavedList);
 
         dialog.handle_key(key(KeyCode::Tab)); // List → URL
@@ -825,6 +861,10 @@ mod tests {
 
         assert_eq!(dialog.focus, DialogFocus::UrlInput);
 
+        // BackTab from URL → ReadOnlyToggle (skip empty list)
+        dialog.handle_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+        assert_eq!(dialog.focus, DialogFocus::ReadOnlyToggle);
+
         dialog.handle_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
         assert_eq!(dialog.focus, DialogFocus::NameInput);
 
@@ -987,5 +1027,71 @@ mod tests {
 
         dialog.handle_key(key(KeyCode::Left));
         assert_eq!(dialog.url_cursor, 0); // at start
+    }
+
+    #[test]
+    fn test_read_only_toggle() {
+        let mut dialog = ConnectionDialog::new();
+        dialog.show();
+        assert!(!dialog.read_only);
+
+        // Tab to ReadOnlyToggle
+        dialog.handle_key(key(KeyCode::Tab)); // URL → Name
+        dialog.handle_key(key(KeyCode::Tab)); // Name → ReadOnly
+        assert_eq!(dialog.focus, DialogFocus::ReadOnlyToggle);
+
+        // Space toggles it on
+        dialog.handle_key(char_key(' '));
+        assert!(dialog.read_only);
+
+        // Space toggles it off
+        dialog.handle_key(char_key(' '));
+        assert!(!dialog.read_only);
+    }
+
+    #[test]
+    fn test_read_only_applied_to_connection() {
+        let mut dialog = ConnectionDialog::new();
+        dialog.show();
+        dialog.read_only = true;
+
+        // Type a valid URL
+        for c in "postgres://user:pass@localhost/mydb".chars() {
+            dialog.handle_key(char_key(c));
+        }
+
+        let action = dialog.handle_key(key(KeyCode::Enter));
+        match action {
+            DialogAction::Connect(config) => {
+                assert!(config.read_only, "read_only should be applied to config");
+            }
+            _ => panic!("Expected Connect action"),
+        }
+    }
+
+    #[test]
+    fn test_loading_saved_connection_populates_read_only() {
+        let mut dialog = ConnectionDialog::new();
+        dialog.show();
+        dialog.connections = vec![ConnectionConfig {
+            name: "prod".to_string(),
+            host: "db.example.com".to_string(),
+            port: 5432,
+            database: "prod".to_string(),
+            username: "admin".to_string(),
+            password: None,
+            ssl_mode: crate::config::connections::SslMode::Prefer,
+            read_only: true,
+            is_saved: true,
+        }];
+
+        // Navigate to saved list and load it
+        dialog.focus = DialogFocus::SavedList;
+        dialog.selected = 0;
+        dialog.handle_key(key(KeyCode::Enter));
+
+        // read_only should be populated from the saved connection
+        assert!(dialog.read_only);
+        assert!(dialog.url_input.contains("db.example.com"));
     }
 }

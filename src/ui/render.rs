@@ -263,7 +263,7 @@ fn render_connection_dialog_popup(frame: &mut Frame, theme: &Theme, app: &App) {
     let screen = frame.area();
 
     let popup_w: u16 = 60.min(screen.width.saturating_sub(2));
-    let popup_h: u16 = 18.min(screen.height.saturating_sub(2));
+    let popup_h: u16 = 19.min(screen.height.saturating_sub(2));
     let popup_x = (screen.width.saturating_sub(popup_w)) / 2;
     let popup_y = (screen.height.saturating_sub(popup_h)) / 2;
     let popup_area = Rect::new(popup_x, popup_y, popup_w, popup_h);
