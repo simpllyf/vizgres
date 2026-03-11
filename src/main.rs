@@ -21,6 +21,11 @@ use vizgres::error::{DbError, connection_hint};
 #[derive(Parser)]
 #[command(name = "vizgres", version, about)]
 #[command(args_conflicts_with_subcommands = true)]
+#[command(after_help = "\
+Examples:
+  vizgres postgres://user:pass@localhost:5432/mydb
+  vizgres myprofile
+  vizgres config edit")]
 struct Cli {
     #[command(subcommand)]
     command: Option<CliCommand>,

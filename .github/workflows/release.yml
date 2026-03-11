@@ -85,6 +85,10 @@ jobs:
           - target: aarch64-apple-darwin
             runner: macos-latest
             artifact: vizgres-macos-aarch64
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-latest
+            artifact: vizgres-linux-aarch64
+            cross: true
           - target: x86_64-pc-windows-msvc
             runner: windows-latest
             artifact: vizgres-windows-x86_64
@@ -98,8 +102,17 @@ jobs:
       - name: Add target
         run: rustup target add ${{ matrix.target }}
 
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
       - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }}
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }}
+          else
+            cargo build --release --target ${{ matrix.target }}
+          fi
 
       - name: Package artifact (Unix)
         if: runner.os != 'Windows'
@@ -146,6 +159,7 @@ jobs:
         run: |
           gh release upload "v${RELEASE_VERSION}" \
             dist/vizgres-linux-x86_64/vizgres-linux-x86_64.tar.gz \
+            dist/vizgres-linux-aarch64/vizgres-linux-aarch64.tar.gz \
             dist/vizgres-macos-x86_64/vizgres-macos-x86_64.tar.gz \
             dist/vizgres-macos-aarch64/vizgres-macos-aarch64.tar.gz \
             dist/vizgres-windows-x86_64/vizgres-windows-x86_64.zip \

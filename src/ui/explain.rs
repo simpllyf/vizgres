@@ -59,6 +59,8 @@ pub struct ExplainViewer {
     max_time: f64,
     /// Cached line count for raw text view (avoids O(n) recount on every keystroke)
     raw_text_line_count: usize,
+    /// Viewport height captured during render(), used by page_up/page_down navigation.
+    /// Cell allows mutation from &self in the Component::render signature.
     page_height: Cell<usize>,
 }
 
