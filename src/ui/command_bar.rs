@@ -80,25 +80,39 @@ impl Component for CommandBar {
                     return ComponentAction::Ignored;
                 }
                 self.input.insert(self.cursor, c);
-                self.cursor += 1;
+                self.cursor += c.len_utf8();
                 ComponentAction::Consumed
             }
             KeyCode::Backspace => {
                 if self.cursor > 0 {
-                    self.input.remove(self.cursor - 1);
-                    self.cursor -= 1;
+                    // Find previous char boundary
+                    let prev = self.input[..self.cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
+                    self.input.remove(prev);
+                    self.cursor = prev;
                 }
                 ComponentAction::Consumed
             }
             KeyCode::Left => {
                 if self.cursor > 0 {
-                    self.cursor -= 1;
+                    self.cursor = self.input[..self.cursor]
+                        .char_indices()
+                        .next_back()
+                        .map(|(i, _)| i)
+                        .unwrap_or(0);
                 }
                 ComponentAction::Consumed
             }
             KeyCode::Right => {
                 if self.cursor < self.input.len() {
-                    self.cursor += 1;
+                    self.cursor = self.input[self.cursor..]
+                        .char_indices()
+                        .nth(1)
+                        .map(|(i, _)| self.cursor + i)
+                        .unwrap_or(self.input.len());
                 }
                 ComponentAction::Consumed
             }
@@ -124,8 +138,10 @@ impl Component for CommandBar {
         let paragraph = Paragraph::new(display).style(theme.command_text);
         frame.render_widget(paragraph, area);
 
-        // Show cursor
-        let cursor_x = area.x + prompt.len() as u16 + self.cursor as u16;
+        // Show cursor — use char count for display width, not byte count
+        let prompt_width = prompt.chars().count() as u16;
+        let input_width = self.input[..self.cursor].chars().count() as u16;
+        let cursor_x = area.x + prompt_width + input_width;
         if cursor_x < area.x + area.width {
             frame.set_cursor_position(Position::new(cursor_x, area.y));
         }
@@ -184,5 +200,54 @@ mod tests {
         bar.activate();
         assert!(!bar.is_prompt_mode());
         assert_eq!(bar.input_text(), "");
+    }
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn test_multibyte_insert_and_cursor() {
+        let mut bar = CommandBar::new();
+        bar.activate();
+        // Type "café" — é is 2 bytes in UTF-8
+        bar.handle_key(key(KeyCode::Char('c')));
+        bar.handle_key(key(KeyCode::Char('a')));
+        bar.handle_key(key(KeyCode::Char('f')));
+        bar.handle_key(key(KeyCode::Char('é')));
+        assert_eq!(bar.input, "café");
+        assert_eq!(bar.cursor, 5); // 3 ASCII bytes + 2 bytes for é
+    }
+
+    #[test]
+    fn test_multibyte_backspace() {
+        let mut bar = CommandBar::new();
+        bar.activate();
+        bar.handle_key(key(KeyCode::Char('c')));
+        bar.handle_key(key(KeyCode::Char('é')));
+        assert_eq!(bar.cursor, 3); // 1 + 2
+        bar.handle_key(key(KeyCode::Backspace));
+        assert_eq!(bar.input, "c");
+        assert_eq!(bar.cursor, 1);
+    }
+
+    #[test]
+    fn test_multibyte_left_right() {
+        let mut bar = CommandBar::new();
+        bar.activate();
+        bar.handle_key(key(KeyCode::Char('a')));
+        bar.handle_key(key(KeyCode::Char('é')));
+        bar.handle_key(key(KeyCode::Char('b')));
+        // cursor at end: byte 4
+        assert_eq!(bar.cursor, 4);
+        // Left once: skip back over 'b' (1 byte)
+        bar.handle_key(key(KeyCode::Left));
+        assert_eq!(bar.cursor, 3);
+        // Left again: skip back over 'é' (2 bytes)
+        bar.handle_key(key(KeyCode::Left));
+        assert_eq!(bar.cursor, 1);
+        // Right: skip forward over 'é' (2 bytes)
+        bar.handle_key(key(KeyCode::Right));
+        assert_eq!(bar.cursor, 3);
     }
 }
