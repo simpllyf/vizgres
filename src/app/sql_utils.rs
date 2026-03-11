@@ -156,47 +156,104 @@ pub(super) fn translate_meta_command(input: &str) -> Option<String> {
              ORDER BY name"
                 .to_string(),
         ),
-        "\\d" => {
-            let table = arg.filter(|a| !a.is_empty())?;
-            // Sanitize: allow only alphanumeric, underscore, dot (for schema.table)
-            if !table
-                .chars()
-                .all(|c| c.is_alphanumeric() || c == '_' || c == '.')
-            {
-                return None;
-            }
-            // Handle schema.table or just table
-            let (schema_filter, table_name) = if let Some(dot) = table.find('.') {
-                let s = &table[..dot];
-                let t = &table[dot + 1..];
-                if s.is_empty() || t.is_empty() || t.contains('.') {
-                    return None;
-                }
-                (format!("AND n.nspname = '{}'", s), t.to_string())
-            } else {
-                (
-                    "AND n.nspname NOT IN ('pg_catalog', 'information_schema')".to_string(),
-                    table.to_string(),
-                )
-            };
-            Some(format!(
-                "SELECT a.attname AS column, \
-                 pg_catalog.format_type(a.atttypid, a.atttypmod) AS type, \
-                 CASE WHEN a.attnotnull THEN 'not null' ELSE '' END AS nullable, \
-                 COALESCE(pg_catalog.pg_get_expr(d.adbin, d.adrelid), '') AS default \
-                 FROM pg_catalog.pg_attribute a \
-                 JOIN pg_catalog.pg_class c ON c.oid = a.attrelid \
-                 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
-                 LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum \
-                 WHERE c.relname = '{}' \
-                 {} \
-                 AND a.attnum > 0 AND NOT a.attisdropped \
-                 ORDER BY a.attnum",
-                table_name, schema_filter
-            ))
-        }
+        "\\d" => translate_describe_table(arg?),
         _ => None,
     }
+}
+
+/// Build the SQL for `\d table` — expanded to match psql output.
+///
+/// Shows columns, indexes, constraints (CHECK, FK, UNIQUE), referenced-by
+/// relationships, and triggers as a unified result set with a "section" column.
+fn translate_describe_table(table_arg: &str) -> Option<String> {
+    let table = table_arg.trim();
+    if table.is_empty() {
+        return None;
+    }
+    // Validate: only alphanumeric, underscore, dot (for schema.table)
+    if !table
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '_' || c == '.')
+    {
+        return None;
+    }
+    // Parse schema.table or just table
+    let (schema_filter, table_name) = if let Some(dot) = table.find('.') {
+        let s = &table[..dot];
+        let t = &table[dot + 1..];
+        if s.is_empty() || t.is_empty() || t.contains('.') {
+            return None;
+        }
+        (format!("AND n.nspname = '{}'", s), t.to_string())
+    } else {
+        (
+            "AND n.nspname NOT IN ('pg_catalog', 'information_schema')".to_string(),
+            table.to_string(),
+        )
+    };
+
+    // CTE to resolve the table OID once, then reuse across all sections
+    Some(format!(
+        "WITH tbl AS (\
+            SELECT c.oid, n.nspname, c.relname \
+            FROM pg_catalog.pg_class c \
+            JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace \
+            WHERE c.relname = '{table_name}' {schema_filter} \
+            LIMIT 1\
+         ) \
+         SELECT section, name, definition FROM (\
+            SELECT 1 AS section_order, 'Column' AS section, \
+                   a.attname AS name, \
+                   pg_catalog.format_type(a.atttypid, a.atttypmod) \
+                   || CASE WHEN a.attnotnull THEN ' NOT NULL' ELSE '' END \
+                   || CASE WHEN d.adbin IS NOT NULL \
+                           THEN ' DEFAULT ' || pg_catalog.pg_get_expr(d.adbin, d.adrelid) \
+                           ELSE '' END AS definition, \
+                   a.attnum AS sub_order \
+            FROM tbl \
+            JOIN pg_catalog.pg_attribute a ON a.attrelid = tbl.oid \
+            LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum \
+            WHERE a.attnum > 0 AND NOT a.attisdropped \
+         UNION ALL \
+            SELECT 2, 'Index', ci.relname, \
+                   pg_catalog.pg_get_indexdef(ix.indexrelid), \
+                   ci.relname::text::int4hash \
+            FROM tbl \
+            JOIN pg_catalog.pg_index ix ON ix.indrelid = tbl.oid \
+            JOIN pg_catalog.pg_class ci ON ci.oid = ix.indexrelid \
+         UNION ALL \
+            SELECT 3, \
+                   CASE con.contype \
+                       WHEN 'c' THEN 'Check' \
+                       WHEN 'f' THEN 'FK' \
+                       WHEN 'u' THEN 'Unique' \
+                       WHEN 'p' THEN 'PK' \
+                       WHEN 'x' THEN 'Exclusion' \
+                   END, \
+                   con.conname, \
+                   pg_catalog.pg_get_constraintdef(con.oid, true), \
+                   con.conname::text::int4hash \
+            FROM tbl \
+            JOIN pg_catalog.pg_constraint con ON con.conrelid = tbl.oid \
+         UNION ALL \
+            SELECT 4, 'Referenced by', \
+                   ref_n.nspname || '.' || ref_c.relname, \
+                   pg_catalog.pg_get_constraintdef(con.oid, true), \
+                   con.conname::text::int4hash \
+            FROM tbl \
+            JOIN pg_catalog.pg_constraint con ON con.confrelid = tbl.oid AND con.contype = 'f' \
+            JOIN pg_catalog.pg_class ref_c ON ref_c.oid = con.conrelid \
+            JOIN pg_catalog.pg_namespace ref_n ON ref_n.oid = ref_c.relnamespace \
+         UNION ALL \
+            SELECT 5, 'Trigger', t.tgname, \
+                   pg_catalog.pg_get_triggerdef(t.oid, true), \
+                   t.tgname::text::int4hash \
+            FROM tbl \
+            JOIN pg_catalog.pg_trigger t ON t.tgrelid = tbl.oid \
+            WHERE NOT t.tgisinternal \
+         ) sub \
+         ORDER BY section_order, sub_order",
+    ))
 }
 
 /// Convert a 1-based byte offset (from PostgreSQL error) to (line, col) position.
