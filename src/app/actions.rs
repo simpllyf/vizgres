@@ -483,7 +483,22 @@ impl App {
             KeyAction::ShowDefinition => {
                 if self.focus == PanelFocus::TreeBrowser {
                     if let Some((schema, table)) = self.tree_browser.selected_table_info() {
-                        // Query to get table DDL
+                        // Validate identifiers — pg_catalog names are safe, but
+                        // defense-in-depth prevents SQL injection if the invariant
+                        // is ever violated upstream.
+                        let valid = |s: &str| {
+                            !s.is_empty()
+                                && s.chars()
+                                    .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
+                        };
+                        if !valid(&schema) || !valid(&table) {
+                            self.set_status(
+                                "Invalid identifier in selection".to_string(),
+                                StatusLevel::Warning,
+                            );
+                            return Action::None;
+                        }
+                        // Query to get table DDL — identifiers are validated above
                         let sql = format!(
                             "SELECT \
                                 'CREATE TABLE ' || quote_ident(n.nspname) || '.' || quote_ident(c.relname) || ' (' || \
@@ -499,8 +514,7 @@ impl App {
                             LEFT JOIN pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum \
                             WHERE n.nspname = '{}' AND c.relname = '{}' \
                             GROUP BY n.nspname, c.relname",
-                            schema.replace('\'', "''"),
-                            table.replace('\'', "''")
+                            schema, table
                         );
                         let tab_id = self.tab().id;
                         let timeout_ms = self.query_timeout_ms;
