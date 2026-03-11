@@ -142,13 +142,10 @@ pub struct Index {
     /// Columns covered by this index
     pub columns: Vec<String>,
     /// Whether this is a unique index
-    #[allow(dead_code)]
     pub is_unique: bool,
     /// Whether this is the primary key index
-    #[allow(dead_code)]
     pub is_primary: bool,
     /// Table this index belongs to
-    #[allow(dead_code)]
     pub table_name: String,
 }
 
