@@ -389,6 +389,16 @@ impl HelpOverlay {
             help_line("  /connect", "Connection picker", key, desc),
             help_line("  /refresh", "Reload schema", key, desc),
             help_line("  /save-query [name]", "Save current query", key, desc),
+            blank.clone(),
+            Line::from(Span::styled(
+                "Meta-Commands (type in editor, then execute)",
+                section,
+            )),
+            help_line("  \\dt", "List tables", key, desc),
+            help_line("  \\dv", "List views", key, desc),
+            help_line("  \\di", "List indexes", key, desc),
+            help_line("  \\d <table>", "Describe table columns", key, desc),
+            help_line("  \\dn", "List schemas", key, desc),
         ]
     }
 
