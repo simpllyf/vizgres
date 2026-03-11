@@ -78,10 +78,14 @@ async fn main() -> Result<()> {
         original_hook(panic_info);
     }));
 
-    // Resolve connection target (URL or saved name)
-    let (mut conn_mgr, mut app) = if let Some(ref target) = cli.connect.target {
-        let conn_config = resolve_connection(target)?;
+    // Resolve connection target: CLI arg > PG* env vars > connection dialog
+    let conn_config = if let Some(ref target) = cli.connect.target {
+        Some(resolve_connection(target)?)
+    } else {
+        ConnectionConfig::from_env()
+    };
 
+    let (mut conn_mgr, mut app) = if let Some(conn_config) = conn_config {
         eprintln!("Connecting to {}...", conn_config.name);
         let (prov, rx) =
             db::PostgresProvider::connect(&conn_config, settings.settings.statement_timeout_ms)

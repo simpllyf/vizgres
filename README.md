@@ -44,11 +44,15 @@ Requires Rust 1.93+ (2024 edition). Tested against PostgreSQL 18; compatible wit
 # Connect via URL
 vizgres postgres://user:pass@localhost:5432/mydb
 
-# Interactive connection dialog
-vizgres
-
 # Connect to saved profile
 vizgres myprofile
+
+# Connect via PG* environment variables (PGHOST, PGDATABASE, PGUSER, etc.)
+export PGDATABASE=mydb PGHOST=localhost PGUSER=me
+vizgres
+
+# Interactive connection dialog (when no target or env vars)
+vizgres
 ```
 
 ## Keybindings
