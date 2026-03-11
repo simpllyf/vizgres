@@ -10,19 +10,27 @@ A fast, keyboard-driven PostgreSQL client for the terminal.
 
 - **Schema Browser**: Navigate schemas, tables, views, functions, indexes with expand/collapse
 - **SQL Editor**: Multi-line editing with syntax highlighting, autocomplete, undo/redo
-- **Query Execution**: Run queries with configurable timeout, cancel running queries
-- **EXPLAIN ANALYZE**: One-key query plan analysis
-- **Results Viewer**: Scrollable table with auto-pagination, cell-level navigation, and NULL styling
+- **Query Execution**: Run queries with configurable timeout, cancel running queries, streaming row counter
+- **EXPLAIN ANALYZE**: One-key query plan analysis with visual tree viewer and color-coded timing
+- **Results Viewer**: Scrollable table with auto-pagination, cell-level navigation, resizable columns, and NULL styling
 - **Inspector**: Full cell content viewer with JSON pretty-printing
 - **Export**: Save results as CSV or JSON
 - **Query History**: Navigate previous queries with Ctrl+Up/Down
 - **Multi-Tab**: Work with multiple queries simultaneously
 - **Connection Profiles**: Save and manage database connections
+- **Auto-Reconnect**: Per-tab transparent reconnection on connection loss
+- **Read-Only Mode**: Per-connection write protection with destructive query confirmation
+- **Color Themes**: Dark, light, midnight, and ember themes
+- **Meta-Commands**: psql-style `\dt`, `\dv`, `\di`, `\dn`, `\d table`
 - **Large Schema Support**: Pagination for databases with 10k+ tables
 
 ## Install
 
 ```bash
+# From crates.io
+cargo install vizgres
+
+# From source
 cargo install --path .
 ```
 
@@ -91,6 +99,9 @@ Press `?` in-app for full keybinding help. All keybindings are configurable in `
 | j/k or ↑/↓ | Navigate rows |
 | h/l or ←/→ | Navigate columns |
 | Enter | Open inspector |
+| v | Toggle view mode (vertical / explain tree↔text) |
+| Shift+H / Shift+L | Narrow / Widen column |
+| Shift+R | Reset column widths |
 | Ctrl+C | Copy cell |
 | Ctrl+Shift+C | Copy row |
 | Ctrl+S | Export as CSV |
@@ -107,15 +118,31 @@ Open the command bar with `Ctrl+P`:
 |---------|--------|
 | `/connect [url]` | Connect to database |
 | `/refresh` | Reload schema |
+| `/save-query [name]` | Save current query |
 | `/clear` | Clear editor |
 | `/help` | Show help |
 | `/quit` | Quit |
+
+## Meta-Commands
+
+Type in the editor and execute (like psql):
+
+| Command | Action |
+|---------|--------|
+| `\dt` | List tables |
+| `\dv` | List views |
+| `\di` | List indexes |
+| `\dn` | List schemas |
+| `\d <table>` | Describe table (columns, indexes, constraints, triggers) |
 
 ## Configuration
 
 Settings are stored in `~/.vizgres/config.toml`:
 
 ```toml
+# Color theme: dark, light, midnight, ember
+theme = "dark"
+
 # Query timeout in milliseconds (0 = no timeout)
 query_timeout_ms = 30000
 
@@ -137,6 +164,8 @@ history_size = 500
 ```
 
 Connection profiles are stored in `~/.vizgres/connections.toml`.
+
+Manage config: `vizgres config edit`, `vizgres config list`, `vizgres config path`.
 
 ## License
 

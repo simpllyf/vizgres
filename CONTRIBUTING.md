@@ -27,18 +27,28 @@ If using mise, ensure it's activated in your shell or prefix with `mise exec --`
 
 ```
 src/
-├── main.rs         # Entry point, terminal setup, event loop
-├── app.rs          # Application state and event handling
-├── keymap.rs       # Data-driven keybinding config
-├── history.rs      # Query history ring buffer
-├── config/         # Connection URL parsing, SSL
-├── commands/       # Command bar parsing
-├── db/             # Database layer (PostgreSQL)
-└── ui/             # TUI components
-    ├── render.rs   # Top-level render orchestrator
-    ├── tree.rs     # Schema tree browser
-    ├── editor.rs   # Query editor
-    ├── results.rs  # Results viewer
+├── main.rs                # Entry point, terminal setup, event loop
+├── app/                   # Application state (split module)
+│   ├── mod.rs             # App struct, types, constructors, helpers
+│   ├── event_handler.rs   # Event dispatch (key, query results, etc.)
+│   ├── actions.rs         # Key action execution
+│   ├── sql_utils.rs       # SQL analysis (destructive/write detection, meta-commands)
+│   └── tests.rs           # Unit tests
+├── keymap.rs              # Data-driven keybinding config
+├── history.rs             # Query history ring buffer
+├── connection_manager.rs  # Per-tab connection management with auto-reconnect
+├── export.rs              # CSV/JSON export
+├── error.rs               # Error hierarchy
+├── config/                # Connection URL parsing, SSL, settings
+├── commands/              # Command bar parsing
+├── db/                    # Database layer (PostgreSQL)
+└── ui/                    # TUI components
+    ├── render.rs          # Top-level render orchestrator
+    ├── tree.rs            # Schema tree browser
+    ├── editor.rs          # Query editor
+    ├── results.rs         # Results viewer
+    ├── explain.rs         # EXPLAIN tree viewer
+    ├── theme.rs           # Color themes
     └── ...
 ```
 

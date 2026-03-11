@@ -32,9 +32,11 @@ Events → `App::handle_event()` → `Action` → Main loop executes → UI rend
 
 ### Connection Lifecycle
 
-Connection is established **before** the TUI starts. The app validates
-the URL, connects, and loads the schema. If anything fails, the process
-exits with a clear error — the TUI never opens in a disconnected state.
+When a target is provided on the CLI, the connection is established
+**before** the TUI starts — if it fails, the process exits with a clear error.
+Without a target, the TUI opens in disconnected state and shows the
+connection dialog. Connections are managed per-tab via `ConnectionManager`
+with automatic reconnection on connection loss.
 
 ### Component Trait
 
@@ -170,15 +172,25 @@ Before committing:
 
 ### Query Editor
 - `F5` / `Ctrl+Enter` — Execute query
+- `Ctrl+E` — EXPLAIN ANALYZE
 - `Ctrl+L` — Clear editor
-- `Delete` — Forward delete
+- `Ctrl+Z` / `Ctrl+Shift+Z` — Undo / Redo
+- `Ctrl+Shift+F` — Format SQL
+- `Ctrl+Up/Down` — Query history
+- `Escape` — Cancel running query
 
 ### Results Viewer
 - `h/j/k/l` or arrow keys — Navigate cells
 - `Enter` — Open inspector popup
+- `v` — Toggle view mode (vertical / explain tree↔text)
+- `Shift+H` / `Shift+L` — Narrow / Widen column
+- `Shift+R` — Reset column widths
 - `y` — Copy cell to clipboard
 - `Y` — Copy row to clipboard
+- `Ctrl+S` — Export CSV
+- `Ctrl+J` — Export JSON
 - `g` / `G` — Jump to first/last row
+- `n` / `p` — Next / Previous page
 
 ### Inspector (popup)
 - `Esc` — Close
@@ -186,7 +198,9 @@ Before committing:
 - `j/k` or arrows — Scroll
 
 ### Command Bar
+- `/connect [url]` — Connect to database
 - `/refresh` / `/r` — Reload schema
+- `/save-query [name]` — Save current query
 - `/clear` / `/cl` — Clear query editor
 - `/help` / `/h` — Show help
 - `/quit` / `/q` — Quit
