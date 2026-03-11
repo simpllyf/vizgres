@@ -42,6 +42,10 @@ pub struct SettingsInner {
     /// (DROP, TRUNCATE, DELETE without WHERE). Default: true.
     #[serde(default = "default_confirm_destructive")]
     pub confirm_destructive: bool,
+    /// Default read-only mode for all connections. Per-connection `read_only`
+    /// in connections.toml overrides this. Default: false.
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 /// Keybinding overrides organized by panel context
@@ -100,6 +104,7 @@ impl Default for SettingsInner {
             tree_category_limit: default_tree_category_limit(),
             statement_timeout_ms: default_statement_timeout_ms(),
             confirm_destructive: default_confirm_destructive(),
+            read_only: false,
         }
     }
 }
@@ -176,6 +181,7 @@ const DEFAULT_CONFIG_TEMPLATE: &str = r#"# vizgres configuration
 # tree_category_limit = 500 # items per category before pagination, 0 = unlimited
 # statement_timeout_ms = 60000  # 60 seconds server-side timeout, 0 = disabled
 # confirm_destructive = true    # prompt before DROP, TRUNCATE, DELETE without WHERE
+# read_only = false             # default read-only mode for all connections
 
 [keybindings.global]
 # "ctrl+q" = "quit"
@@ -401,5 +407,21 @@ confirm_destructive = false
 "#;
         let settings: Settings = toml::from_str(toml_str).unwrap();
         assert!(!settings.settings.confirm_destructive);
+    }
+
+    #[test]
+    fn test_read_only_defaults_false() {
+        let settings: Settings = toml::from_str("").unwrap();
+        assert!(!settings.settings.read_only);
+    }
+
+    #[test]
+    fn test_read_only_can_enable() {
+        let toml_str = r#"
+[settings]
+read_only = true
+"#;
+        let settings: Settings = toml::from_str(toml_str).unwrap();
+        assert!(settings.settings.read_only);
     }
 }

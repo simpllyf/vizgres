@@ -154,6 +154,12 @@ pub struct App {
     /// Whether to prompt before executing destructive queries (DROP, TRUNCATE, etc.)
     confirm_destructive: bool,
 
+    /// Read-only mode — blocks write queries at client level
+    pub read_only: bool,
+
+    /// Global default for read-only mode (from settings)
+    default_read_only: bool,
+
     /// SQL pending destructive-query confirmation (waiting for y/n)
     pending_confirm_sql: Option<PendingConfirm>,
 
@@ -337,6 +343,8 @@ impl App {
             max_result_rows: settings.settings.max_result_rows,
             statement_timeout_ms: settings.settings.statement_timeout_ms,
             confirm_destructive: settings.settings.confirm_destructive,
+            read_only: settings.settings.read_only,
+            default_read_only: settings.settings.read_only,
             pending_confirm_sql: None,
             status_message: None,
             clipboard,
@@ -356,12 +364,14 @@ impl App {
     pub fn with_connection(
         name: String,
         saved: bool,
+        connection_read_only: bool,
         schema: SchemaTree,
         settings: &Settings,
     ) -> Self {
         let mut app = Self::new_with_settings(settings);
         app.connection_name = Some(name.clone());
         app.is_saved_connection = saved;
+        app.read_only = app.default_read_only || connection_read_only;
         app.tree_browser.set_schema(schema);
         app.load_saved_queries_for(&name, saved);
         app
@@ -872,6 +882,16 @@ impl App {
             KeyAction::ExecuteQuery => {
                 let sql = self.tab().editor.get_content();
                 if !sql.trim().is_empty() {
+                    // Block writes in read-only mode
+                    if self.read_only
+                        && let Some(label) = is_write_query(&sql)
+                    {
+                        self.set_status(
+                            format!("Read-only mode: {} queries are blocked", label),
+                            StatusLevel::Error,
+                        );
+                        return Action::None;
+                    }
                     // Check for destructive query
                     if self.confirm_destructive
                         && let Some(label) = is_destructive_query(&sql)
@@ -1664,15 +1684,20 @@ impl App {
         self.connection_dialog.show();
     }
 
-    /// Apply a new connection (after successful connect + schema load)
+    /// Apply a new connection (after successful connect + schema load).
+    /// `connection_read_only` is the per-connection setting; when `true`,
+    /// it overrides the global default to enable read-only mode.
     pub fn apply_connection(
         &mut self,
         name: String,
         saved: bool,
+        connection_read_only: bool,
         schema: crate::db::schema::SchemaTree,
     ) {
         self.connection_name = Some(name.clone());
         self.is_saved_connection = saved;
+        // Per-connection read_only overrides global default
+        self.read_only = self.default_read_only || connection_read_only;
         self.tree_browser.set_schema(schema);
         self.load_saved_queries_for(&name, saved);
         // Reset all tabs to fresh state (transaction_state resets via Tab::new)
@@ -1852,6 +1877,43 @@ fn is_destructive_query(sql: &str) -> Option<&'static str> {
     None
 }
 
+/// Check if a SQL statement is a write operation that should be blocked in read-only mode.
+/// Returns None for read-only queries (SELECT, EXPLAIN, SHOW, etc.),
+/// or Some("LABEL") for write operations.
+fn is_write_query(sql: &str) -> Option<&'static str> {
+    let trimmed = sql.trim();
+    let upper: String = trimmed.chars().take(200).collect::<String>().to_uppercase();
+
+    if upper.starts_with("INSERT") {
+        return Some("INSERT");
+    }
+    if upper.starts_with("UPDATE") {
+        return Some("UPDATE");
+    }
+    if upper.starts_with("DELETE") {
+        return Some("DELETE");
+    }
+    if upper.starts_with("CREATE") {
+        return Some("CREATE");
+    }
+    if upper.starts_with("ALTER") {
+        return Some("ALTER");
+    }
+    if upper.starts_with("DROP") {
+        return Some("DROP");
+    }
+    if upper.starts_with("TRUNCATE") {
+        return Some("TRUNCATE");
+    }
+    if upper.starts_with("GRANT") || upper.starts_with("REVOKE") {
+        return Some("GRANT/REVOKE");
+    }
+    if upper.starts_with("COMMENT") {
+        return Some("COMMENT");
+    }
+    None
+}
+
 /// Convert a 1-based byte offset (from PostgreSQL error) to (line, col) position.
 /// PostgreSQL positions are 1-indexed, so we subtract 1 to get 0-indexed offset.
 fn byte_offset_to_position(content: &str, offset: u32) -> (usize, usize) {
@@ -1904,7 +1966,13 @@ mod tests {
                 functions: PaginatedVec::default(),
             }]),
         };
-        let app = App::with_connection("test-db".to_string(), false, schema, &Settings::default());
+        let app = App::with_connection(
+            "test-db".to_string(),
+            false,
+            false,
+            schema,
+            &Settings::default(),
+        );
         assert_eq!(app.connection_name.as_deref(), Some("test-db"));
         assert!(!app.is_saved_connection);
     }
@@ -1917,6 +1985,7 @@ mod tests {
         let app = App::with_connection(
             "prod".to_string(),
             true,
+            false,
             SchemaTree::new(),
             &Settings::default(),
         );
@@ -1925,11 +1994,16 @@ mod tests {
         // apply_connection propagates the flag
         let mut app = App::new();
         assert!(!app.is_saved_connection);
-        app.apply_connection("prod".to_string(), true, SchemaTree::new());
+        app.apply_connection("prod".to_string(), true, false, SchemaTree::new());
         assert!(app.is_saved_connection);
 
         // Reconnecting with unsaved clears the flag
-        app.apply_connection("adhoc@localhost".to_string(), false, SchemaTree::new());
+        app.apply_connection(
+            "adhoc@localhost".to_string(),
+            false,
+            false,
+            SchemaTree::new(),
+        );
         assert!(!app.is_saved_connection);
     }
 
@@ -1940,6 +2014,7 @@ mod tests {
         let mut app = App::with_connection(
             "prod".to_string(),
             true,
+            false,
             SchemaTree::new(),
             &Settings::default(),
         );
@@ -2321,7 +2396,13 @@ mod tests {
                 functions: PaginatedVec::default(),
             }]),
         };
-        let mut app = App::with_connection("test".to_string(), false, schema, &Settings::default());
+        let mut app = App::with_connection(
+            "test".to_string(),
+            false,
+            false,
+            schema,
+            &Settings::default(),
+        );
         app.focus = PanelFocus::TreeBrowser;
 
         // Navigate to the "users" table node via public API
@@ -2386,7 +2467,13 @@ mod tests {
                 },
             ]),
         };
-        let mut app = App::with_connection("test".to_string(), false, schema, &Settings::default());
+        let mut app = App::with_connection(
+            "test".to_string(),
+            false,
+            false,
+            schema,
+            &Settings::default(),
+        );
         app.focus = PanelFocus::TreeBrowser;
 
         // Navigate to the collapsed "other" schema node
@@ -2898,7 +2985,7 @@ mod tests {
             }]),
         };
 
-        app.apply_connection("new-db".to_string(), false, schema);
+        app.apply_connection("new-db".to_string(), false, false, schema);
 
         assert_eq!(app.connection_name.as_deref(), Some("new-db"));
         assert_eq!(app.tabs.len(), 1);
@@ -3119,7 +3206,13 @@ mod tests {
                 functions: PaginatedVec::default(),
             }]),
         };
-        let mut app = App::with_connection("test".to_string(), false, schema, &Settings::default());
+        let mut app = App::with_connection(
+            "test".to_string(),
+            false,
+            false,
+            schema,
+            &Settings::default(),
+        );
         app.focus = PanelFocus::TreeBrowser;
 
         // Navigate to users table
@@ -3275,7 +3368,7 @@ mod tests {
 
         let mut app = App::new();
         app.tabs[0].transaction_state = TransactionState::InTransaction;
-        app.apply_connection("test".to_string(), false, SchemaTree::new());
+        app.apply_connection("test".to_string(), false, false, SchemaTree::new());
         assert_eq!(app.tabs[0].transaction_state, TransactionState::Idle);
     }
 
@@ -3470,7 +3563,7 @@ mod tests {
         use crate::db::schema::SchemaTree;
         let mut app = App::new();
         app.tabs[0].transaction_state = TransactionState::InTransaction;
-        app.apply_connection("test-db".to_string(), false, SchemaTree::new());
+        app.apply_connection("test-db".to_string(), false, false, SchemaTree::new());
         assert_eq!(app.connection_name.as_deref(), Some("test-db"));
         assert_eq!(app.tabs[0].transaction_state, TransactionState::Idle);
     }
@@ -4005,5 +4098,143 @@ mod tests {
         // Page stays at 0 — no rollback needed
         let pg = app.tab().pagination.as_ref().unwrap();
         assert_eq!(pg.current_page, 0);
+    }
+
+    // ── is_write_query tests ──────────────────────────────────────
+
+    #[test]
+    fn test_is_write_query_detects_writes() {
+        assert_eq!(
+            is_write_query("INSERT INTO users VALUES (1)"),
+            Some("INSERT")
+        );
+        assert_eq!(is_write_query("update users set name='x'"), Some("UPDATE"));
+        assert_eq!(is_write_query("  DELETE FROM users"), Some("DELETE"));
+        assert_eq!(is_write_query("CREATE TABLE t (id int)"), Some("CREATE"));
+        assert_eq!(is_write_query("ALTER TABLE t ADD col int"), Some("ALTER"));
+        assert_eq!(is_write_query("DROP TABLE users"), Some("DROP"));
+        assert_eq!(is_write_query("TRUNCATE users"), Some("TRUNCATE"));
+        assert_eq!(
+            is_write_query("GRANT SELECT ON t TO u"),
+            Some("GRANT/REVOKE")
+        );
+        assert_eq!(
+            is_write_query("REVOKE ALL ON t FROM u"),
+            Some("GRANT/REVOKE")
+        );
+        assert_eq!(is_write_query("COMMENT ON TABLE t IS 'x'"), Some("COMMENT"));
+    }
+
+    #[test]
+    fn test_is_write_query_allows_reads() {
+        assert_eq!(is_write_query("SELECT 1"), None);
+        assert_eq!(is_write_query("select * from users"), None);
+        assert_eq!(is_write_query("EXPLAIN ANALYZE SELECT 1"), None);
+        assert_eq!(is_write_query("  SHOW server_version"), None);
+        assert_eq!(is_write_query("BEGIN"), None);
+        assert_eq!(is_write_query("COMMIT"), None);
+        assert_eq!(is_write_query("ROLLBACK"), None);
+        assert_eq!(is_write_query("SET search_path TO public"), None);
+    }
+
+    // ── Read-only mode tests ──────────────────────────────────────
+
+    #[test]
+    fn test_read_only_blocks_write_query() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let mut app = App::new();
+        app.read_only = true;
+        app.focus = PanelFocus::QueryEditor;
+        app.tab_mut()
+            .editor
+            .insert_text("INSERT INTO users VALUES (1)");
+
+        let execute = KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE);
+        let action = app.handle_key(execute);
+        assert!(matches!(action, Action::None));
+        assert!(app.status_message.is_some());
+        assert!(
+            app.status_message
+                .as_ref()
+                .unwrap()
+                .message
+                .contains("Read-only"),
+            "Expected read-only error, got: {}",
+            app.status_message.as_ref().unwrap().message,
+        );
+    }
+
+    #[test]
+    fn test_read_only_allows_select() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let mut app = App::new();
+        app.read_only = true;
+        app.focus = PanelFocus::QueryEditor;
+        app.tab_mut().editor.insert_text("SELECT * FROM users");
+
+        let execute = KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE);
+        let action = app.handle_key(execute);
+        // Should proceed to execution (returns ExecuteQuery), not block
+        assert!(!matches!(action, Action::None));
+    }
+
+    #[test]
+    fn test_read_only_not_set_allows_writes() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let mut app = App::new();
+        app.read_only = false;
+        app.focus = PanelFocus::QueryEditor;
+        app.tab_mut().editor.insert_text("DROP TABLE users");
+
+        let execute = KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE);
+        let _action = app.handle_key(execute);
+        // Without read_only, destructive confirmation dialog appears (not blocked)
+        assert!(
+            app.status_message.is_some()
+                && app
+                    .status_message
+                    .as_ref()
+                    .unwrap()
+                    .message
+                    .contains("DROP"),
+        );
+    }
+
+    #[test]
+    fn test_apply_connection_sets_read_only() {
+        use crate::db::schema::SchemaTree;
+
+        let mut app = App::new();
+        assert!(!app.read_only);
+
+        // Connection with read_only = true enables it
+        app.apply_connection("prod".to_string(), true, true, SchemaTree::new());
+        assert!(app.read_only);
+
+        // Connection with read_only = false disables it (when global is false)
+        app.apply_connection("dev".to_string(), false, false, SchemaTree::new());
+        assert!(!app.read_only);
+    }
+
+    #[test]
+    fn test_global_read_only_overrides_connection() {
+        use crate::config::settings::Settings;
+        use crate::db::schema::SchemaTree;
+
+        let mut settings = Settings::default();
+        settings.settings.read_only = true;
+
+        // Global read_only = true, connection read_only = false → still read-only
+        let app = App::with_connection(
+            "dev".to_string(),
+            false,
+            false,
+            SchemaTree::new(),
+            &settings,
+        );
+        assert!(app.read_only, "global read_only should override connection");
     }
 }

@@ -34,6 +34,10 @@ pub struct ConnectionConfig {
     #[serde(default)]
     pub ssl_mode: SslMode,
 
+    /// Read-only mode — blocks writes at client and server level
+    #[serde(default)]
+    pub read_only: bool,
+
     /// Whether this connection was loaded from or saved to connections.toml.
     /// Runtime-only flag — not serialized.
     #[serde(skip)]
@@ -51,6 +55,7 @@ impl PartialEq for ConnectionConfig {
             && self.username == other.username
             && self.password == other.password
             && self.ssl_mode == other.ssl_mode
+            && self.read_only == other.read_only
     }
 }
 
@@ -132,6 +137,7 @@ impl ConnectionConfig {
             username,
             password,
             ssl_mode,
+            read_only: false,
             is_saved: false,
         })
     }
@@ -170,11 +176,15 @@ impl ConnectionConfig {
             parts.push(format!("password='{}'", escaped));
         }
 
+        let mut options = Vec::new();
         if statement_timeout_ms > 0 {
-            parts.push(format!(
-                "options='-c statement_timeout={}'",
-                statement_timeout_ms
-            ));
+            options.push(format!("-c statement_timeout={}", statement_timeout_ms));
+        }
+        if self.read_only {
+            options.push("-c default_transaction_read_only=on".to_string());
+        }
+        if !options.is_empty() {
+            parts.push(format!("options='{}'", options.join(" ")));
         }
 
         parts.join(" ")
@@ -371,6 +381,7 @@ mod tests {
             username: "user".to_string(),
             password: None,
             ssl_mode: SslMode::Disable,
+            read_only: false,
             is_saved: false,
         };
         assert_eq!(
@@ -446,6 +457,7 @@ mod tests {
             username: "user".to_string(),
             password: Some("secret".to_string()),
             ssl_mode: SslMode::Disable,
+            read_only: false,
             is_saved: false,
         };
         assert_eq!(
@@ -464,6 +476,7 @@ mod tests {
             username: "user".to_string(),
             password: Some("it's a p@ss\\word".to_string()),
             ssl_mode: SslMode::Disable,
+            read_only: false,
             is_saved: false,
         };
         assert_eq!(
@@ -482,6 +495,7 @@ mod tests {
             username: "user".to_string(),
             password: Some("secret".to_string()),
             ssl_mode: SslMode::Disable,
+            read_only: false,
             is_saved: false,
         };
         assert_eq!(
@@ -500,6 +514,7 @@ mod tests {
             username: "user".to_string(),
             password: None,
             ssl_mode: SslMode::Prefer,
+            read_only: false,
             is_saved: false,
         };
         let conn_str = config.connection_string_with_password(0);
@@ -626,6 +641,7 @@ mod tests {
             username: "user".to_string(),
             password: Some("pass".to_string()),
             ssl_mode: SslMode::Prefer,
+            read_only: false,
             is_saved: false,
         };
         let url = original.to_url();
@@ -648,6 +664,7 @@ mod tests {
             username: "user".to_string(),
             password: Some("p@ss:w/rd".to_string()),
             ssl_mode: SslMode::Prefer,
+            read_only: false,
             is_saved: false,
         };
         let url = config.to_url();
@@ -668,6 +685,7 @@ mod tests {
             username: "user".to_string(),
             password: None,
             ssl_mode: SslMode::Prefer,
+            read_only: false,
             is_saved: false,
         };
         let url = config.to_url();
@@ -684,6 +702,7 @@ mod tests {
             username: "user".to_string(),
             password: Some("pass".to_string()),
             ssl_mode: SslMode::Require,
+            read_only: false,
             is_saved: false,
         };
         let url = config.to_url();
@@ -700,6 +719,7 @@ mod tests {
             username: "user".to_string(),
             password: None,
             ssl_mode: SslMode::Prefer,
+            read_only: false,
             is_saved: false,
         };
         let url = config.to_url();
@@ -716,6 +736,7 @@ mod tests {
             username: "user".to_string(),
             password: Some("pass".to_string()),
             ssl_mode: SslMode::Prefer,
+            read_only: false,
             is_saved: false,
         };
         let url = config.to_url();
@@ -735,6 +756,7 @@ mod tests {
             username: "user".to_string(),
             password: Some("secret".to_string()),
             ssl_mode: SslMode::Prefer,
+            read_only: false,
             is_saved: false,
         };
         let toml_str = toml::to_string_pretty(&config).unwrap();
@@ -757,6 +779,7 @@ mod tests {
             username: "user".to_string(),
             password: Some("supersecret".to_string()),
             ssl_mode: SslMode::Prefer,
+            read_only: false,
             is_saved: false,
         };
         let masked = config.to_url_masked();
@@ -774,6 +797,7 @@ mod tests {
             username: "user".to_string(),
             password: None,
             ssl_mode: SslMode::Prefer,
+            read_only: false,
             is_saved: false,
         };
         assert_eq!(config.to_url_masked(), "postgres://user@localhost/mydb");
@@ -789,6 +813,7 @@ mod tests {
             username: "admin".to_string(),
             password: Some("secret".to_string()),
             ssl_mode: SslMode::Require,
+            read_only: false,
             is_saved: false,
         };
         let masked = config.to_url_masked();
@@ -810,6 +835,7 @@ mod tests {
             username: "user".to_string(),
             password: None,
             ssl_mode: SslMode::Prefer,
+            read_only: false,
             is_saved: false,
         };
         let toml_str = toml::to_string_pretty(&config).unwrap();
@@ -825,5 +851,108 @@ mod tests {
         let mut b = a.clone();
         b.is_saved = true;
         assert_eq!(a, b, "is_saved should not affect equality");
+    }
+
+    #[test]
+    fn test_connection_string_read_only() {
+        let config = ConnectionConfig {
+            name: "test".to_string(),
+            host: "localhost".to_string(),
+            port: 5432,
+            database: "mydb".to_string(),
+            username: "user".to_string(),
+            password: None,
+            ssl_mode: SslMode::Prefer,
+            read_only: true,
+            is_saved: false,
+        };
+        let conn_str = config.connection_string_with_password(0);
+        assert!(
+            conn_str.contains("default_transaction_read_only=on"),
+            "read_only should set server-side GUC: {conn_str}"
+        );
+    }
+
+    #[test]
+    fn test_connection_string_read_only_with_timeout() {
+        let config = ConnectionConfig {
+            name: "test".to_string(),
+            host: "localhost".to_string(),
+            port: 5432,
+            database: "mydb".to_string(),
+            username: "user".to_string(),
+            password: None,
+            ssl_mode: SslMode::Prefer,
+            read_only: true,
+            is_saved: false,
+        };
+        let conn_str = config.connection_string_with_password(60000);
+        assert!(
+            conn_str.contains("statement_timeout=60000"),
+            "should contain statement_timeout: {conn_str}"
+        );
+        assert!(
+            conn_str.contains("default_transaction_read_only=on"),
+            "should contain read_only GUC: {conn_str}"
+        );
+        // Both options should be in a single options='...' parameter
+        let options_count = conn_str.matches("options=").count();
+        assert_eq!(
+            options_count, 1,
+            "should combine into single options param: {conn_str}"
+        );
+    }
+
+    #[test]
+    fn test_connection_string_not_read_only() {
+        let config = ConnectionConfig {
+            name: "test".to_string(),
+            host: "localhost".to_string(),
+            port: 5432,
+            database: "mydb".to_string(),
+            username: "user".to_string(),
+            password: None,
+            ssl_mode: SslMode::Prefer,
+            read_only: false,
+            is_saved: false,
+        };
+        let conn_str = config.connection_string_with_password(0);
+        assert!(
+            !conn_str.contains("default_transaction_read_only"),
+            "should not contain read_only GUC when false: {conn_str}"
+        );
+    }
+
+    #[test]
+    fn test_read_only_serializes_to_toml() {
+        let config = ConnectionConfig {
+            name: "prod".to_string(),
+            host: "db.example.com".to_string(),
+            port: 5432,
+            database: "prod".to_string(),
+            username: "admin".to_string(),
+            password: None,
+            ssl_mode: SslMode::Prefer,
+            read_only: true,
+            is_saved: false,
+        };
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+        assert!(
+            toml_str.contains("read_only = true"),
+            "read_only should serialize: {toml_str}"
+        );
+    }
+
+    #[test]
+    fn test_read_only_defaults_false_in_toml() {
+        let toml_str = r#"
+            name = "test"
+            host = "localhost"
+            port = 5432
+            database = "mydb"
+            username = "user"
+        "#;
+        let config: ConnectionConfig = toml::from_str(toml_str).unwrap();
+        assert!(!config.read_only, "read_only should default to false");
     }
 }

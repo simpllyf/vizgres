@@ -101,6 +101,7 @@ pub struct Theme {
     pub status_help_hint: Style,
     pub status_txn_active: Style,
     pub status_txn_failed: Style,
+    pub status_read_only: Style,
     pub status_confirm: Style,
 }
 
@@ -241,6 +242,10 @@ impl Default for Theme {
             status_txn_failed: Style::default()
                 .fg(Color::White)
                 .bg(Color::Red)
+                .add_modifier(Modifier::BOLD),
+            status_read_only: Style::default()
+                .fg(Color::White)
+                .bg(Color::Blue)
                 .add_modifier(Modifier::BOLD),
             status_confirm: Style::default()
                 .fg(Color::Yellow)

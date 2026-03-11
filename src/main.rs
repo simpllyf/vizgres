@@ -97,6 +97,7 @@ async fn main() -> Result<()> {
         let app = App::with_connection(
             conn_config.name.clone(),
             conn_config.is_saved,
+            conn_config.read_only,
             schema,
             &settings,
         );
@@ -392,7 +393,12 @@ async fn run_app(
                         let limit = app.tree_browser.category_limit();
                         match prov.get_schema(limit).await {
                             Ok(schema) => {
-                                app.apply_connection(config.name.clone(), config.is_saved, schema);
+                                app.apply_connection(
+                                    config.name.clone(),
+                                    config.is_saved,
+                                    config.read_only,
+                                    schema,
+                                );
                                 app.set_status(
                                     format!("Connected to {}", config.name),
                                     StatusLevel::Success,
