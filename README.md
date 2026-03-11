@@ -1,5 +1,9 @@
 # vizgres
 
+[![CI](https://github.com/simpllyf/vizgres/actions/workflows/ci.yml/badge.svg)](https://github.com/simpllyf/vizgres/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/vizgres.svg)](https://crates.io/crates/vizgres)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A fast, keyboard-driven PostgreSQL client for the terminal.
 
 ## Features
