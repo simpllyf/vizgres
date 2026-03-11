@@ -319,19 +319,25 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         TransactionState::Failed => Some((" TXN FAILED ", theme.status_txn_failed)),
     };
 
-    let conn_info = if let Some(ref name) = app.connection_name {
+    let (conn_dot, conn_dot_style) = if app.connection_name.is_some() {
+        ("\u{25cf} ", Style::default().fg(Color::Green))
+    } else {
+        ("\u{25cf} ", Style::default().fg(Color::Red))
+    };
+    let conn_label = if let Some(ref name) = app.connection_name {
         format!("[{}]", name)
     } else {
         "[disconnected]".to_string()
     };
 
-    // Calculate total right-side width
+    // Calculate total right-side width (dot + label + txn badge)
+    let dot_len = 2u16; // "● " = 2 chars
     let badge_len = txn_badge.as_ref().map_or(0, |(s, _)| s.len() as u16);
     let spacer = if badge_len > 0 { 1u16 } else { 0 };
-    let right_total = conn_info.len() as u16 + badge_len + spacer;
+    let right_total = dot_len + conn_label.len() as u16 + badge_len + spacer;
     let right_x = area.x + area.width.saturating_sub(right_total);
 
-    // Render TXN badge (if any), then connection info
+    // Render TXN badge (if any), then dot + connection info
     let mut cursor_x = right_x;
     if let Some((badge_text, badge_style)) = txn_badge {
         frame.render_widget(
@@ -341,7 +347,12 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         cursor_x += badge_len + spacer;
     }
     frame.render_widget(
-        Paragraph::new(conn_info).style(theme.status_conn_info),
+        Paragraph::new(conn_dot).style(conn_dot_style),
+        Rect::new(cursor_x, area.y, dot_len.min(area.width), 1),
+    );
+    cursor_x += dot_len;
+    frame.render_widget(
+        Paragraph::new(conn_label).style(theme.status_conn_info),
         Rect::new(
             cursor_x,
             area.y,

@@ -108,6 +108,8 @@ pub struct Table {
     pub name: String,
     /// Columns in this table
     pub columns: Vec<Column>,
+    /// Estimated row count from pg_stat_user_tables (None for views)
+    pub row_count: Option<i64>,
 }
 
 /// A table column

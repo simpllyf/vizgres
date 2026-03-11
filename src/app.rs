@@ -1897,6 +1897,7 @@ mod tests {
                 tables: PaginatedVec::from_vec(vec![Table {
                     name: "users".to_string(),
                     columns: vec![],
+                    row_count: None,
                 }]),
                 views: PaginatedVec::default(),
                 indexes: PaginatedVec::default(),
@@ -2313,6 +2314,7 @@ mod tests {
                 tables: PaginatedVec::from_vec(vec![Table {
                     name: "users".to_string(),
                     columns: vec![],
+                    row_count: None,
                 }]),
                 views: PaginatedVec::default(),
                 indexes: PaginatedVec::default(),
@@ -2365,6 +2367,7 @@ mod tests {
                     tables: PaginatedVec::from_vec(vec![Table {
                         name: "t".to_string(),
                         columns: vec![],
+                        row_count: None,
                     }]),
                     views: PaginatedVec::default(),
                     indexes: PaginatedVec::default(),
@@ -2375,6 +2378,7 @@ mod tests {
                     tables: PaginatedVec::from_vec(vec![Table {
                         name: "x".to_string(),
                         columns: vec![],
+                        row_count: None,
                     }]),
                     views: PaginatedVec::default(),
                     indexes: PaginatedVec::default(),
@@ -2886,6 +2890,7 @@ mod tests {
                 tables: PaginatedVec::from_vec(vec![Table {
                     name: "users".to_string(),
                     columns: vec![],
+                    row_count: None,
                 }]),
                 views: PaginatedVec::default(),
                 indexes: PaginatedVec::default(),
@@ -3107,6 +3112,7 @@ mod tests {
                 tables: PaginatedVec::from_vec(vec![Table {
                     name: "users".to_string(),
                     columns: vec![],
+                    row_count: None,
                 }]),
                 views: PaginatedVec::default(),
                 indexes: PaginatedVec::default(),
