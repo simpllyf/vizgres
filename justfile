@@ -61,9 +61,10 @@ update-keywords:
 
 # ─── Version ──────────────────────────────────────────
 
-# Stamp VERSION into Cargo.toml and regenerate lockfile
+# Stamp VERSION into Cargo.toml, site, and regenerate lockfile
 stamp-version:
     sed -i 's/^version = "[^"]*"/version = "{{version}}"/' Cargo.toml
+    sed -i 's/class="site-version">v[^<]*/class="site-version">v{{version}}/' site/index.html
     cargo generate-lockfile
 
 # Print current version
