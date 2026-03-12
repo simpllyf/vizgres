@@ -38,6 +38,9 @@ tarpaulin-report.html
 # User configuration (may contain secrets)
 .vizgres/
 
+# IMDb dataset cache
+.imdb-data/
+
 # Logs
 *.log
 

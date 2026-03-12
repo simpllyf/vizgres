@@ -181,6 +181,24 @@ chmod 600 ~/.vizgres/connections.toml
 
 Manage config: `vizgres config edit`, `vizgres config list`, `vizgres config path`.
 
+## Sample Database
+
+A script is included to load the [IMDb non-commercial dataset](https://developer.imdb.com/non-commercial-datasets/) (~200M rows across 7 tables) into the local Docker/Podman PostgreSQL. Useful for testing vizgres against a realistic workload:
+
+```bash
+# Start PostgreSQL and load IMDb data (~1.5 GB download, takes a few minutes)
+just db-up
+just imdb-load
+
+# Connect
+vizgres postgres://test_user:test_password@localhost:5433/imdb
+
+# Clean up when done
+just imdb-clean
+```
+
+Downloaded files are cached in `.imdb-data/` and reused if less than 24 hours old.
+
 ## License
 
 MIT
