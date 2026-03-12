@@ -49,6 +49,15 @@ db-up:
 db-down:
     docker compose -f docker-compose.test.yml down
 
+# Load IMDb dataset (~200M rows) into local PostgreSQL for testing
+imdb-load:
+    ./scripts/load-imdb.sh
+
+# Drop the IMDb database
+imdb-clean:
+    docker exec vizgres-test-db env PGPASSWORD=test_password psql -U test_user -d postgres -c "DROP DATABASE IF EXISTS imdb" 2>/dev/null || \
+    podman exec vizgres-test-db env PGPASSWORD=test_password psql -U test_user -d postgres -c "DROP DATABASE IF EXISTS imdb"
+
 # Regenerate data/sql_keywords.txt from PostgreSQL docs
 update-keywords:
     curl -s https://www.postgresql.org/docs/18/sql-keywords-appendix.html \
