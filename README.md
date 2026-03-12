@@ -173,7 +173,11 @@ history_size = 500
 "ctrl+c" = "copy_cell"
 ```
 
-Connection profiles are stored in `~/.vizgres/connections.toml`.
+Connection profiles are stored in `~/.vizgres/connections.toml`. If you store passwords there, restrict file permissions:
+
+```bash
+chmod 600 ~/.vizgres/connections.toml
+```
 
 Manage config: `vizgres config edit`, `vizgres config list`, `vizgres config path`.
 
