@@ -21,6 +21,10 @@ test:
 test-integration:
     cargo test --test integration
 
+# Run IMDb acceptance tests (requires: just db-up && just imdb-load)
+test-acceptance:
+    cargo test --test imdb_acceptance -- --nocapture
+
 # Check compilation
 check:
     cargo check
