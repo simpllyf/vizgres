@@ -566,7 +566,7 @@ async fn meta_di_lists_indexes() {
     let results = db
         .execute_query(
             "SELECT n.nspname AS schema, ci.relname AS name, \
-             ct.relname AS table, \
+             ct.relname AS tbl, \
              am.amname AS method \
              FROM pg_catalog.pg_index ix \
              JOIN pg_catalog.pg_class ci ON ci.oid = ix.indexrelid \
@@ -574,7 +574,7 @@ async fn meta_di_lists_indexes() {
              JOIN pg_catalog.pg_namespace n ON n.oid = ci.relnamespace \
              JOIN pg_catalog.pg_am am ON am.oid = ci.relam \
              WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') \
-             ORDER BY schema, table, name",
+             ORDER BY schema, tbl, name",
             30_000,
             0,
         )
