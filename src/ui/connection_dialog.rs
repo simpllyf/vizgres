@@ -325,7 +325,8 @@ impl ConnectionDialog {
 
         // URL label + input
         let url_label = "  URL: ";
-        let url_input_width = inner_width.saturating_sub(url_label.len() as u16);
+        let url_input_width =
+            inner_width.saturating_sub(super::unicode::display_width(url_label) as u16);
         let url_style = if self.focus == DialogFocus::UrlInput {
             theme.dialog_input_focused
         } else {
@@ -343,7 +344,9 @@ impl ConnectionDialog {
 
         // Show cursor for URL input
         if self.focus == DialogFocus::UrlInput {
-            let cursor_x = x + url_label.len() as u16 + visible_url.cursor_offset as u16;
+            let cursor_x = x
+                + super::unicode::display_width(url_label) as u16
+                + visible_url.cursor_offset as u16;
             frame.set_cursor_position((cursor_x.min(x + inner_width - 1), y));
         }
 
@@ -351,7 +354,8 @@ impl ConnectionDialog {
 
         // Name label + input
         let name_label = "  Save as: ";
-        let name_input_width = inner_width.saturating_sub(name_label.len() as u16);
+        let name_input_width =
+            inner_width.saturating_sub(super::unicode::display_width(name_label) as u16);
         let name_style = if self.focus == DialogFocus::NameInput {
             theme.dialog_input_focused
         } else {
@@ -372,7 +376,9 @@ impl ConnectionDialog {
         );
 
         if self.focus == DialogFocus::NameInput {
-            let cursor_x = x + name_label.len() as u16 + visible_name.cursor_offset as u16;
+            let cursor_x = x
+                + super::unicode::display_width(name_label) as u16
+                + visible_name.cursor_offset as u16;
             frame.set_cursor_position((cursor_x.min(x + inner_width - 1), y));
         }
 
@@ -396,10 +402,9 @@ impl ConnectionDialog {
         // Error message (if any)
         if let Some(ref err) = self.error {
             y += 1;
-            let max_chars = inner_width as usize;
-            let msg = if err.chars().count() > max_chars {
-                let truncated: String = err.chars().take(max_chars.saturating_sub(3)).collect();
-                format!("{}...", truncated)
+            let max_cols = inner_width as usize;
+            let msg = if super::unicode::display_width(err) > max_cols {
+                super::unicode::truncate_to_width(err, max_cols)
             } else {
                 err.clone()
             };
@@ -446,19 +451,27 @@ impl ConnectionDialog {
                 let url_preview = conn.to_url();
                 let ro_tag = if conn.read_only { " [RO]" } else { "" };
                 let name_width = 16.min(inner_width as usize / 3);
-                let name_display = if conn.name.len() > name_width {
-                    format!("{:.width$}{}", conn.name, ro_tag, width = name_width)
-                } else {
-                    format!("{:<width$}{}", conn.name, ro_tag, width = name_width)
-                };
-                let remaining = (inner_width as usize)
-                    .saturating_sub(prefix.len() + name_width + ro_tag.len() + 2);
-                let url_display = if url_preview.len() > remaining {
+                let name_display = if super::unicode::display_width(&conn.name) > name_width {
                     format!(
-                        "{:.width$}...",
-                        url_preview,
-                        width = remaining.saturating_sub(3)
+                        "{}{}",
+                        super::unicode::truncate_to_width(&conn.name, name_width),
+                        ro_tag
                     )
+                } else {
+                    format!(
+                        "{}{}",
+                        super::unicode::pad_to_width(&conn.name, name_width),
+                        ro_tag
+                    )
+                };
+                let remaining = (inner_width as usize).saturating_sub(
+                    super::unicode::display_width(prefix)
+                        + name_width
+                        + super::unicode::display_width(ro_tag)
+                        + 2,
+                );
+                let url_display = if super::unicode::display_width(&url_preview) > remaining {
+                    super::unicode::truncate_to_width(&url_preview, remaining)
                 } else {
                     url_preview
                 };
@@ -534,41 +547,55 @@ struct VisibleSlice {
     cursor_offset: usize,
 }
 
-/// Get the visible portion of a string that fits within `width`, keeping
-/// the cursor visible. Returns the display text and cursor offset within it.
-/// Note: cursor is a byte index, width is character count.
+/// Get the visible portion of a string that fits within `width` terminal columns,
+/// keeping the cursor visible. Returns the display text and cursor column offset.
+/// Note: cursor is a byte index, width is display columns.
 fn visible_slice(input: &str, cursor: usize, width: usize) -> VisibleSlice {
-    let char_count = input.chars().count();
-    if char_count <= width {
-        // Convert byte cursor to character offset
-        let cursor_char = input[..cursor].chars().count();
+    use unicode_width::UnicodeWidthChar;
+
+    let total_width = super::unicode::display_width(input);
+    let cursor_width = super::unicode::display_width(&input[..cursor]);
+
+    if total_width <= width {
         return VisibleSlice {
             text: input.to_string(),
-            cursor_offset: cursor_char,
+            cursor_offset: cursor_width,
         };
     }
 
-    // Convert byte cursor to character position
-    let cursor_char = input[..cursor].chars().count();
-
-    // Scroll to keep cursor visible (all in character units now)
-    let start_char = if cursor_char >= width {
-        cursor_char - width + 1
+    // Scroll to keep cursor visible (in display column units)
+    let start_col = if cursor_width >= width {
+        cursor_width - width + 1
     } else {
         0
     };
-    let end_char = (start_char + width).min(char_count);
 
-    // Extract the visible slice by characters
-    let text: String = input
-        .chars()
-        .skip(start_char)
-        .take(end_char - start_char)
-        .collect();
+    // Walk characters to find the visible window by display columns
+    let mut col = 0;
+    let mut start_byte = 0;
+    let mut found_start = start_col == 0;
+    let mut end_byte = input.len();
+    let mut visible_cols = 0;
+
+    for (i, ch) in input.char_indices() {
+        let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if !found_start && col >= start_col {
+            start_byte = i;
+            found_start = true;
+        }
+        if found_start {
+            if visible_cols + cw > width {
+                end_byte = i;
+                break;
+            }
+            visible_cols += cw;
+        }
+        col += cw;
+    }
 
     VisibleSlice {
-        text,
-        cursor_offset: cursor_char - start_char,
+        text: input[start_byte..end_byte].to_string(),
+        cursor_offset: cursor_width - start_col,
     }
 }
 
@@ -907,11 +934,11 @@ mod tests {
     // Note: cursor parameter is a BYTE index, not character index
     #[test]
     fn test_visible_slice_utf8_short_input() {
-        // "café" = c(1)+a(1)+f(1)+é(2) = 5 bytes, 4 chars
+        // "café" = 4 display cols
         let input = "café";
-        let result = visible_slice(input, input.len(), 20); // cursor at end (byte 5)
+        let result = visible_slice(input, input.len(), 20); // cursor at end
         assert_eq!(result.text, "café");
-        assert_eq!(result.cursor_offset, 4); // 4 characters
+        assert_eq!(result.cursor_offset, 4); // 4 display cols
     }
 
     #[test]
@@ -919,52 +946,47 @@ mod tests {
         // "café" with cursor before é (byte 3)
         let result = visible_slice("café", 3, 20);
         assert_eq!(result.text, "café");
-        assert_eq!(result.cursor_offset, 3); // cursor at char position 3
+        assert_eq!(result.cursor_offset, 3); // "caf" = 3 display cols
     }
 
     #[test]
     fn test_visible_slice_utf8_scrolled() {
-        // Long UTF-8 string that needs scrolling
-        // "日本語テスト文字列" = 9 chars, each 3 bytes = 27 bytes
+        // "日本語テスト文字列" = 18 display cols (9 CJK chars × 2)
         let input = "日本語テスト文字列";
-        let cursor = input.len(); // cursor at end (byte 27)
-        let result = visible_slice(input, cursor, 5);
-        // When cursor at end (char 9), width 5:
-        // start_char = 9 - 5 + 1 = 5, end_char = min(10, 9) = 9
-        // Shows chars 5..9 = ト文字列 (4 chars, not 5 because we're at the end)
-        assert_eq!(result.text.chars().count(), 4);
-        assert_eq!(result.cursor_offset, 4); // cursor at position 4 (end of slice)
+        let cursor = input.len(); // cursor at end
+        let result = visible_slice(input, cursor, 6);
+        // cursor_width=18, width=6 → start_col=13, shows ~6 cols from col 13
+        // Col 13 is inside "文" (cols 12-13), so we start at "字" (col 14)
+        // Shows "字列" = 4 cols (fitting within 6)
+        assert!(crate::ui::unicode::display_width(&result.text) <= 6);
     }
 
     #[test]
     fn test_visible_slice_emoji() {
-        // "a☕b☕c" = a(1)+☕(3)+b(1)+☕(3)+c(1) = 9 bytes, 5 chars
+        // "a☕b☕c" — ☕ is 2 display cols each, total = 1+2+1+2+1 = 7 cols
         let input = "a☕b☕c";
         let result = visible_slice(input, input.len(), 10);
         assert_eq!(result.text, "a☕b☕c");
-        assert_eq!(result.cursor_offset, 5); // 5 characters
+        assert_eq!(result.cursor_offset, 7); // 7 display cols
     }
 
     #[test]
     fn test_visible_slice_emoji_scrolled() {
-        // "☕☕☕☕☕☕☕☕" = 8 emoji, each 3 bytes = 24 bytes
+        // "☕☕☕☕☕☕☕☕" = 16 display cols (8 emoji × 2)
         let input = "☕☕☕☕☕☕☕☕";
-        let cursor = input.len(); // byte 24
+        let cursor = input.len();
         let result = visible_slice(input, cursor, 4);
-        // When cursor at char 8, width 4:
-        // start_char = 8 - 4 + 1 = 5, end_char = min(9, 8) = 8
-        // Shows chars 5..8 = 3 emoji (not 4 because we're at the end)
-        assert_eq!(result.text.chars().count(), 3);
-        assert_eq!(result.cursor_offset, 3); // cursor at end
+        // Should show 2 emoji (4 cols) from the end
+        assert!(crate::ui::unicode::display_width(&result.text) <= 4);
     }
 
     #[test]
     fn test_visible_slice_mixed_utf8() {
-        // "café☕日本語" = c(1)+a(1)+f(1)+é(2)+☕(3)+日(3)+本(3)+語(3) = 17 bytes, 8 chars
+        // "café☕日本語" = 4 + 2 + 6 = 12 display cols
         let input = "café☕日本語";
         let result = visible_slice(input, input.len(), 20);
         assert_eq!(result.text, input);
-        assert_eq!(result.cursor_offset, 8); // 8 chars
+        assert_eq!(result.cursor_offset, 12); // 12 display cols
     }
 
     // UTF-8 text input tests

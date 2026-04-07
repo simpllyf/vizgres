@@ -353,7 +353,7 @@ impl Component for ResultsViewer {
             // Show "name: type" in header for better context
             let header_text = format!("{}: {}", col_def.name, col_def.data_type.display_name());
             let header = truncate_str(&header_text, w as usize);
-            let padded = format!("{:<width$}", header, width = w as usize);
+            let padded = super::unicode::pad_to_width(&header, w as usize);
             frame.render_widget(
                 Paragraph::new(padded).style(style),
                 Rect::new(x, header_y, w, 1),
@@ -401,7 +401,7 @@ impl Component for ResultsViewer {
                 };
 
                 let text = cell.display_string(w as usize);
-                let padded = format!("{:<width$}", text, width = w as usize);
+                let padded = super::unicode::pad_to_width(&text, w as usize);
                 frame.render_widget(Paragraph::new(padded).style(style), Rect::new(x, y, w, 1));
                 x += w + 1;
             }
@@ -457,19 +457,21 @@ fn build_footer(viewer: &ResultsViewer, results: &QueryResults) -> String {
     format!("{} | {} | {:.1}ms", row_info, col_info, time_ms)
 }
 
-/// Compute column widths based on header names and data
+/// Compute column widths based on header names and data (using terminal display width)
 fn compute_column_widths(results: &QueryResults) -> Vec<u16> {
+    use super::unicode::display_width;
+
     let mut widths: Vec<u16> = results
         .columns
         .iter()
-        .map(|c| c.name.len() as u16 + 1)
+        .map(|c| display_width(&c.name) as u16 + 1)
         .collect();
 
     // Sample first 100 rows to determine widths
     for row in results.rows.iter().take(100) {
         for (i, cell) in row.values.iter().enumerate() {
             if i < widths.len() {
-                let cell_width = cell.display_string(50).len() as u16 + 1;
+                let cell_width = display_width(&cell.display_string(50)) as u16 + 1;
                 widths[i] = widths[i].max(cell_width);
             }
         }
@@ -483,17 +485,9 @@ fn compute_column_widths(results: &QueryResults) -> Vec<u16> {
     widths
 }
 
-/// Truncate a string to max characters (not bytes), adding "..." if truncated.
+/// Truncate a string to fit within max terminal columns, adding "..." if truncated.
 fn truncate_str(s: &str, max: usize) -> String {
-    let char_count = s.chars().count();
-    if char_count <= max {
-        s.to_string()
-    } else if max > 3 {
-        let truncated: String = s.chars().take(max - 3).collect();
-        format!("{}...", truncated)
-    } else {
-        s.chars().take(max).collect()
-    }
+    super::unicode::truncate_to_width(s, max)
 }
 
 /// Render results in vertical mode: one row at a time as column_name │ value pairs.
@@ -538,11 +532,11 @@ fn render_vertical(
         Rect::new(area.x, area.y, area.width, 1),
     );
 
-    // Compute label width (longest column name)
+    // Compute label width (longest column name, by display width)
     let label_width = results
         .columns
         .iter()
-        .map(|c| c.name.len())
+        .map(|c| super::unicode::display_width(&c.name))
         .max()
         .unwrap_or(0)
         .min(area.width as usize / 3);
@@ -574,9 +568,10 @@ fn render_vertical(
         };
 
         let is_selected = focused && col_idx == viewer.selected_col;
-        let label = format!("{:>width$}", col_def.name, width = label_width);
+        let truncated_name = super::unicode::truncate_to_width(&col_def.name, label_width);
+        let label = super::unicode::rpad_to_width(&truncated_name, label_width);
         let value = cell.display_string(value_width);
-        let padded_value = format!("{:<width$}", value, width = value_width);
+        let padded_value = super::unicode::pad_to_width(&value, value_width);
 
         let label_style = if is_selected {
             theme.results_selected
@@ -879,32 +874,34 @@ mod tests {
 
     #[test]
     fn test_truncate_str_utf8_no_truncation() {
-        // Multi-byte characters should count as 1 each
+        // "café" = 4 display cols, fits within budget
         assert_eq!(truncate_str("café", 10), "café");
         assert_eq!(truncate_str("café", 4), "café");
-        assert_eq!(truncate_str("日本語", 5), "日本語");
-        assert_eq!(truncate_str("日本語", 3), "日本語");
+        // "日本語" = 6 display cols (each CJK = 2 cols)
+        assert_eq!(truncate_str("日本語", 6), "日本語");
+        assert_eq!(truncate_str("日本語", 10), "日本語");
     }
 
     #[test]
     fn test_truncate_str_utf8_truncation() {
-        // Should not panic on multi-byte chars
-        // "café au lait" = 12 chars, max=7, take 4 chars + "..." = "café..."
+        // "café au lait" = 12 display cols, max=7 => 4 cols + "..." = "café..."
         assert_eq!(truncate_str("café au lait", 7), "café...");
-        // "日本語テスト" = 6 chars, max=5, take 2 chars + "..." = "日本..."
-        assert_eq!(truncate_str("日本語テスト", 5), "日本...");
-        // Mixed emoji and text: "hello☕world" = 11 chars, max=8, take 5 chars = "hello..."
+        // "日本語テスト" = 12 display cols, max=9 => 6 cols of chars + "..."
+        assert_eq!(truncate_str("日本語テスト", 9), "日本語...");
+        // max=7 => 4 cols budget for chars, "日本" fits (4 cols)
+        assert_eq!(truncate_str("日本語テスト", 7), "日本...");
+        // Mixed: "hello☕world" = 12 display cols, max=8 => "hello..."
         assert_eq!(truncate_str("hello☕world", 8), "hello...");
     }
 
     #[test]
     fn test_truncate_str_emoji() {
-        // Emoji are typically 3-4 bytes but 1 character
-        assert_eq!(truncate_str("☕☕☕", 3), "☕☕☕"); // exactly fits
-        // max=3 but 4 chars: max is not > 3, so take first 3 chars (no room for ellipsis)
-        assert_eq!(truncate_str("☕☕☕☕", 3), "☕☕☕");
-        // "test☕☕" = 6 chars, max=5, take 2 chars + "..." = "te..."
-        assert_eq!(truncate_str("test☕☕", 5), "te...");
+        // ☕ is 2 display cols each, "☕☕☕" = 6 cols
+        assert_eq!(truncate_str("☕☕☕", 6), "☕☕☕"); // exactly fits
+        // "☕☕☕☕" = 8 cols, max=5 => 2 cols budget, one ☕ fits (2 cols)
+        assert_eq!(truncate_str("☕☕☕☕", 5), "☕...");
+        // "test☕☕" = 8 display cols, max=7 => 4 cols budget, "test" fits
+        assert_eq!(truncate_str("test☕☕", 7), "test...");
     }
 
     #[test]
@@ -916,7 +913,9 @@ mod tests {
         // Max <= 3 (no room for ellipsis)
         assert_eq!(truncate_str("hello", 3), "hel");
         assert_eq!(truncate_str("hello", 2), "he");
-        assert_eq!(truncate_str("日本語", 2), "日本");
+        // CJK: "日" = 2 cols, doesn't fit in 1 col budget
+        assert_eq!(truncate_str("日本語", 2), "日");
+        assert_eq!(truncate_str("日本語", 3), "日");
     }
 
     // ── View mode tests ──────────────────────────────────

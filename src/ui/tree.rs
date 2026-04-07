@@ -1205,15 +1205,11 @@ impl Component for TreeBrowser {
             };
 
             let display = format!("{}{}{}", indent, indicator, item.label);
-            let max_chars = tree_area.width as usize;
-            let display_chars = display.chars().count();
-            let truncated = if display_chars > max_chars {
-                let truncated: String = display.chars().take(max_chars.saturating_sub(3)).collect();
-                format!("{}...", truncated)
+            let max_cols = tree_area.width as usize;
+            let truncated = if super::unicode::display_width(&display) > max_cols {
+                super::unicode::truncate_to_width(&display, max_cols)
             } else {
-                // Pad with spaces to fill width
-                let padding = max_chars.saturating_sub(display_chars);
-                format!("{}{}", display, " ".repeat(padding))
+                super::unicode::pad_to_width(&display, max_cols)
             };
 
             let style = if is_selected {

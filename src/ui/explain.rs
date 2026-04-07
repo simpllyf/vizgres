@@ -424,7 +424,7 @@ impl ExplainViewer {
                     "{}{}{}  {}  {}  {}",
                     indent, indicator, label, time_str, rows_str, cost_str
                 );
-                let padded = format!("{:<width$}", full, width = area.width as usize);
+                let padded = super::unicode::pad_to_width(&full, area.width as usize);
                 spans.push(Span::styled(
                     padded,
                     Style::default()
@@ -499,7 +499,7 @@ impl ExplainViewer {
             };
 
             let text = lines[item_idx];
-            let display = format!("{:<width$}", text, width = area.width as usize);
+            let display = super::unicode::pad_to_width(text, area.width as usize);
             let line_area = Rect::new(area.x, y, area.width, 1);
             frame.render_widget(Paragraph::new(display).style(style), line_area);
         }

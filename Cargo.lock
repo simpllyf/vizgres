@@ -2239,6 +2239,8 @@ dependencies = [
  "tokio-postgres-rustls",
  "tokio-test",
  "toml",
+ "unicode-truncate",
+ "unicode-width",
  "uuid",
  "webpki-roots 0.26.11",
 ]

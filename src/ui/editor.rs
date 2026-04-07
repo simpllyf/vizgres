@@ -480,7 +480,8 @@ impl Component for QueryEditor {
 
                 // Highlighted line content
                 let line = &self.lines[line_idx];
-                let max_byte = char_to_byte_idx(line, content_width as usize);
+                let visible_str = super::unicode::truncate_to_width(line, content_width as usize);
+                let max_byte = visible_str.len().min(line.len());
                 let (tokens, next_bc) = highlight::highlight_sql(line, in_block_comment);
                 in_block_comment = next_bc;
 
@@ -512,7 +513,9 @@ impl Component for QueryEditor {
                 // Cursor and ghost text
                 if focused && line_idx == self.cursor.0 {
                     let cursor_col = self.cursor.1.min(char_count(line));
-                    let cursor_x = content_x + cursor_col as u16;
+                    let text_before_cursor = &line[..char_to_byte_idx(line, cursor_col)];
+                    let cursor_x =
+                        content_x + super::unicode::display_width(text_before_cursor) as u16;
                     if cursor_x < area.x + area.width {
                         frame.set_cursor_position(Position::new(cursor_x, y));
                     }
@@ -521,14 +524,13 @@ impl Component for QueryEditor {
                     if let Some(ref ghost) = self.ghost_text {
                         let ghost_x = cursor_x;
                         let avail = (area.x + area.width).saturating_sub(ghost_x) as usize;
-                        let ghost_char_count = char_count(ghost);
-                        if avail > 0 && ghost_char_count > 0 {
-                            // Truncate to available width (char-based)
-                            let visible: String = ghost.chars().take(avail).collect();
-                            let visible_char_count = visible.chars().count();
+                        let ghost_width = super::unicode::display_width(ghost);
+                        if avail > 0 && ghost_width > 0 {
+                            let visible = super::unicode::truncate_to_width(ghost, avail);
+                            let visible_width = super::unicode::display_width(&visible) as u16;
                             frame.render_widget(
                                 Paragraph::new(Span::styled(visible, theme.editor_ghost)),
-                                Rect::new(ghost_x, y, visible_char_count as u16, 1),
+                                Rect::new(ghost_x, y, visible_width, 1),
                             );
                         }
                     }

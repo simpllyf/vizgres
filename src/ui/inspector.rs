@@ -89,7 +89,11 @@ impl Inspector {
     pub fn content_size(&self) -> (u16, u16) {
         match &self.content {
             Some(text) => {
-                let max_width = text.lines().map(|l| l.len()).max().unwrap_or(0) as u16;
+                let max_width = text
+                    .lines()
+                    .map(super::unicode::display_width)
+                    .max()
+                    .unwrap_or(0) as u16;
                 (max_width, self.total_lines as u16)
             }
             None => (0, 0),

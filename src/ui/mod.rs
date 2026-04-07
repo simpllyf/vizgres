@@ -14,6 +14,7 @@ pub mod render;
 pub mod results;
 pub mod theme;
 pub mod tree;
+pub mod unicode;
 
 use crossterm::event::KeyEvent;
 use ratatui::{Frame, layout::Rect};

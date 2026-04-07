@@ -342,16 +342,18 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     };
 
     // Calculate total right-side width (badges + dot + label)
-    let dot_len = 2u16; // "● " = 2 chars
-    let txn_len = txn_badge.as_ref().map_or(0, |(s, _)| s.len() as u16);
-    let ro_len = ro_badge.map_or(0, |s| s.len() as u16);
+    let dot_len = 2u16; // "● " = 2 cols
+    let txn_len = txn_badge
+        .as_ref()
+        .map_or(0, |(s, _)| super::unicode::display_width(s) as u16);
+    let ro_len = ro_badge.map_or(0, |s| super::unicode::display_width(s) as u16);
     let badge_spacer = |len: u16| if len > 0 { 1u16 } else { 0 };
     let right_total = ro_len
         + badge_spacer(ro_len)
         + txn_len
         + badge_spacer(txn_len)
         + dot_len
-        + conn_label.len() as u16;
+        + super::unicode::display_width(&conn_label) as u16;
     let right_x = area.x + area.width.saturating_sub(right_total);
 
     // Render RO badge, TXN badge, then dot + connection info
@@ -428,11 +430,9 @@ fn render_status_bar(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         };
 
         let msg = &status.message;
-        let max_chars = max_left_width as usize;
-        let display = if msg.chars().count() > max_chars {
-            // Truncate by characters, not bytes
-            let truncated: String = msg.chars().take(max_chars.saturating_sub(3)).collect();
-            format!("{}...", truncated)
+        let max_cols = max_left_width as usize;
+        let display = if super::unicode::display_width(msg) > max_cols {
+            super::unicode::truncate_to_width(msg, max_cols)
         } else {
             msg.clone()
         };
