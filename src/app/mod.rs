@@ -424,14 +424,15 @@ impl App {
         self.tab_mut().query_start = Some(std::time::Instant::now());
         self.history.push(&sql);
 
-        // Auto-paginate if the query has no user LIMIT and isn't EXPLAIN
+        // Auto-paginate if the query has no user LIMIT and isn't EXPLAIN/transaction control
         let trimmed = sql.trim();
         let is_explain = trimmed
             .split_whitespace()
             .next()
             .is_some_and(|w| w.eq_ignore_ascii_case("EXPLAIN"));
+        let is_transaction = detect_transaction_intent(&sql).is_some();
 
-        if !is_explain && page_size > 0 {
+        if !is_explain && !is_transaction && page_size > 0 {
             let analysis = sql_limit::analyze_limit(&sql);
             if analysis.can_paginate() {
                 let pagination = PaginationState {

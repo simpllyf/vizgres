@@ -53,6 +53,10 @@ percent-encoding = "2.3.2"
 # SQL formatting
 sqlformat = "0.5"
 
+# Unicode display width (CJK-safe column alignment)
+unicode-width = "0.1"
+unicode-truncate = "1"
+
 [dev-dependencies]
 tokio-test = "0.4"
 

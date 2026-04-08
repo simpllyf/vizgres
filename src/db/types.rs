@@ -193,17 +193,9 @@ impl DataType {
     }
 }
 
-/// Truncate a string with "..." suffix, respecting UTF-8 char boundaries.
-fn truncate_with_ellipsis(s: &str, max_len: usize) -> String {
-    let limit = max_len.saturating_sub(3);
-    let mut boundary = limit.min(s.len());
-    while boundary > 0 && !s.is_char_boundary(boundary) {
-        boundary -= 1;
-    }
-    let mut result = String::with_capacity(boundary + 3);
-    result.push_str(&s[..boundary]);
-    result.push_str("...");
-    result
+/// Truncate a string with "..." suffix, by display width (not bytes/chars).
+fn truncate_with_ellipsis(s: &str, max_cols: usize) -> String {
+    crate::ui::unicode::truncate_to_width(s, max_cols)
 }
 
 impl CellValue {
@@ -221,7 +213,7 @@ impl CellValue {
             | CellValue::Json(s)
             | CellValue::DateTime(s)
             | CellValue::Uuid(s) => {
-                if s.len() <= max_len {
+                if crate::ui::unicode::display_width(s) <= max_len {
                     return s.clone();
                 }
                 return truncate_with_ellipsis(s, max_len);
@@ -234,7 +226,7 @@ impl CellValue {
             }
         };
 
-        if full.len() > max_len {
+        if crate::ui::unicode::display_width(&full) > max_len {
             truncate_with_ellipsis(&full, max_len)
         } else {
             full

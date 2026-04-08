@@ -21,6 +21,10 @@ test:
 test-integration:
     cargo test --test integration
 
+# Run IMDb acceptance tests (requires: just db-up && just imdb-load)
+test-acceptance:
+    cargo test --test imdb_acceptance -- --nocapture
+
 # Check compilation
 check:
     cargo check
@@ -48,6 +52,15 @@ db-up:
 # Stop test database
 db-down:
     docker compose -f docker-compose.test.yml down
+
+# Load IMDb dataset (~200M rows) into local PostgreSQL for testing
+imdb-load:
+    ./scripts/load-imdb.sh
+
+# Drop the IMDb database
+imdb-clean:
+    docker exec vizgres-test-db env PGPASSWORD=test_password psql -U test_user -d postgres -c "DROP DATABASE IF EXISTS imdb" 2>/dev/null || \
+    podman exec vizgres-test-db env PGPASSWORD=test_password psql -U test_user -d postgres -c "DROP DATABASE IF EXISTS imdb"
 
 # Regenerate data/sql_keywords.txt from PostgreSQL docs
 update-keywords:

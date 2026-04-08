@@ -138,9 +138,8 @@ impl Component for CommandBar {
         let paragraph = Paragraph::new(display).style(theme.command_text);
         frame.render_widget(paragraph, area);
 
-        // Show cursor — use char count for display width, not byte count
-        let prompt_width = prompt.chars().count() as u16;
-        let input_width = self.input[..self.cursor].chars().count() as u16;
+        let prompt_width = super::unicode::display_width(prompt) as u16;
+        let input_width = super::unicode::display_width(&self.input[..self.cursor]) as u16;
         let cursor_x = area.x + prompt_width + input_width;
         if cursor_x < area.x + area.width {
             frame.set_cursor_position(Position::new(cursor_x, area.y));

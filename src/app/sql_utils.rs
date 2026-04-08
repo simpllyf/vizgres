@@ -11,7 +11,11 @@ use super::TransactionState;
 pub(super) fn detect_transaction_intent(sql: &str) -> Option<TransactionState> {
     let trimmed = sql.trim();
     // Find the first word (case-insensitive)
-    let first_word = trimmed.split_whitespace().next()?.to_uppercase();
+    let first_word = trimmed
+        .split_whitespace()
+        .next()?
+        .trim_end_matches(';')
+        .to_uppercase();
     match first_word.as_str() {
         "BEGIN" | "START" => Some(TransactionState::InTransaction),
         "COMMIT" | "END" => Some(TransactionState::Idle),
@@ -136,7 +140,7 @@ pub(super) fn translate_meta_command(input: &str) -> Option<String> {
         ),
         "\\di" => Some(
             "SELECT n.nspname AS schema, ci.relname AS name, \
-             ct.relname AS table, \
+             ct.relname AS tbl, \
              am.amname AS method \
              FROM pg_catalog.pg_index ix \
              JOIN pg_catalog.pg_class ci ON ci.oid = ix.indexrelid \
@@ -144,7 +148,7 @@ pub(super) fn translate_meta_command(input: &str) -> Option<String> {
              JOIN pg_catalog.pg_namespace n ON n.oid = ci.relnamespace \
              JOIN pg_catalog.pg_am am ON am.oid = ci.relam \
              WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') \
-             ORDER BY schema, table, name"
+             ORDER BY schema, tbl, name"
                 .to_string(),
         ),
         "\\dn" => Some(
