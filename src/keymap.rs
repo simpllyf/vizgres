@@ -695,6 +695,13 @@ impl Default for KeyMap {
         );
         tree.insert(
             KeyBind {
+                code: KeyCode::Char('l'),
+                modifiers: KeyModifiers::NONE,
+            },
+            KeyAction::Expand,
+        );
+        tree.insert(
+            KeyBind {
                 code: KeyCode::Char(' '),
                 modifiers: KeyModifiers::NONE,
             },

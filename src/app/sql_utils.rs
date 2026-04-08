@@ -11,7 +11,11 @@ use super::TransactionState;
 pub(super) fn detect_transaction_intent(sql: &str) -> Option<TransactionState> {
     let trimmed = sql.trim();
     // Find the first word (case-insensitive)
-    let first_word = trimmed.split_whitespace().next()?.to_uppercase();
+    let first_word = trimmed
+        .split_whitespace()
+        .next()?
+        .trim_end_matches(';')
+        .to_uppercase();
     match first_word.as_str() {
         "BEGIN" | "START" => Some(TransactionState::InTransaction),
         "COMMIT" | "END" => Some(TransactionState::Idle),
