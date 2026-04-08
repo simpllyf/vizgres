@@ -464,7 +464,10 @@ fn compute_column_widths(results: &QueryResults) -> Vec<u16> {
     let mut widths: Vec<u16> = results
         .columns
         .iter()
-        .map(|c| display_width(&c.name) as u16 + 1)
+        .map(|c| {
+            let header = format!("{}: {}", c.name, c.data_type.display_name());
+            display_width(&header) as u16 + 1
+        })
         .collect();
 
     // Sample first 100 rows to determine widths
