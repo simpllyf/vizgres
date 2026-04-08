@@ -18,9 +18,9 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
-      - uses: jdx/mise-action@v3
+      - uses: jdx/mise-action@v4
         with:
           install_args: rust just
 
@@ -53,7 +53,7 @@ jobs:
     needs: version
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Create draft release (idempotent)
         env:
@@ -93,9 +93,9 @@ jobs:
             runner: windows-latest
             artifact: vizgres-windows-x86_64
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
-      - uses: jdx/mise-action@v3
+      - uses: jdx/mise-action@v4
         with:
           install_args: rust
 
@@ -107,6 +107,7 @@ jobs:
         run: cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Build release binary
+        shell: bash
         run: |
           if [ "${{ matrix.cross }}" = "true" ]; then
             cross build --release --target ${{ matrix.target }}
@@ -129,13 +130,13 @@ jobs:
           Copy-Item "target/${{ matrix.target }}/release/vizgres.exe" staging/
           Compress-Archive -Path staging/vizgres.exe -DestinationPath "${{ matrix.artifact }}.zip"
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         if: runner.os != 'Windows'
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}.tar.gz
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         if: runner.os == 'Windows'
         with:
           name: ${{ matrix.artifact }}
@@ -146,9 +147,9 @@ jobs:
     needs: [version, build-binaries]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with:
           path: dist
 
@@ -172,9 +173,9 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
-      - uses: jdx/mise-action@v3
+      - uses: jdx/mise-action@v4
         with:
           install_args: rust
 
@@ -198,7 +199,7 @@ jobs:
     needs: [version, upload-assets, publish-crate]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Un-draft release
         env:
