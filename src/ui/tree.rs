@@ -1087,7 +1087,7 @@ fn format_column_label(col: &crate::db::schema::Column) -> String {
 /// Format a row count with thousands separators (e.g. 1234567 → "1,234,567")
 fn format_count(n: i64) -> String {
     if n < 0 {
-        return format!("-{}", format_count(-n));
+        return format!("-{}", format_count(n.saturating_neg()));
     }
     match n {
         0..1_000 => n.to_string(),

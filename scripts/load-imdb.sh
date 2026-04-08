@@ -115,7 +115,7 @@ download_datasets() {
         fi
 
         info "Downloading $file..."
-        curl -L --progress-bar -o "$target" "$url"
+        curl -fL --progress-bar -o "$target" "$url"
     done
 }
 
