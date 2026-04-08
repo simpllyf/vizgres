@@ -1089,15 +1089,21 @@ fn format_count(n: i64) -> String {
     if n < 0 {
         return format!("-{}", format_count(-n));
     }
-    let s = n.to_string();
-    let mut result = String::with_capacity(s.len() + s.len() / 3);
-    for (i, ch) in s.chars().enumerate() {
-        if i > 0 && (s.len() - i).is_multiple_of(3) {
-            result.push(',');
+    match n {
+        0..1_000 => n.to_string(),
+        1_000..1_000_000 => {
+            let k = n as f64 / 1_000.0;
+            format!("{:.1}K", k).replace(".0K", "K")
         }
-        result.push(ch);
+        1_000_000..1_000_000_000 => {
+            let m = n as f64 / 1_000_000.0;
+            format!("{:.1}M", m).replace(".0M", "M")
+        }
+        _ => {
+            let b = n as f64 / 1_000_000_000.0;
+            format!("{:.1}B", b).replace(".0B", "B")
+        }
     }
-    result
 }
 
 impl Default for TreeBrowser {
@@ -1196,9 +1202,9 @@ impl Component for TreeBrowser {
             let indent = "  ".repeat(item.depth);
             let indicator = if item.expandable {
                 if self.expanded.contains(&item.path) {
-                    "▼ "
+                    "▾ "
                 } else {
-                    "▶ "
+                    "▸ "
                 }
             } else {
                 "  "
@@ -2004,11 +2010,19 @@ mod tests {
 
     #[test]
     fn test_format_count_thousands() {
-        assert_eq!(format_count(1_000), "1,000");
-        assert_eq!(format_count(1_234), "1,234");
-        assert_eq!(format_count(12_345), "12,345");
-        assert_eq!(format_count(123_456), "123,456");
-        assert_eq!(format_count(1_234_567), "1,234,567");
+        assert_eq!(format_count(1_000), "1K");
+        assert_eq!(format_count(1_234), "1.2K");
+        assert_eq!(format_count(1_500), "1.5K");
+        assert_eq!(format_count(12_345), "12.3K");
+        assert_eq!(format_count(123_456), "123.5K");
+    }
+
+    #[test]
+    fn test_format_count_millions() {
+        assert_eq!(format_count(1_000_000), "1M");
+        assert_eq!(format_count(1_234_567), "1.2M");
+        assert_eq!(format_count(12_363_693), "12.4M");
+        assert_eq!(format_count(98_370_345), "98.4M");
     }
 
     #[test]
@@ -2025,7 +2039,7 @@ mod tests {
             .iter()
             .find(|i| matches!(i.kind, NodeKind::Table) && i.label.contains("users"))
             .expect("should find users table");
-        assert_eq!(table_item.label, "users (~1,500)");
+        assert_eq!(table_item.label, "users (~1.5K)");
     }
 
     #[test]
