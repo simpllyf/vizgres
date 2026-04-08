@@ -1498,6 +1498,20 @@ fn test_detect_transaction_intent() {
     assert_eq!(detect_transaction_intent("SELECT 1"), None);
     assert_eq!(detect_transaction_intent("INSERT INTO t VALUES(1)"), None);
     assert_eq!(detect_transaction_intent("  "), None);
+
+    // Semicolons should be stripped (regression: BEGIN; was not detected)
+    assert_eq!(
+        detect_transaction_intent("BEGIN;"),
+        Some(TransactionState::InTransaction)
+    );
+    assert_eq!(
+        detect_transaction_intent("COMMIT;"),
+        Some(TransactionState::Idle)
+    );
+    assert_eq!(
+        detect_transaction_intent("ROLLBACK;"),
+        Some(TransactionState::Idle)
+    );
 }
 
 #[test]

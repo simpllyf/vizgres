@@ -1051,6 +1051,7 @@ mod tests {
         let km = KeyMap::default();
         let space = KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE);
         let h = KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE);
+        let l = KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE);
         let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
         let slash = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE);
         assert_eq!(
@@ -1060,6 +1061,10 @@ mod tests {
         assert_eq!(
             km.resolve(PanelFocus::TreeBrowser, h),
             Some(KeyAction::Collapse)
+        );
+        assert_eq!(
+            km.resolve(PanelFocus::TreeBrowser, l),
+            Some(KeyAction::Expand)
         );
         assert_eq!(
             km.resolve(PanelFocus::TreeBrowser, enter),
