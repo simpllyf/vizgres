@@ -65,10 +65,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        id: msrv
         with:
           toolchain: "1.93" # = rust-version in Cargo.toml
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-      - run: cargo check
+      # rust-toolchain.toml (stable) overrides the default the action sets; `+` beats it.
+      - run: cargo "+$MSRV" check --locked
+        env:
+          MSRV: ${{ steps.msrv.outputs.name }}
 
   build:
     name: Build
