@@ -427,7 +427,7 @@ impl ConnectionDialog {
                     format!(
                         "{} Saved connections {}",
                         &separator[..2.min(separator.len())],
-                        &"\u{2500}".repeat((inner_width as usize).saturating_sub(22).max(0))
+                        "\u{2500}".repeat((inner_width as usize).saturating_sub(22))
                     ),
                     theme.dialog_label,
                 )),

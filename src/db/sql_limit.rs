@@ -32,14 +32,13 @@ pub fn analyze_limit(sql: &str) -> LimitAnalysis {
         match token.as_str() {
             "LIMIT" => has_limit = true,
             "OFFSET" => has_offset = true,
-            "FETCH" => {
-                // FETCH FIRST ... ROWS ONLY (SQL standard)
+            // FETCH FIRST/NEXT ... ROWS ONLY (SQL standard)
+            "FETCH"
                 if tokens
                     .get(i + 1)
-                    .is_some_and(|t| t == "FIRST" || t == "NEXT")
-                {
-                    has_limit = true;
-                }
+                    .is_some_and(|t| t == "FIRST" || t == "NEXT") =>
+            {
+                has_limit = true;
             }
             _ => {}
         }
