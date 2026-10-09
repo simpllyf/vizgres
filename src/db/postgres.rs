@@ -390,7 +390,7 @@ impl PostgresProvider {
                 &[],
             )
             .await
-            .map_err(&map_err)?;
+            .map_err(map_err)?;
 
         let schema_names: Vec<String> = schema_rows.iter().map(|r| r.get(0)).collect();
 
@@ -415,7 +415,7 @@ impl PostgresProvider {
                     &[],
                 )
                 .await
-                .map_err(&map_err)?;
+                .map_err(map_err)?;
             table_counts = table_count_rows
                 .iter()
                 .map(|r| (r.get::<_, String>(0), r.get::<_, i64>(1)))
@@ -435,7 +435,7 @@ impl PostgresProvider {
                     &[],
                 )
                 .await
-                .map_err(&map_err)?;
+                .map_err(map_err)?;
             view_counts = view_count_rows
                 .iter()
                 .map(|r| (r.get::<_, String>(0), r.get::<_, i64>(1)))
@@ -455,7 +455,7 @@ impl PostgresProvider {
                     &[],
                 )
                 .await
-                .map_err(&map_err)?;
+                .map_err(map_err)?;
             func_counts = func_count_rows
                 .iter()
                 .map(|r| (r.get::<_, String>(0), r.get::<_, i64>(1)))
@@ -476,7 +476,7 @@ impl PostgresProvider {
                     &[],
                 )
                 .await
-                .map_err(&map_err)?;
+                .map_err(map_err)?;
             index_counts = index_count_rows
                 .iter()
                 .map(|r| (r.get::<_, String>(0), r.get::<_, i64>(1)))
@@ -498,7 +498,7 @@ impl PostgresProvider {
                 &[&schema_names],
             )
             .await
-            .map_err(&map_err)?;
+            .map_err(map_err)?;
         let mut row_counts_by_schema: HashMap<String, HashMap<String, i64>> = HashMap::new();
         for row in &row_count_rows {
             let schema: String = row.get(0);
@@ -635,12 +635,12 @@ impl PostgresProvider {
             self.client
                 .query(&query, &[&schema_name, &(offset as i64), &(limit as i64)])
                 .await
-                .map_err(&map_err)?
+                .map_err(map_err)?
         } else {
             self.client
                 .query(&base, &[&schema_name])
                 .await
-                .map_err(&map_err)?
+                .map_err(map_err)?
         };
 
         Ok(rows.iter().map(|r| r.get(0)).collect())
@@ -669,7 +669,7 @@ impl PostgresProvider {
                 &[&schema_name, &table_names],
             )
             .await
-            .map_err(&map_err)?;
+            .map_err(map_err)?;
 
         let mut result: HashMap<String, Vec<(String, String)>> = HashMap::new();
         for row in col_rows {
@@ -714,7 +714,7 @@ impl PostgresProvider {
                 &[&schema_name, &table_names],
             )
             .await
-            .map_err(&map_err)?;
+            .map_err(map_err)?;
 
         let mut pk_set: HashSet<(String, String)> = HashSet::new();
         let mut fk_map: HashMap<(String, String), ForeignKey> = HashMap::new();
@@ -772,7 +772,7 @@ impl PostgresProvider {
                     &[&schema_name, &(offset as i64), &(limit as i64)],
                 )
                 .await
-                .map_err(&map_err)?
+                .map_err(map_err)?
         } else {
             self.client
                 .query(
@@ -787,7 +787,7 @@ impl PostgresProvider {
                     &[&schema_name],
                 )
                 .await
-                .map_err(&map_err)?
+                .map_err(map_err)?
         };
 
         Ok(func_rows
@@ -830,7 +830,7 @@ impl PostgresProvider {
                     &[&schema_name, &(offset as i64), &(limit as i64)],
                 )
                 .await
-                .map_err(&map_err)?
+                .map_err(map_err)?
         } else {
             self.client
                 .query(
@@ -850,7 +850,7 @@ impl PostgresProvider {
                     &[&schema_name],
                 )
                 .await
-                .map_err(&map_err)?
+                .map_err(map_err)?
         };
 
         Ok(index_rows
@@ -925,7 +925,7 @@ impl PostgresProvider {
                 &[&like_pattern],
             )
             .await
-            .map_err(&map_err)?;
+            .map_err(map_err)?;
 
         let schema_names: Vec<String> = schema_rows.iter().map(|r| r.get(0)).collect();
 
@@ -956,7 +956,7 @@ impl PostgresProvider {
                 &[&like_pattern],
             )
             .await
-            .map_err(&map_err)?;
+            .map_err(map_err)?;
 
         // Query 3: PK + FK constraints for matching tables
         let constraint_rows = self
@@ -986,7 +986,7 @@ impl PostgresProvider {
                 &[&like_pattern],
             )
             .await
-            .map_err(&map_err)?;
+            .map_err(map_err)?;
 
         // Query 4: Matching indexes
         let index_rows = self
@@ -1010,7 +1010,7 @@ impl PostgresProvider {
                 &[&like_pattern],
             )
             .await
-            .map_err(&map_err)?;
+            .map_err(map_err)?;
 
         // Query 5: Matching functions
         let func_rows = self
@@ -1029,7 +1029,7 @@ impl PostgresProvider {
                 &[&like_pattern],
             )
             .await
-            .map_err(&map_err)?;
+            .map_err(map_err)?;
 
         // ── Assembly (similar to get_schema_inner) ────────────────────
 
@@ -1197,7 +1197,7 @@ impl PostgresProvider {
                 &[&schema_name, &table_names],
             )
             .await
-            .map_err(&map_err)?;
+            .map_err(map_err)?;
         let row_counts: HashMap<String, i64> = row_count_rows
             .iter()
             .map(|r| (r.get::<_, String>(0), r.get::<_, i64>(1)))
