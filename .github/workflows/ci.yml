@@ -1,19 +1,86 @@
 name: CI
 
+# Tests run on the pull request; with "branch must be up to date" on, the PR's last run tested
+# exactly the tree its squash commit lands. Main re-runs only when a file a cache key hashes
+# changes, to refresh the caches PRs restore from. The weekly run catches drift no PR touches
+# (toolchains, runner images); tag.yml calls this before tagging.
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
+  push:
+    branches: [main]
+    paths: # rust-cache: Cargo.lock, Cargo.toml, .cargo, toolchain; mise-action: .tool-versions
+      - Cargo.lock
+      - "**/Cargo.toml"
+      - .cargo/**
+      - rust-toolchain.toml
+      - .tool-versions
+      - .github/**
+  schedule:
+    - cron: "52 8 * * 1"
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      full:
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && !inputs.full }}
 
 env:
   RUST_BACKTRACE: 1
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Decides whether the macOS and Windows tests run: they cost ten and two times Linux, so they
+  # run only when something they compile changes. The weekly run, a dispatch and the release
+  # call run them.
+  changes:
+    name: Changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      native: ${{ steps.f.outputs.native }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - id: f
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          FULL: ${{ inputs.full == true }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ "$FULL" = true ] || { [ "$EVENT_NAME" != pull_request ] && [ "$EVENT_NAME" != push ]; }; then
+            echo "$EVENT_NAME (full=$FULL); running everything"; echo native=true >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ "$EVENT_NAME" = pull_request ]; then
+            git fetch --no-tags --quiet origin "$BASE_REF"
+            base=$(git merge-base FETCH_HEAD HEAD) || base=
+          else
+            base=$BEFORE
+          fi
+          if ! files=$(git diff --name-only --no-renames "$base" HEAD 2>/dev/null); then
+            echo "no usable base ($base); running everything"; echo native=true >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if grep -qE '^(src/|data/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|\.tool-versions$|justfile$|\.cargo/|\.github/workflows/ci\.yml$)' <<< "$files"; then
+            echo native=true
+          else
+            echo native=false
+          fi >> "$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
@@ -21,31 +88,55 @@ jobs:
           install_args: rust just
       - run: rustup component add rustfmt clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.event_name != 'pull_request' }}
       - run: just lint
 
   test:
-    name: Test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+    name: Test (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
         with:
           install_args: rust just
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.event_name != 'pull_request' }}
+      - run: just test
+
+  test-native:
+    name: Test (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
+        with:
+          install_args: rust just
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.event_name != 'pull_request' }}
       - run: just test
 
   integration-test:
     name: Integration Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
         with:
           install_args: rust just
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.event_name != 'pull_request' }}
       - run: just db-up
       - name: Run integration tests
         env:
@@ -62,6 +153,7 @@ jobs:
   msrv:
     name: MSRV Check
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
@@ -69,6 +161,8 @@ jobs:
         with:
           toolchain: "1.93" # = rust-version in Cargo.toml
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.event_name != 'pull_request' }}
       # rust-toolchain.toml (stable) overrides the default the action sets; `+` beats it.
       - run: cargo "+$MSRV" check --locked
         env:
@@ -77,27 +171,49 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
         with:
           install_args: rust just
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.event_name != 'pull_request' }}
       - run: just build
       - run: just build-release
 
   coverage:
     name: Code Coverage
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
         with:
           install_args: rust just
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: ${{ github.event_name != 'pull_request' }}
       - uses: taiki-e/install-action@27cdd3237bf9a6a2b668f3bcbfaa06949ae17deb # cargo-llvm-cov
       - run: just coverage
       - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7
         with:
           files: lcov.info
           fail_ci_if_error: false
+
+  # The one required check: passes when every job passed or was skipped by path. A full run
+  # selects every job, so there a skip is a bug and fails too.
+  gate:
+    if: always()
+    needs: [changes, lint, test, test-native, integration-test, msrv, build, coverage]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+          FULL: ${{ inputs.full == true || (github.event_name != 'pull_request' && github.event_name != 'push') }}
+        run: |
+          echo "full=$FULL: $RESULTS"
+          case " $RESULTS " in *" failure "*|*" cancelled "*) exit 1 ;; esac
+          if [ "$FULL" = true ]; then case " $RESULTS " in *" skipped "*) exit 1 ;; esac; fi

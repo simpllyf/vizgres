@@ -9,8 +9,16 @@ permissions:
   contents: write
 
 jobs:
+  # Main does not re-run CI on merge, so the release commit is tested here before it is tagged.
+  ci:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+    secrets: inherit
+
   create-tag:
     name: Create Tag
+    needs: ci
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
