@@ -78,7 +78,7 @@ update-keywords:
 stamp-version:
     sed -i 's/^version = "[^"]*"/version = "{{version}}"/' Cargo.toml
     sed -i 's/class="site-version">v[^<]*/class="site-version">v{{version}}/' site/index.html
-    cargo generate-lockfile
+    cargo update --workspace
 
 # Print current version
 versions:
