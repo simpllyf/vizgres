@@ -160,7 +160,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         id: msrv
         with:
           toolchain: "1.93" # = rust-version in Cargo.toml
@@ -201,7 +201,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           save-if: ${{ github.event_name != 'pull_request' }}
-      - uses: taiki-e/install-action@27cdd3237bf9a6a2b668f3bcbfaa06949ae17deb # cargo-llvm-cov
+      - uses: taiki-e/install-action@db07720855ab1f9adf78d37929621da20c5775a4 # cargo-llvm-cov
       - run: just coverage
       - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7
         with:
